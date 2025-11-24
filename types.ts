@@ -38,6 +38,7 @@ export interface Order {
   updatedAt: number;
   orderIndex: number; 
   deliveryProof?: string;
+  lastUpdatedBy?: string; // Tên người xử lý trạng thái cuối cùng
 }
 
 export interface Product {

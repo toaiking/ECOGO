@@ -86,12 +86,20 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
                   <i className="fas fa-warehouse mr-2"></i>
                   <span>Kho Hàng</span>
                 </NavLink>
+                <NavLink
+                  to="/customers"
+                  className={({ isActive }) => linkClass(isActive)}
+                >
+                  <i className="fas fa-users mr-2"></i>
+                  <span>Khách Hàng</span>
+                </NavLink>
               </div>
 
               {/* Mobile Menu Icon (Simplified for this view) */}
               <div className="md:hidden flex space-x-4 pr-2 text-eco-100">
                   <NavLink to="/order"><i className="fas fa-plus-circle text-xl"></i></NavLink>
                   <NavLink to="/tracking"><i className="fas fa-shipping-fast text-xl"></i></NavLink>
+                  <NavLink to="/customers"><i className="fas fa-users text-xl"></i></NavLink>
                   <NavLink to="/inventory"><i className="fas fa-warehouse text-xl"></i></NavLink>
               </div>
               

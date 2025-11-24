@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import toast from 'react-hot-toast';
 import { Order, OrderStatus, PaymentMethod } from '../types';
@@ -170,7 +171,7 @@ const OrderCard: React.FC<Props> = ({
                     {/* Status Dot */}
                     <div 
                         className={`w-2.5 h-2.5 rounded-full flex-shrink-0 cursor-pointer ${config.bg.replace('100','500')}`} 
-                        title={config.label}
+                        title={`${config.label} ${order.lastUpdatedBy ? `- bởi ${order.lastUpdatedBy}` : ''}`}
                     ></div>
                     
                     {/* Customer */}
@@ -221,6 +222,11 @@ const OrderCard: React.FC<Props> = ({
                         <div className="flex items-center gap-2 overflow-hidden">
                             <div className={`w-2 h-2 rounded-full flex-shrink-0 ${config.bg.replace('100','500')}`}></div>
                             <span className="font-bold text-gray-800 text-sm truncate">{order.customerName}</span>
+                            {order.lastUpdatedBy && (
+                                <span className="text-[9px] text-gray-400 bg-gray-100 px-1 rounded flex items-center gap-0.5">
+                                    <i className="fas fa-user-edit text-[8px]"></i> {order.lastUpdatedBy}
+                                </span>
+                            )}
                         </div>
                         <div className="flex items-center gap-1.5 flex-shrink-0">
                              <span className="font-bold text-gray-900 text-sm">{new Intl.NumberFormat('vi-VN').format(order.totalPrice)}</span>
@@ -272,16 +278,24 @@ const OrderCard: React.FC<Props> = ({
           {/* Header */}
           <div className="flex justify-between items-start p-4 pb-2">
              <div className="flex flex-col">
-                 <div className="flex items-center gap-2 mb-1">
+                 <div className="flex items-center flex-wrap gap-2 mb-1">
                     <span className="font-bold text-gray-900 text-base">{order.customerName}</span>
                     {order.batchId && (
                         <span className="text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded border border-gray-200">
                             {order.batchId}
                         </span>
                     )}
-                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${config.bg} ${config.color}`}>
-                       {config.label}
-                    </span>
+                    <div className="flex items-center gap-1">
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${config.bg} ${config.color}`}>
+                           {config.label}
+                        </span>
+                        {/* Compact User Indicator */}
+                        {order.lastUpdatedBy && (
+                            <span className="text-[10px] text-gray-400 flex items-center gap-0.5 bg-gray-50 px-1.5 py-0.5 rounded border border-gray-100" title={`Cập nhật bởi ${order.lastUpdatedBy}`}>
+                               <i className="fas fa-user-edit text-[8px]"></i> {order.lastUpdatedBy}
+                            </span>
+                        )}
+                    </div>
                  </div>
                  <div className="flex items-start gap-1.5 text-gray-500 text-sm">
                     <i className="fas fa-map-marker-alt mt-1 text-gray-300"></i>

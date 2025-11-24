@@ -180,7 +180,12 @@ export const storageService = {
   },
 
   updateStatus: async (id: string, status: OrderStatus, proof?: string): Promise<Order | null> => {
-    const updateData: any = { status, updatedAt: Date.now() };
+    const currentUser = storageService.getCurrentUser() || 'Admin';
+    const updateData: any = { 
+        status, 
+        updatedAt: Date.now(),
+        lastUpdatedBy: currentUser
+    };
     if (proof) updateData.deliveryProof = proof;
 
     if (isOnline()) {
@@ -377,6 +382,41 @@ export const storageService = {
         if (index >= 0) customers[index] = { ...customers[index], ...customerData };
         else customers.push(customerData);
         localStorage.setItem(CUSTOMER_KEY, JSON.stringify(customers));
+        window.dispatchEvent(new Event('storage'));
       }
+  },
+
+  deleteCustomer: async (id: string): Promise<void> => {
+      if (isOnline()) {
+          await deleteDoc(doc(db, "customers", id));
+      } else {
+          const customers = storageService.getCustomersSync();
+          const filtered = customers.filter(c => c.id !== id);
+          localStorage.setItem(CUSTOMER_KEY, JSON.stringify(filtered));
+          window.dispatchEvent(new Event('storage'));
+      }
+  },
+
+  importCustomersBatch: async (customers: Customer[]): Promise<number> => {
+      if (customers.length === 0) return 0;
+
+      if (isOnline()) {
+          const batch = writeBatch(db);
+          customers.forEach(c => {
+              const ref = doc(db, "customers", c.id);
+              batch.set(ref, c, { merge: true });
+          });
+          await batch.commit();
+      } else {
+          const existing = storageService.getCustomersSync();
+          customers.forEach(c => {
+            const index = existing.findIndex(ex => ex.id === c.id || (ex.phone && ex.phone === c.phone));
+            if (index >= 0) existing[index] = { ...existing[index], ...c };
+            else existing.push(c);
+          });
+          localStorage.setItem(CUSTOMER_KEY, JSON.stringify(existing));
+          window.dispatchEvent(new Event('storage'));
+      }
+      return customers.length;
   }
 };
