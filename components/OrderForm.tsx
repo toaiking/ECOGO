@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import toast from 'react-hot-toast';
@@ -38,18 +39,33 @@ const OrderForm: React.FC = () => {
     const unsubProducts = storageService.subscribeProducts(setProducts);
     const unsubCustomers = storageService.subscribeCustomers(setCustomers);
     
-    // For batches, we need to fetch orders. Since we don't have a direct "get batches" API,
-    // we subscribe to orders and extract batches.
+    // For batches, we need to fetch orders. 
+    // SMART BATCH LOGIC: Only show recent batches to avoid clutter
     const unsubOrders = storageService.subscribeOrders((orders) => {
-        const uniqueBatches = Array.from(new Set(orders.map(o => o.batchId).filter(Boolean))).sort().reverse();
-        setExistingBatches(uniqueBatches);
+        const batchActivity = new Map<string, number>();
         
-        // Only set default batch if it hasn't been set yet
+        orders.forEach(o => {
+            if (o.batchId) {
+                const lastTime = batchActivity.get(o.batchId) || 0;
+                batchActivity.set(o.batchId, Math.max(lastTime, o.createdAt));
+            }
+        });
+
+        // Sort by most recent activity and take top 20
+        const sortedBatches = Array.from(batchActivity.entries())
+            .sort((a, b) => b[1] - a[1])
+            .map(entry => entry[0])
+            .slice(0, 20);
+
+        setExistingBatches(sortedBatches);
+        
+        // Auto-suggest today's batch format if not set
         setBatchId(prev => {
            if (prev) return prev;
            const today = new Date();
            const dateStr = today.toISOString().slice(0, 10);
-           const todayBatch = uniqueBatches.find(b => b.includes(dateStr));
+           // Try to find a batch with today's date in it
+           const todayBatch = sortedBatches.find(b => b.includes(dateStr));
            return todayBatch || `LÔ-${dateStr}`;
         });
     });
@@ -211,6 +227,7 @@ const OrderForm: React.FC = () => {
                 {/* Batch Dropdown */}
                 {showBatchSuggestions && existingBatches.length > 0 && (
                     <div className="absolute top-full right-0 mt-1 w-48 bg-white border border-gray-100 rounded-lg shadow-xl z-50 max-h-56 overflow-y-auto">
+                        <div className="px-3 py-2 text-[10px] font-bold text-gray-400 uppercase bg-gray-50">Gần đây</div>
                         {existingBatches.map(b => (
                             <div 
                                 key={b} 

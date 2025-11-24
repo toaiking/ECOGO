@@ -58,9 +58,20 @@ const TrackingDashboard: React.FC = () => {
       return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [activeEditProductRow]);
 
+  // SMART BATCHES: Only show the top 50 active batches to prevent clutter
   const batches = useMemo(() => {
-    const allBatches = orders.map(o => o.batchId).filter(Boolean);
-    return Array.from(new Set(allBatches)).sort().reverse();
+    const batchActivity = new Map<string, number>();
+    orders.forEach(o => {
+        if (o.batchId) {
+            const lastTime = batchActivity.get(o.batchId) || 0;
+            batchActivity.set(o.batchId, Math.max(lastTime, o.createdAt));
+        }
+    });
+
+    return Array.from(batchActivity.entries())
+        .sort((a, b) => b[1] - a[1]) // Sort desc by timestamp
+        .map(entry => entry[0])
+        .slice(0, 50); // Limit to 50
   }, [orders]);
   
   // Filter Logic
