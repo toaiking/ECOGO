@@ -174,8 +174,11 @@ const OrderCard: React.FC<Props> = ({
                         title={`${config.label} ${order.lastUpdatedBy ? `- bởi ${order.lastUpdatedBy}` : ''}`}
                     ></div>
                     
-                    {/* Customer */}
-                    <div className="w-40 font-bold text-gray-800 truncate" title={order.customerName}>{order.customerName}</div>
+                    {/* Customer & Phone */}
+                    <div className="w-40 flex flex-col justify-center" title={order.customerName}>
+                        <div className="font-bold text-gray-800 truncate">{order.customerName}</div>
+                        <div className="text-[11px] text-gray-500 font-mono leading-tight">{order.customerPhone}</div>
+                    </div>
                     
                     {/* Items & Address */}
                     <div className="flex-grow flex items-center text-gray-500 text-xs gap-2 overflow-hidden">
@@ -217,13 +220,17 @@ const OrderCard: React.FC<Props> = ({
 
                {/* Mobile: 2 Rows Strictly */}
                <div className="md:hidden flex flex-col gap-0.5">
-                    {/* Row 1: Status Dot | Name | Price | Payment */}
+                    {/* Row 1: Status Dot | Name/Phone | Price | Payment */}
                     <div className="flex justify-between items-center">
                         <div className="flex items-center gap-2 overflow-hidden">
                             <div className={`w-2 h-2 rounded-full flex-shrink-0 ${config.bg.replace('100','500')}`}></div>
-                            <span className="font-bold text-gray-800 text-sm truncate">{order.customerName}</span>
+                            <div className="flex flex-col min-w-0">
+                                <span className="font-bold text-gray-800 text-sm truncate">{order.customerName}</span>
+                                <span className="text-[10px] text-gray-400 font-mono leading-none">{order.customerPhone}</span>
+                            </div>
+                            
                             {order.lastUpdatedBy && (
-                                <span className="text-[9px] text-gray-400 bg-gray-100 px-1 rounded flex items-center gap-0.5">
+                                <span className="text-[9px] text-gray-400 bg-gray-100 px-1 rounded flex items-center gap-0.5 ml-1 flex-shrink-0">
                                     <i className="fas fa-user-edit text-[8px]"></i> {order.lastUpdatedBy}
                                 </span>
                             )}
@@ -280,6 +287,13 @@ const OrderCard: React.FC<Props> = ({
              <div className="flex flex-col">
                  <div className="flex items-center flex-wrap gap-2 mb-1">
                     <span className="font-bold text-gray-900 text-base">{order.customerName}</span>
+                    
+                    {/* Phone Number Badge */}
+                    <span className="text-xs text-gray-500 font-mono bg-gray-50 px-1.5 py-0.5 rounded border border-gray-100 flex items-center">
+                        <i className="fas fa-phone-alt text-[10px] mr-1 text-gray-300"></i>
+                        {order.customerPhone}
+                    </span>
+
                     {order.batchId && (
                         <span className="text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded border border-gray-200">
                             {order.batchId}
