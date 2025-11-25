@@ -74,6 +74,9 @@ export const OrderCard: React.FC<Props> = ({
   const [qrUrl, setQrUrl] = useState('');
   const [showImageModal, setShowImageModal] = useState(false);
   
+  // State for Payment Choice in Compact Mode
+  const [showCompactPaymentChoice, setShowCompactPaymentChoice] = useState(false);
+  
   const handleStatusChange = async (newStatus: OrderStatus) => {
     await storageService.updateStatus(order.id, newStatus);
   };
@@ -116,6 +119,10 @@ export const OrderCard: React.FC<Props> = ({
 
           // 3. Share
           if (navigator.share) {
+              // Try to copy text first because some apps ignore text when sharing files
+              await navigator.clipboard.writeText(text);
+              toast("Đã copy nội dung! Dán khi gửi ảnh.", { icon: '📋' });
+              
               await navigator.share({
                   title: `Giao hàng #${order.id}`,
                   text: text,
@@ -136,6 +143,7 @@ export const OrderCard: React.FC<Props> = ({
       await storageService.updateOrderDetails(updated);
       await storageService.updateStatus(order.id, OrderStatus.DELIVERED);
       toast.success(`Đã hoàn tất (${method === PaymentMethod.CASH ? 'Tiền mặt' : 'Chuyển khoản'})`);
+      setShowCompactPaymentChoice(false);
   };
 
   const togglePaymentVerification = async () => {
@@ -264,33 +272,45 @@ export const OrderCard: React.FC<Props> = ({
 
   const nextStatus = (e: React.MouseEvent) => {
       e.stopPropagation();
-      if(order.status === OrderStatus.PENDING) handleStatusChange(OrderStatus.PICKED_UP);
-      else if(order.status === OrderStatus.PICKED_UP) handleStatusChange(OrderStatus.IN_TRANSIT);
+      if(order.status === OrderStatus.PENDING) {
+          handleStatusChange(OrderStatus.PICKED_UP);
+      } else if(order.status === OrderStatus.PICKED_UP) {
+          handleStatusChange(OrderStatus.IN_TRANSIT);
+      } else if(order.status === OrderStatus.IN_TRANSIT) {
+          // In Compact Mode, show a quick choice
+          setShowCompactPaymentChoice(true);
+      }
   }
 
   const config = statusConfig[order.status];
   const isCompleted = order.status === OrderStatus.DELIVERED || order.status === OrderStatus.CANCELLED;
   
   const PaymentBadge = () => {
+    // Logic: Hide text if not completed/verified, but keep QR if needed
+    const showText = isCompleted || order.paymentVerified;
+    
     return (
        <div className="flex items-center gap-1">
-            {order.paymentMethod === PaymentMethod.CASH ? (
-                <span className="text-[10px] font-bold text-gray-500 bg-gray-100 px-2 py-1 rounded border border-gray-200 whitespace-nowrap">Tiền mặt</span>
-            ) : order.paymentMethod === PaymentMethod.PAID ? (
-                <span className="text-[10px] font-bold text-green-700 bg-green-100 px-2 py-1 rounded border border-green-200 whitespace-nowrap">Đã thanh toán</span>
-            ) : (
-                <span 
-                    className={`text-[10px] font-bold px-2 py-1 rounded border cursor-pointer whitespace-nowrap ${order.paymentVerified ? 'text-green-700 bg-green-100 border-green-200' : 'text-blue-600 bg-blue-50 border-blue-200'}`}
-                    onClick={(e) => { e.stopPropagation(); togglePaymentVerification(); }}
-                    title={order.paymentVerified ? "Đã nhận tiền" : "Chờ xác nhận"}
-                >
-                {order.paymentVerified ? 'Đã nhận tiền' : 'Chờ CK'}
-                </span>
+            {showText && (
+                order.paymentMethod === PaymentMethod.CASH ? (
+                    <span className="text-[10px] font-bold text-gray-500 bg-gray-100 px-2 py-1 rounded border border-gray-200 whitespace-nowrap">Tiền mặt</span>
+                ) : order.paymentMethod === PaymentMethod.PAID ? (
+                    <span className="text-[10px] font-bold text-green-700 bg-green-100 px-2 py-1 rounded border border-green-200 whitespace-nowrap">Đã thanh toán</span>
+                ) : (
+                    <span 
+                        className={`text-[10px] font-bold px-2 py-1 rounded border cursor-pointer whitespace-nowrap ${order.paymentVerified ? 'text-green-700 bg-green-100 border-green-200' : 'text-blue-600 bg-blue-50 border-blue-200'}`}
+                        onClick={(e) => { e.stopPropagation(); togglePaymentVerification(); }}
+                        title={order.paymentVerified ? "Đã nhận tiền" : "Chờ xác nhận"}
+                    >
+                    {order.paymentVerified ? 'Đã nhận tiền' : 'Chờ CK'}
+                    </span>
+                )
             )}
             
+            {/* Integrated QR Button - Always visible for Transfer, small style */}
             <button 
                 onClick={showVietQR}
-                className="w-6 h-6 flex-shrink-0 flex items-center justify-center rounded bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white transition-colors border border-blue-100 shadow-sm"
+                className="w-5 h-5 flex-shrink-0 flex items-center justify-center rounded bg-white text-blue-600 hover:bg-blue-50 transition-colors border border-blue-100 shadow-sm"
                 title="Mã QR"
             >
                 <i className="fas fa-qrcode text-[10px]"></i>
@@ -302,7 +322,8 @@ export const OrderCard: React.FC<Props> = ({
   // --- COMPACT MODE (3-Line Layout) ---
   if (isCompactMode) {
       return (
-          <div className="group px-4 py-3 hover:bg-gray-50 transition-colors cursor-pointer border-b border-gray-100 last:border-0" onClick={() => onEdit(order)}>
+          <>
+          <div className="group px-4 py-3 hover:bg-gray-50 transition-colors cursor-pointer border-b border-gray-100 last:border-0 relative" onClick={() => onEdit(order)}>
                {/* Desktop: Single Row */}
                <div className="hidden md:flex items-center gap-4 text-sm">
                     <div 
@@ -374,10 +395,15 @@ export const OrderCard: React.FC<Props> = ({
                         </div>
                     </div>
 
-                    {/* Row 2: Address */}
-                    <div className="text-xs text-gray-500 truncate flex items-center gap-1.5">
-                        <i className="fas fa-map-marker-alt text-gray-400 text-[10px]"></i>
-                        {order.address}
+                    {/* Row 2: Address + Status Badge */}
+                    <div className="flex justify-between items-center">
+                        <div className="text-xs text-gray-500 truncate flex items-center gap-1.5 max-w-[60%]">
+                            <i className="fas fa-map-marker-alt text-gray-400 text-[10px]"></i>
+                            {order.address}
+                        </div>
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${config.bg} ${config.color}`}>
+                            {config.label}
+                        </span>
                     </div>
 
                     {/* Row 3: Items + Payment/Action */}
@@ -387,7 +413,7 @@ export const OrderCard: React.FC<Props> = ({
                         </div>
                         
                         {/* Integrated Payment Badge with QR (Small) */}
-                        <div className="flex items-center gap-2 flex-shrink-0">
+                        <div className="flex items-center gap-2 flex-shrink-0 relative">
                             <div onClick={e => e.stopPropagation()} className="flex items-center">
                                 <PaymentBadge />
                             </div>
@@ -404,6 +430,40 @@ export const OrderCard: React.FC<Props> = ({
                     </div>
                </div>
           </div>
+          
+          {/* FIXED MODAL for Payment Choice (Works on both Mobile & Desktop in Compact Mode) */}
+          {showCompactPaymentChoice && (
+             <div className="fixed inset-0 z-[99999] bg-gray-900/50 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in" onClick={(e) => { e.stopPropagation(); setShowCompactPaymentChoice(false); }}>
+                 <div className="bg-white w-full max-w-xs rounded-2xl shadow-2xl p-5 transform scale-100 transition-all" onClick={e => e.stopPropagation()}>
+                     <h3 className="text-center font-black text-gray-800 mb-4 uppercase text-sm tracking-wider">Hoàn tất đơn hàng</h3>
+                     <div className="grid grid-cols-2 gap-3">
+                         <button 
+                             onClick={(e) => { e.stopPropagation(); handleFinishOrder(PaymentMethod.CASH); }}
+                             className="flex flex-col items-center justify-center p-4 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl transition-all active:scale-95"
+                         >
+                             <span className="text-2xl mb-2">💵</span>
+                             <span className="font-black text-emerald-700 text-lg">TM</span>
+                             <span className="text-[10px] font-bold text-emerald-600 uppercase">Tiền mặt</span>
+                         </button>
+                         <button 
+                             onClick={(e) => { e.stopPropagation(); handleFinishOrder(PaymentMethod.TRANSFER); }}
+                             className="flex flex-col items-center justify-center p-4 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl transition-all active:scale-95"
+                         >
+                             <span className="text-2xl mb-2">💳</span>
+                             <span className="font-black text-blue-700 text-lg">CK</span>
+                             <span className="text-[10px] font-bold text-blue-600 uppercase">Chuyển khoản</span>
+                         </button>
+                     </div>
+                     <button 
+                        onClick={() => setShowCompactPaymentChoice(false)}
+                        className="w-full mt-4 py-3 text-gray-500 font-bold text-sm hover:bg-gray-50 rounded-xl"
+                     >
+                        Hủy bỏ
+                     </button>
+                 </div>
+             </div>
+          )}
+          </>
       );
   }
 

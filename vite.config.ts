@@ -12,6 +12,6 @@ export default defineConfig({
   define: {
     'process.env': {},
     // Định nghĩa biến version an toàn
-    '__APP_VERSION__': JSON.stringify("1.0.5")
+    '__APP_VERSION__': JSON.stringify("1.0.7")
   }
 });
