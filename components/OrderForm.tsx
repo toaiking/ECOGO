@@ -34,6 +34,8 @@ const OrderForm: React.FC = () => {
   const productWrapperRef = useRef<HTMLDivElement>(null);
   const batchWrapperRef = useRef<HTMLDivElement>(null);
 
+  const quickTags = ["Giao giờ HC", "Gọi trước khi giao", "Hàng dễ vỡ", "Cho xem hàng", "Giao gấp"];
+
   useEffect(() => {
     // Subscribe to Data
     const unsubProducts = storageService.subscribeProducts(setProducts);
@@ -145,6 +147,14 @@ const OrderForm: React.FC = () => {
   const selectBatch = (b: string) => {
       setBatchId(b);
       setShowBatchSuggestions(false);
+  };
+
+  const addQuickTag = (tag: string) => {
+      setCustomerInfo(prev => {
+          if (prev.notes.includes(tag)) return prev;
+          const newNotes = prev.notes ? `${prev.notes}, ${tag}` : tag;
+          return { ...prev, notes: newNotes };
+      });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -287,12 +297,27 @@ const OrderForm: React.FC = () => {
                 className="w-full p-3 bg-gray-50 border-transparent focus:bg-white focus:border-eco-500 border rounded-xl outline-none transition-all resize-none"
                 />
                 
-                <input
-                    value={customerInfo.notes}
-                    onChange={(e) => setCustomerInfo({...customerInfo, notes: e.target.value})}
-                    placeholder="Ghi chú đơn hàng..."
-                    className="w-full p-3 bg-gray-50 border-transparent focus:bg-white focus:border-eco-500 border rounded-xl outline-none transition-all text-sm"
-                />
+                <div>
+                    <input
+                        value={customerInfo.notes}
+                        onChange={(e) => setCustomerInfo({...customerInfo, notes: e.target.value})}
+                        placeholder="Ghi chú đơn hàng..."
+                        className="w-full p-3 bg-gray-50 border-transparent focus:bg-white focus:border-eco-500 border rounded-xl outline-none transition-all text-sm mb-2"
+                    />
+                    {/* Quick Tags */}
+                    <div className="flex flex-wrap gap-2">
+                        {quickTags.map(tag => (
+                            <button
+                                key={tag}
+                                type="button"
+                                onClick={() => addQuickTag(tag)}
+                                className="px-2 py-1 bg-gray-100 hover:bg-eco-50 text-gray-600 hover:text-eco-600 rounded-lg text-xs font-medium transition-colors border border-transparent hover:border-eco-200"
+                            >
+                                {tag}
+                            </button>
+                        ))}
+                    </div>
+                </div>
             </div>
           </div>
 

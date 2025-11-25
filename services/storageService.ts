@@ -1,5 +1,5 @@
 
-import { Order, OrderStatus, Product, Customer } from '../types';
+import { Order, OrderStatus, Product, Customer, BankConfig } from '../types';
 import { db } from '../firebaseConfig';
 import { 
   collection, 
@@ -12,13 +12,15 @@ import {
   query, 
   orderBy,
   getDocs,
-  writeBatch
+  writeBatch,
+  deleteField 
 } from "firebase/firestore";
 
 const ORDER_KEY = 'ecogo_orders_v3'; 
 const PRODUCT_KEY = 'ecogo_products_v1';
 const CUSTOMER_KEY = 'ecogo_customers_v1';
 const USER_KEY = 'ecogo_current_user';
+const BANK_KEY = 'ecogo_bank_config';
 
 // Helper to determine if we use Firebase
 const isOnline = () => !!db;
@@ -33,6 +35,37 @@ export const storageService = {
   },
   getCurrentUser: (): string | null => {
     return localStorage.getItem(USER_KEY);
+  },
+
+  // --- Bank Configuration ---
+  saveBankConfig: async (config: BankConfig): Promise<void> => {
+      localStorage.setItem(BANK_KEY, JSON.stringify(config));
+      // Nếu online, có thể lưu vào collection settings (Tùy chọn, hiện tại lưu local cho đơn giản mỗi máy một setting hoặc sync sau)
+      if (isOnline()) {
+          await setDoc(doc(db, "settings", "bankConfig"), config);
+      }
+  },
+
+  getBankConfig: async (): Promise<BankConfig | null> => {
+      // Ưu tiên lấy từ Local trước để nhanh
+      const localData = localStorage.getItem(BANK_KEY);
+      if (localData) return JSON.parse(localData);
+
+      // Nếu không có local, thử lấy online
+      if (isOnline()) {
+         try {
+             const snap = await getDocs(collection(db, "settings"));
+             let config: BankConfig | null = null;
+             snap.forEach(d => {
+                 if (d.id === 'bankConfig') config = d.data() as BankConfig;
+             });
+             if (config) {
+                 localStorage.setItem(BANK_KEY, JSON.stringify(config)); // Cache local
+                 return config;
+             }
+         } catch (e) { console.error(e); }
+      }
+      return null;
   },
 
   // --- Sync Tool (New) ---
@@ -200,6 +233,25 @@ export const storageService = {
       window.dispatchEvent(new Event('storage'));
       return orders[index];
     }
+  },
+
+  deleteDeliveryProof: async (id: string): Promise<void> => {
+      if (isOnline()) {
+          // Use deleteField to remove the field from Firestore document
+          await updateDoc(doc(db, "orders", id), {
+              deliveryProof: deleteField(),
+              updatedAt: Date.now()
+          });
+      } else {
+          const orders = storageService.getOrdersSync();
+          const index = orders.findIndex(o => o.id === id);
+          if (index !== -1) {
+              delete orders[index].deliveryProof;
+              orders[index].updatedAt = Date.now();
+              localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
+              window.dispatchEvent(new Event('storage'));
+          }
+      }
   },
   
   updatePaymentVerification: async (id: string, verified: boolean): Promise<void> => {

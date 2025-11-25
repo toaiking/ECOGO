@@ -29,7 +29,6 @@ export interface Order {
   address: string;
   items: OrderItem[]; 
   notes: string;
-  // weight removed from Order interface as requested
   totalPrice: number; 
   paymentMethod: PaymentMethod;
   paymentVerified?: boolean; // New: Check if transfer received
@@ -67,4 +66,11 @@ export interface SmartParseResult {
   price?: number;
   notes?: string;
   paymentMethod?: PaymentMethod;
+}
+
+export interface BankConfig {
+  bankId: string;       // Mã ngân hàng (VD: MB, VCB)
+  accountNo: string;    // Số tài khoản
+  accountName: string;  // Tên chủ tài khoản
+  template: string;     // compact2 (mặc định)
 }

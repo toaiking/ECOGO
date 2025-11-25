@@ -23,29 +23,83 @@ const statusConfig: Record<OrderStatus, { color: string; bg: string; label: stri
   [OrderStatus.CANCELLED]: { bg: 'bg-red-100', color: 'text-red-700', label: 'Hủy', icon: 'fa-times-circle' },
 };
 
+// Image Compression Helper
+const compressImage = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = (event) => {
+            const img = new Image();
+            img.src = event.target?.result as string;
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                if (!ctx) { resolve(img.src); return; }
+
+                // Resize logic: Max 800px width/height
+                const MAX_DIM = 800;
+                let width = img.width;
+                let height = img.height;
+
+                if (width > height) {
+                    if (width > MAX_DIM) {
+                        height *= MAX_DIM / width;
+                        width = MAX_DIM;
+                    }
+                } else {
+                    if (height > MAX_DIM) {
+                        width *= MAX_DIM / height;
+                        height = MAX_DIM;
+                    }
+                }
+
+                canvas.width = width;
+                canvas.height = height;
+                ctx.drawImage(img, 0, 0, width, height);
+                // Compress to JPEG 70% quality
+                resolve(canvas.toDataURL('image/jpeg', 0.7));
+            };
+            img.onerror = reject;
+        };
+        reader.onerror = reject;
+    });
+};
+
 const OrderCard: React.FC<Props> = ({ 
   order, onUpdate, onDelete, onEdit, 
   isSortMode, index, isCompactMode
 }) => {
   const [uploading, setUploading] = useState(false);
+  const [showQR, setShowQR] = useState(false);
+  const [qrUrl, setQrUrl] = useState('');
   
   const handleStatusChange = async (newStatus: OrderStatus) => {
     await storageService.updateStatus(order.id, newStatus);
     // Subscription handles UI update
   };
 
-  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       setUploading(true);
-      const reader = new FileReader();
-      reader.onloadend = async () => {
-        await storageService.updateStatus(order.id, OrderStatus.DELIVERED, reader.result as string);
-        setUploading(false);
-        toast.success('Đã lưu ảnh & Hoàn tất đơn');
-      };
-      reader.readAsDataURL(file);
+      try {
+          const compressedBase64 = await compressImage(file);
+          await storageService.updateStatus(order.id, OrderStatus.DELIVERED, compressedBase64);
+          toast.success('Đã lưu ảnh & Hoàn tất đơn');
+      } catch (error) {
+          toast.error("Lỗi xử lý ảnh");
+          console.error(error);
+      } finally {
+          setUploading(false);
+      }
     }
+  };
+
+  const handleDeletePhoto = async () => {
+      if (window.confirm("Xóa ảnh xác thực này?")) {
+          await storageService.deleteDeliveryProof(order.id);
+          toast.success("Đã xóa ảnh");
+      }
   };
 
   const handlePaymentMethodChange = async (method: PaymentMethod) => {
@@ -55,15 +109,37 @@ const OrderCard: React.FC<Props> = ({
   };
 
   const togglePaymentVerification = async () => {
-      // Optimistic logic is complex here without passing props, simpler to just trigger update
       await storageService.updatePaymentVerification(order.id, !order.paymentVerified);
-      // Optional: Toast handled by parent or subscription
   };
 
-  const copyMessage = async () => {
+  const showVietQR = async () => {
+      if (showQR) {
+          setShowQR(false);
+          return;
+      }
+      const bankConfig = await storageService.getBankConfig();
+      if (!bankConfig || !bankConfig.accountNo) {
+          toast.error("Chưa cài đặt ngân hàng. Vào Menu > Cài đặt.");
+          return;
+      }
+
+      // Format VietQR: https://img.vietqr.io/image/[BANK_ID]-[ACCOUNT_NO]-[TEMPLATE].png?amount=[AMOUNT]&addInfo=[CONTENT]&accountName=[NAME]
+      const desc = `TT Don ${order.id}`;
+      const url = `https://img.vietqr.io/image/${bankConfig.bankId}-${bankConfig.accountNo}-${bankConfig.template}.png?amount=${order.totalPrice}&addInfo=${encodeURIComponent(desc)}&accountName=${encodeURIComponent(bankConfig.accountName)}`;
+      
+      setQrUrl(url);
+      setShowQR(true);
+  };
+
+  const sendSMS = async () => {
     const msg = await generateDeliveryMessage(order);
-    navigator.clipboard.writeText(msg);
-    toast.success('Đã copy tin nhắn!');
+    // Detect OS for correct separator
+    const ua = navigator.userAgent.toLowerCase();
+    const isIOS = ua.indexOf('iphone') > -1 || ua.indexOf('ipad') > -1;
+    const separator = isIOS ? '&' : '?';
+    
+    // Open native SMS app
+    window.open(`sms:${order.customerPhone}${separator}body=${encodeURIComponent(msg)}`, '_self');
   };
 
   const handlePrint = (e: React.MouseEvent) => {
@@ -177,7 +253,7 @@ const OrderCard: React.FC<Props> = ({
                     {/* Customer & Phone */}
                     <div className="w-40 flex flex-col justify-center" title={order.customerName}>
                         <div className="font-bold text-gray-800 truncate">{order.customerName}</div>
-                        <div className="text-[11px] text-gray-500 font-mono leading-tight">{order.customerPhone}</div>
+                        <a href={`tel:${order.customerPhone}`} onClick={e => e.stopPropagation()} className="text-[11px] text-eco-600 hover:text-eco-800 font-mono leading-tight hover:underline">{order.customerPhone}</a>
                     </div>
                     
                     {/* Items & Address */}
@@ -226,7 +302,7 @@ const OrderCard: React.FC<Props> = ({
                             <div className={`w-2 h-2 rounded-full flex-shrink-0 ${config.bg.replace('100','500')}`}></div>
                             <div className="flex flex-col min-w-0">
                                 <span className="font-bold text-gray-800 text-sm truncate">{order.customerName}</span>
-                                <span className="text-[10px] text-gray-400 font-mono leading-none">{order.customerPhone}</span>
+                                <a href={`tel:${order.customerPhone}`} onClick={e => e.stopPropagation()} className="text-[10px] text-eco-600 font-mono leading-none hover:underline">{order.customerPhone}</a>
                             </div>
                             
                             {order.lastUpdatedBy && (
@@ -288,11 +364,36 @@ const OrderCard: React.FC<Props> = ({
                  <div className="flex items-center flex-wrap gap-2 mb-1">
                     <span className="font-bold text-gray-900 text-base">{order.customerName}</span>
                     
-                    {/* Phone Number Badge */}
-                    <span className="text-xs text-gray-500 font-mono bg-gray-50 px-1.5 py-0.5 rounded border border-gray-100 flex items-center">
-                        <i className="fas fa-phone-alt text-[10px] mr-1 text-gray-300"></i>
-                        {order.customerPhone}
-                    </span>
+                    {/* Phone Number Badge - CLICKABLE */}
+                    <div className="flex items-center gap-1">
+                        <a href={`tel:${order.customerPhone}`} onClick={e => e.stopPropagation()} className="text-xs text-gray-600 hover:text-white hover:bg-gray-600 transition-colors font-mono bg-gray-50 px-1.5 py-0.5 rounded border border-gray-100 flex items-center cursor-pointer" title="Gọi điện">
+                            <i className="fas fa-phone-alt text-[10px] mr-1"></i>
+                            {order.customerPhone}
+                        </a>
+                        
+                        {/* NEW: Zalo & Maps Buttons */}
+                        <a 
+                            href={`https://zalo.me/${order.customerPhone}`} 
+                            target="_blank" 
+                            rel="noreferrer"
+                            onClick={e => e.stopPropagation()} 
+                            className="w-6 h-6 flex items-center justify-center rounded bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white border border-blue-100 transition-colors"
+                            title="Chat Zalo"
+                        >
+                            <span className="font-black text-[9px]">Z</span>
+                        </a>
+                        
+                        <a 
+                            href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(order.address)}`} 
+                            target="_blank" 
+                            rel="noreferrer"
+                            onClick={e => e.stopPropagation()} 
+                            className="w-6 h-6 flex items-center justify-center rounded bg-red-50 text-red-600 hover:bg-red-600 hover:text-white border border-red-100 transition-colors"
+                            title="Chỉ đường Google Maps"
+                        >
+                            <i className="fas fa-map-marker-alt text-[10px]"></i>
+                        </a>
+                    </div>
 
                     {order.batchId && (
                         <span className="text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded border border-gray-200">
@@ -312,7 +413,6 @@ const OrderCard: React.FC<Props> = ({
                     </div>
                  </div>
                  <div className="flex items-start gap-1.5 text-gray-500 text-sm">
-                    <i className="fas fa-map-marker-alt mt-1 text-gray-300"></i>
                     <span className="line-clamp-2 leading-tight">{order.address}</span>
                  </div>
              </div>
@@ -376,7 +476,7 @@ const OrderCard: React.FC<Props> = ({
                </div>
 
                <button 
-                  onClick={(e) => { e.stopPropagation(); copyMessage(); }} 
+                  onClick={(e) => { e.stopPropagation(); sendSMS(); }} 
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gray-50 text-gray-600 text-xs font-bold hover:bg-eco-50 hover:text-eco-700 transition-colors"
                >
                    <i className="fas fa-sms"></i> <span className="hidden sm:inline">SMS</span>
@@ -416,6 +516,46 @@ const OrderCard: React.FC<Props> = ({
                             Chuyển khoản
                         </button>
                     </div>
+
+                    {/* QR Code Button for Transfer */}
+                    {order.paymentMethod === PaymentMethod.TRANSFER && (
+                        <div className="flex justify-center">
+                            <button 
+                                onClick={showVietQR}
+                                className="text-blue-600 hover:text-blue-800 text-xs font-bold flex items-center gap-1 py-1 px-3 rounded-full bg-blue-50 hover:bg-blue-100 transition-colors"
+                            >
+                                <i className="fas fa-qrcode"></i> Lấy mã QR
+                            </button>
+                        </div>
+                    )}
+
+                    {/* QR Modal Overlay */}
+                    {showQR && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/80 backdrop-blur-sm p-4 animate-fade-in" onClick={() => setShowQR(false)}>
+                            <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-sm w-full text-center" onClick={e => e.stopPropagation()}>
+                                <h3 className="text-lg font-bold text-gray-900 mb-1">Thanh toán Chuyển khoản</h3>
+                                <p className="text-sm text-gray-500 mb-4">Quét mã để thanh toán đơn hàng #{order.id}</p>
+                                
+                                <div className="bg-white p-2 rounded-lg border border-gray-100 shadow-inner mb-4 inline-block">
+                                    {qrUrl ? (
+                                        <img src={qrUrl} alt="VietQR" className="w-64 h-64 object-contain" />
+                                    ) : (
+                                        <div className="w-64 h-64 flex items-center justify-center text-gray-400 bg-gray-50">
+                                            Đang tải...
+                                        </div>
+                                    )}
+                                </div>
+                                
+                                <div className="text-2xl font-black text-gray-900 mb-6">
+                                    {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(order.totalPrice)}
+                                </div>
+
+                                <button onClick={() => setShowQR(false)} className="w-full py-3 bg-gray-100 hover:bg-gray-200 text-gray-800 font-bold rounded-xl transition-colors">
+                                    Đóng
+                                </button>
+                            </div>
+                        </div>
+                    )}
                     
                     <div className="flex gap-2">
                         {/* Camera Button */}
@@ -433,11 +573,16 @@ const OrderCard: React.FC<Props> = ({
             )}
             
             {isCompleted && (
-                <div className="flex items-center justify-center pt-1">
+                <div className="flex items-center justify-center pt-1 gap-2">
                     {order.deliveryProof ? (
-                        <a href={order.deliveryProof} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-xs font-bold text-eco-600 hover:underline">
-                            <i className="fas fa-image"></i> Xem ảnh xác thực
-                        </a>
+                        <div className="flex items-center gap-2">
+                            <a href={order.deliveryProof} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-xs font-bold text-eco-600 hover:underline">
+                                <i className="fas fa-image"></i> Xem ảnh
+                            </a>
+                            <button onClick={handleDeletePhoto} className="w-5 h-5 flex items-center justify-center bg-gray-100 hover:bg-red-100 text-gray-400 hover:text-red-600 rounded-full transition-colors" title="Xóa ảnh">
+                                <i className="fas fa-trash-alt text-[10px]"></i>
+                            </button>
+                        </div>
                     ) : (
                         <span className="text-xs font-medium text-gray-400">
                             {order.status === OrderStatus.DELIVERED ? <><i className="fas fa-check mr-1"></i> Đã giao</> : <><i className="fas fa-times mr-1"></i> Đã hủy</>}

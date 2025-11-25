@@ -14,6 +14,7 @@ const TrackingDashboard: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]); 
   const [filterStatus, setFilterStatus] = useState<OrderStatus | 'ALL'>('ALL');
   const [filterBatch, setFilterBatch] = useState<string>('ALL');
+  const [filterUser, setFilterUser] = useState<string>('ALL');
   const [searchTerm, setSearchTerm] = useState('');
   const [sortBy, setSortBy] = useState<SortOption>('NEWEST');
   const [isCompactMode, setIsCompactMode] = useState(false); 
@@ -73,26 +74,36 @@ const TrackingDashboard: React.FC = () => {
         .map(entry => entry[0])
         .slice(0, 50); // Limit to 50
   }, [orders]);
+
+  // USERS LIST for Filter
+  const users = useMemo(() => {
+      const userSet = new Set<string>();
+      orders.forEach(o => {
+          if (o.lastUpdatedBy) userSet.add(o.lastUpdatedBy);
+      });
+      return Array.from(userSet).sort();
+  }, [orders]);
   
   // Filter Logic
   const filteredOrders = useMemo(() => {
     let result = orders.filter(o => {
       const statusMatch = filterStatus === 'ALL' || o.status === filterStatus;
       const batchMatch = filterBatch === 'ALL' || o.batchId === filterBatch;
+      const userMatch = filterUser === 'ALL' || o.lastUpdatedBy === filterUser;
       const searchLower = searchTerm.toLowerCase();
       const searchMatch = !searchTerm || 
           o.customerName.toLowerCase().includes(searchLower) ||
           o.customerPhone.includes(searchLower) ||
           o.address.toLowerCase().includes(searchLower);
-      return statusMatch && batchMatch && searchMatch;
+      return statusMatch && batchMatch && userMatch && searchMatch;
     });
 
     if (sortBy === 'NEWEST') return result.sort((a, b) => b.createdAt - a.createdAt);
     if (sortBy === 'STATUS') return result.sort((a, b) => a.status.localeCompare(b.status));
-    if (sortBy === 'ROUTE') return result.sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
+    if (sortBy === 'ROUTE') return result.sort((a, b) => (Number(a.orderIndex) || 0) - (Number(b.orderIndex) || 0));
     
     return result;
-  }, [orders, filterStatus, filterBatch, searchTerm, sortBy]);
+  }, [orders, filterStatus, filterBatch, filterUser, searchTerm, sortBy]);
 
   // Report Calculation
   const report = useMemo(() => {
@@ -383,7 +394,7 @@ const TrackingDashboard: React.FC = () => {
     <div className="space-y-6 animate-fade-in pb-20">
       {/* Modern Toolbar */}
       <div className="bg-white/80 backdrop-blur-md p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col md:flex-row gap-4 items-center justify-between sticky top-20 z-30 transition-all hover:shadow-md">
-         {/* Search & Status Filter */}
+         {/* Search & Filters */}
          <div className="flex flex-col sm:flex-row flex-1 w-full gap-3">
             <div className="relative flex-grow group w-full">
                <i className="fas fa-search absolute left-4 top-3.5 text-gray-400 group-focus-within:text-eco-500 transition-colors"></i>
@@ -395,7 +406,7 @@ const TrackingDashboard: React.FC = () => {
                />
             </div>
             
-            <div className="flex gap-2">
+            <div className="flex gap-2 overflow-x-auto pb-1 sm:pb-0 no-scrollbar">
                 {/* Batch Filter */}
                 <div className="relative min-w-[130px] flex-1 sm:flex-none">
                      <select 
@@ -408,6 +419,21 @@ const TrackingDashboard: React.FC = () => {
                     </select>
                     <i className="fas fa-chevron-down absolute right-3 top-4 text-gray-400 text-xs pointer-events-none"></i>
                 </div>
+
+                {/* User Filter (New) */}
+                {users.length > 0 && (
+                    <div className="relative min-w-[130px] flex-1 sm:flex-none">
+                        <select 
+                        value={filterUser} 
+                        onChange={e => setFilterUser(e.target.value)}
+                        className="w-full h-full pl-3 pr-8 py-3 rounded-xl bg-gray-50 border-transparent focus:bg-white focus:ring-2 focus:ring-eco-100 text-sm font-medium text-gray-700 appearance-none cursor-pointer outline-none"
+                        >
+                        <option value="ALL">Người xử lý</option>
+                        {users.map(u => <option key={u} value={u}>{u}</option>)}
+                        </select>
+                        <i className="fas fa-user absolute right-3 top-4 text-gray-400 text-xs pointer-events-none"></i>
+                    </div>
+                )}
 
                 {/* Status Filter */}
                 <div className="relative min-w-[140px] flex-1 sm:flex-none">
