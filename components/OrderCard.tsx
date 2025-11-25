@@ -102,6 +102,35 @@ export const OrderCard: React.FC<Props> = ({
       }
   };
 
+  const handleShareProof = async () => {
+      if (!order.deliveryProof) return;
+      try {
+          // 1. Convert Base64 to Blob/File
+          const base64Response = await fetch(order.deliveryProof);
+          const blob = await base64Response.blob();
+          const file = new File([blob], `delivery-${order.id}.jpg`, { type: "image/jpeg" });
+
+          // 2. Prepare Text
+          const itemsSummary = order.items.map(i => `${i.name} x${i.quantity}`).join(', ');
+          const text = `Đã giao đơn #${order.id}\nKhách: ${order.customerName}\nĐịa chỉ: ${order.address}\nHàng: ${itemsSummary}\nThu: ${new Intl.NumberFormat('vi-VN').format(order.totalPrice)}đ (${order.paymentMethod === PaymentMethod.CASH ? 'TM' : 'CK'})`;
+
+          // 3. Share
+          if (navigator.share) {
+              await navigator.share({
+                  title: `Giao hàng #${order.id}`,
+                  text: text,
+                  files: [file]
+              });
+          } else {
+              await navigator.clipboard.writeText(text);
+              toast.success('Đã copy thông tin. Gửi ảnh thủ công nhé!');
+          }
+      } catch (e) {
+          console.error(e);
+          toast.error("Không thể chia sẻ ảnh");
+      }
+  };
+
   const handleFinishOrder = async (method: PaymentMethod) => {
       const updated = { ...order, paymentMethod: method };
       await storageService.updateOrderDetails(updated);
@@ -549,7 +578,16 @@ export const OrderCard: React.FC<Props> = ({
                                 onClick={(e) => { e.stopPropagation(); setShowImageModal(true); }}
                                 className="flex items-center gap-2 text-xs font-bold text-green-700 hover:underline"
                             >
-                                <i className="fas fa-check-circle"></i> Xem ảnh xác thực
+                                <i className="fas fa-check-circle"></i> Xem ảnh
+                            </button>
+                            <div className="w-px h-3 bg-green-200 mx-1"></div>
+                            {/* Share Button */}
+                            <button 
+                                onClick={handleShareProof}
+                                className="text-green-600 hover:text-green-800 transition-colors"
+                                title="Chia sẻ ảnh Zalo"
+                            >
+                                <i className="fas fa-share-alt text-xs"></i>
                             </button>
                             <div className="w-px h-3 bg-green-200 mx-1"></div>
                             <button onClick={handleDeletePhoto} className="text-gray-400 hover:text-red-600 transition-colors" title="Xóa ảnh">

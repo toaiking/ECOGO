@@ -1,6 +1,6 @@
 
 import { initializeApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from "firebase/firestore";
 
 // Cấu hình Firebase từ console của bạn
 const firebaseConfig = {
@@ -18,8 +18,14 @@ let db: any = null;
 try {
     // Khởi tạo Firebase
     app = initializeApp(firebaseConfig);
-    db = getFirestore(app);
-    console.log("🔥 Firebase đã được kết nối thành công!");
+    
+    // Sử dụng initializeFirestore với experimentalForceLongPolling để vượt qua tường lửa công ty
+    db = initializeFirestore(app, {
+        localCache: persistentLocalCache({tabManager: persistentMultipleTabManager()}),
+        experimentalForceLongPolling: true, 
+    });
+    
+    console.log("🔥 Firebase đã được kết nối thành công (Long Polling)!");
 } catch (e) {
     console.error("❌ Lỗi khởi tạo Firebase:", e);
     console.warn("Đang chạy chế độ Offline do lỗi kết nối.");
