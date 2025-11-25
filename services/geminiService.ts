@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
 import { SmartParseResult, Order, OrderStatus, PaymentMethod } from "../types";
 
@@ -53,33 +54,26 @@ export const parseOrderText = async (text: string): Promise<SmartParseResult> =>
 };
 
 export const generateDeliveryMessage = async (order: Order): Promise<string> => {
-  const ai = getClient();
+  // Tối ưu hóa: Sử dụng Template String xử lý nội bộ thay vì gọi AI
+  // Giúp tốc độ phản hồi là tức thì (Real-time)
   
   let statusText = "";
   switch(order.status) {
       case OrderStatus.PENDING: statusText = "đang chờ xử lý"; break;
       case OrderStatus.PICKED_UP: statusText = "đã được lấy"; break;
-      case OrderStatus.IN_TRANSIT: statusText = "đang trên đường giao"; break;
+      case OrderStatus.IN_TRANSIT: statusText = "đang giao"; break;
       case OrderStatus.DELIVERED: statusText = "đã giao thành công"; break;
-      case OrderStatus.CANCELLED: statusText = "đã bị hủy"; break;
+      case OrderStatus.CANCELLED: statusText = "đã hủy"; break;
   }
 
-  const itemsList = order.items.map(i => i.name).join(", ");
+  // Tóm tắt hàng hóa: Gạo ST25 (x2), Nước mắm
+  const itemsList = order.items.map(i => `${i.name}${i.quantity > 1 ? ` (${i.quantity})` : ''}`).join(", ");
+  
+  const priceFormatted = new Intl.NumberFormat('vi-VN').format(order.totalPrice);
   const paymentText = order.paymentMethod === PaymentMethod.CASH 
-    ? `Thu: ${new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(order.totalPrice)}` 
-    : "Đã thanh toán/CK";
+    ? `Thu: ${priceFormatted}đ` 
+    : "Đã thanh toán";
 
-  const prompt = `
-    Viết một tin nhắn SMS ngắn bằng tiếng Việt gửi cho khách ${order.customerName}.
-    Đơn: "${itemsList}". ${paymentText}.
-    Trạng thái: ${statusText}.
-    Ngắn gọn, lịch sự, dưới 160 ký tự.
-  `;
-
-  const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
-    contents: prompt,
-  });
-
-  return response.text || "Không thể tạo tin nhắn.";
+  // Template tin nhắn ngắn gọn, đầy đủ
+  return `Chào ${order.customerName}, đơn ${itemsList} ${statusText}. ${paymentText}. Cảm ơn!`;
 };

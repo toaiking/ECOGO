@@ -110,6 +110,9 @@ export const OrderCard: React.FC<Props> = ({
 
   const togglePaymentVerification = async () => {
       await storageService.updatePaymentVerification(order.id, !order.paymentVerified);
+      if (!order.paymentVerified) {
+          toast.success("Đã xác nhận nhận tiền!");
+      }
   };
 
   const showVietQR = async (e?: React.MouseEvent) => {
@@ -132,11 +135,37 @@ export const OrderCard: React.FC<Props> = ({
       setShowQR(true);
   };
 
+  const handleShareQR = async () => {
+      if (!qrUrl) return;
+      try {
+          const response = await fetch(qrUrl);
+          const blob = await response.blob();
+          const file = new File([blob], `qr-${order.id}.png`, { type: "image/png" });
+
+          if (navigator.share) {
+              await navigator.share({
+                  title: 'Mã QR Thanh toán',
+                  text: `Thanh toán đơn hàng #${order.id}. Số tiền: ${new Intl.NumberFormat('vi-VN').format(order.totalPrice)}đ`,
+                  files: [file]
+              });
+          } else {
+              // Fallback
+              await navigator.clipboard.writeText(qrUrl);
+              toast.success("Đã copy link ảnh QR (Thiết bị không hỗ trợ chia sẻ file)");
+          }
+      } catch (e) {
+          console.error(e);
+          toast.error("Không thể chia sẻ ảnh QR");
+      }
+  };
+
   const sendSMS = async () => {
+    // Generate text instantly
     const msg = await generateDeliveryMessage(order);
     const ua = navigator.userAgent.toLowerCase();
     const isIOS = ua.indexOf('iphone') > -1 || ua.indexOf('ipad') > -1;
     const separator = isIOS ? '&' : '?';
+    // Open native SMS app
     window.open(`sms:${order.customerPhone}${separator}body=${encodeURIComponent(msg)}`, '_self');
   };
 
@@ -563,13 +592,35 @@ export const OrderCard: React.FC<Props> = ({
                     )}
                 </div>
                 
-                <div className="text-2xl font-black text-gray-900 mb-6">
+                <div className="text-2xl font-black text-gray-900 mb-2">
                     {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(order.totalPrice)}
                 </div>
+                
+                <p className="text-xs text-amber-600 bg-amber-50 p-2 rounded-lg mb-6 border border-amber-100">
+                    <i className="fas fa-info-circle mr-1"></i>
+                    Sau khi chuyển khoản, vui lòng đưa màn hình cho nhân viên để xác nhận.
+                </p>
 
-                <button onClick={() => setShowQR(false)} className="w-full py-3 bg-gray-100 hover:bg-gray-200 text-gray-800 font-bold rounded-xl transition-colors">
-                    Đóng
-                </button>
+                <div className="flex gap-3">
+                    {/* New Share Button */}
+                    <button 
+                        onClick={handleShareQR}
+                        className="w-12 flex items-center justify-center bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-xl transition-colors"
+                        title="Chia sẻ ảnh QR"
+                    >
+                        <i className="fas fa-share-alt"></i>
+                    </button>
+
+                    <button 
+                        onClick={() => { togglePaymentVerification(); setShowQR(false); }}
+                        className="flex-1 py-3 bg-green-600 hover:bg-green-700 text-white font-bold rounded-xl transition-colors shadow-lg shadow-green-100"
+                    >
+                        <i className="fas fa-check mr-2"></i>Đã nhận tiền
+                    </button>
+                    <button onClick={() => setShowQR(false)} className="px-4 py-3 bg-gray-100 hover:bg-gray-200 text-gray-800 font-bold rounded-xl transition-colors">
+                        Đóng
+                    </button>
+                </div>
             </div>
         </div>
       )}
