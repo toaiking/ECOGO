@@ -113,7 +113,8 @@ export const OrderCard: React.FC<Props> = ({
       await storageService.updatePaymentVerification(order.id, !order.paymentVerified);
   };
 
-  const showVietQR = async () => {
+  const showVietQR = async (e?: React.MouseEvent) => {
+      e?.stopPropagation();
       if (showQR) {
           setShowQR(false);
           return;
@@ -458,22 +459,30 @@ export const OrderCard: React.FC<Props> = ({
                      {new Intl.NumberFormat('vi-VN').format(order.totalPrice)}
                    </span>
                    
-                   {/* Payment Info - Only show when completed */}
-                   {isCompleted && (
-                       <>
-                           {order.paymentMethod === PaymentMethod.CASH ? (
-                               <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-gray-100 text-gray-500 border border-gray-200">Tiền mặt</span>
-                           ) : order.paymentMethod === PaymentMethod.PAID ? (
-                               <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-green-100 text-green-700 border border-green-200">Đã TT</span>
-                           ) : (
+                   {/* Payment Info & Quick Actions */}
+                   {order.paymentMethod === PaymentMethod.CASH ? (
+                       <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-gray-100 text-gray-500 border border-gray-200">Tiền mặt</span>
+                   ) : order.paymentMethod === PaymentMethod.PAID ? (
+                       <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-green-100 text-green-700 border border-green-200">Đã TT</span>
+                   ) : (
+                       <div className="flex items-center gap-1">
+                           <button 
+                             onClick={(e) => { e.stopPropagation(); togglePaymentVerification(); }}
+                             className={`px-2 py-0.5 rounded text-[10px] font-bold border flex items-center gap-1 transition-all ${order.paymentVerified ? 'bg-green-100 text-green-700 border-green-200' : 'bg-blue-50 text-blue-600 border-blue-200 hover:bg-blue-100'}`}
+                           >
+                             {order.paymentVerified ? <i className="fas fa-check-circle"></i> : <i className="far fa-circle"></i>} CK
+                           </button>
+                           {/* PERSISTENT QR BUTTON */}
+                           {!order.paymentVerified && (
                                <button 
-                                 onClick={(e) => { e.stopPropagation(); togglePaymentVerification(); }}
-                                 className={`px-2 py-0.5 rounded text-[10px] font-bold border flex items-center gap-1 transition-all ${order.paymentVerified ? 'bg-green-100 text-green-700 border-green-200' : 'bg-blue-50 text-blue-600 border-blue-200 hover:bg-blue-100'}`}
+                                   onClick={showVietQR}
+                                   className="w-6 h-6 flex items-center justify-center rounded-full bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white transition-colors"
+                                   title="Lấy mã QR"
                                >
-                                 {order.paymentVerified ? <i className="fas fa-check-circle"></i> : <i className="far fa-circle"></i>} CK
+                                   <i className="fas fa-qrcode text-[10px]"></i>
                                </button>
                            )}
-                       </>
+                       </div>
                    )}
                </div>
 
@@ -518,46 +527,6 @@ export const OrderCard: React.FC<Props> = ({
                             Chuyển khoản
                         </button>
                     </div>
-
-                    {/* QR Code Button for Transfer */}
-                    {order.paymentMethod === PaymentMethod.TRANSFER && (
-                        <div className="flex justify-center">
-                            <button 
-                                onClick={showVietQR}
-                                className="text-blue-600 hover:text-blue-800 text-xs font-bold flex items-center gap-1 py-1 px-3 rounded-full bg-blue-50 hover:bg-blue-100 transition-colors"
-                            >
-                                <i className="fas fa-qrcode"></i> Lấy mã QR
-                            </button>
-                        </div>
-                    )}
-
-                    {/* QR Modal Overlay */}
-                    {showQR && (
-                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/80 backdrop-blur-sm p-4 animate-fade-in" onClick={() => setShowQR(false)}>
-                            <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-sm w-full text-center" onClick={e => e.stopPropagation()}>
-                                <h3 className="text-lg font-bold text-gray-900 mb-1">Thanh toán Chuyển khoản</h3>
-                                <p className="text-sm text-gray-500 mb-4">Quét mã để thanh toán đơn hàng #{order.id}</p>
-                                
-                                <div className="bg-white p-2 rounded-lg border border-gray-100 shadow-inner mb-4 inline-block">
-                                    {qrUrl ? (
-                                        <img src={qrUrl} alt="VietQR" className="w-64 h-64 object-contain" />
-                                    ) : (
-                                        <div className="w-64 h-64 flex items-center justify-center text-gray-400 bg-gray-50">
-                                            Đang tải...
-                                        </div>
-                                    )}
-                                </div>
-                                
-                                <div className="text-2xl font-black text-gray-900 mb-6">
-                                    {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(order.totalPrice)}
-                                </div>
-
-                                <button onClick={() => setShowQR(false)} className="w-full py-3 bg-gray-100 hover:bg-gray-200 text-gray-800 font-bold rounded-xl transition-colors">
-                                    Đóng
-                                </button>
-                            </div>
-                        </div>
-                    )}
                     
                     <div className="flex gap-2">
                         {/* Camera Button */}
@@ -598,24 +567,52 @@ export const OrderCard: React.FC<Props> = ({
           </div>
       </div>
       
-      {/* Lightbox Modal */}
+      {/* Lightbox Modal (Fixed Z-Index) */}
       {showImageModal && order.deliveryProof && (
-          <div className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4 animate-fade-in" onClick={() => setShowImageModal(false)}>
-              <div className="relative max-w-4xl max-h-screen w-full flex flex-col items-center justify-center">
+          <div className="fixed inset-0 z-[9999] bg-black/95 flex items-center justify-center p-4 animate-fade-in" onClick={() => setShowImageModal(false)}>
+              <div className="relative w-full h-full flex items-center justify-center">
                   <img 
                     src={order.deliveryProof} 
                     alt="Proof" 
-                    className="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl" 
+                    className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" 
                     onClick={e => e.stopPropagation()}
                   />
                   <button 
                     onClick={() => setShowImageModal(false)}
-                    className="absolute -top-10 right-0 text-white text-xl p-2 hover:text-gray-300 transition-colors"
+                    className="absolute top-4 right-4 bg-white/10 hover:bg-white/20 text-white rounded-full w-10 h-10 flex items-center justify-center transition-colors"
                   >
-                      <i className="fas fa-times"></i> Đóng
+                      <i className="fas fa-times text-xl"></i>
                   </button>
               </div>
           </div>
+      )}
+
+      {/* QR Modal Overlay */}
+      {showQR && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-gray-900/80 backdrop-blur-sm p-4 animate-fade-in" onClick={() => setShowQR(false)}>
+            <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-sm w-full text-center" onClick={e => e.stopPropagation()}>
+                <h3 className="text-lg font-bold text-gray-900 mb-1">Thanh toán Chuyển khoản</h3>
+                <p className="text-sm text-gray-500 mb-4">Quét mã để thanh toán đơn hàng #{order.id}</p>
+                
+                <div className="bg-white p-2 rounded-lg border border-gray-100 shadow-inner mb-4 inline-block">
+                    {qrUrl ? (
+                        <img src={qrUrl} alt="VietQR" className="w-64 h-64 object-contain" />
+                    ) : (
+                        <div className="w-64 h-64 flex items-center justify-center text-gray-400 bg-gray-50">
+                            Đang tải...
+                        </div>
+                    )}
+                </div>
+                
+                <div className="text-2xl font-black text-gray-900 mb-6">
+                    {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(order.totalPrice)}
+                </div>
+
+                <button onClick={() => setShowQR(false)} className="w-full py-3 bg-gray-100 hover:bg-gray-200 text-gray-800 font-bold rounded-xl transition-colors">
+                    Đóng
+                </button>
+            </div>
+        </div>
       )}
     </>
   );

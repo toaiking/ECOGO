@@ -21,6 +21,7 @@ const TrackingDashboard: React.FC = () => {
   const [editingOrder, setEditingOrder] = useState<Order | null>(null);
   const [activeEditProductRow, setActiveEditProductRow] = useState<number | null>(null); 
   const [showReport, setShowReport] = useState(false);
+  const [isToolbarExpanded, setIsToolbarExpanded] = useState(true);
 
   // Delete Modal State
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -98,7 +99,7 @@ const TrackingDashboard: React.FC = () => {
       return statusMatch && batchMatch && userMatch && searchMatch;
     });
 
-    if (sortBy === 'NEWEST') return result.sort((a, b) => Number(b.createdAt) - Number(a.createdAt));
+    if (sortBy === 'NEWEST') return result.sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
     if (sortBy === 'STATUS') return result.sort((a, b) => a.status.localeCompare(b.status));
     if (sortBy === 'ROUTE') return result.sort((a, b) => (Number(a.orderIndex) || 0) - (Number(b.orderIndex) || 0));
     
@@ -121,29 +122,31 @@ const TrackingDashboard: React.FC = () => {
 
     return filteredOrders.reduce((acc, order) => {
         if (order.status !== OrderStatus.CANCELLED) {
-            acc.totalRevenue += order.totalPrice;
+            const price = Number(order.totalPrice) || 0;
+            acc.totalRevenue += price;
             
             if (order.paymentMethod === PaymentMethod.CASH) {
-                acc.totalCash += order.totalPrice;
+                acc.totalCash += price;
                 if (order.status === OrderStatus.DELIVERED) {
-                    acc.cashCollected += order.totalPrice;
+                    acc.cashCollected += price;
                 }
             } else if (order.paymentMethod === PaymentMethod.TRANSFER) {
-                acc.totalTransfer += order.totalPrice;
+                acc.totalTransfer += price;
                 if (order.paymentVerified) {
-                    acc.transferReceived += order.totalPrice;
+                    acc.transferReceived += price;
                 } else {
-                    acc.transferPending += order.totalPrice;
+                    acc.transferPending += price;
                 }
             } else if (order.paymentMethod === PaymentMethod.PAID) {
-                acc.totalPrepaid += order.totalPrice;
+                acc.totalPrepaid += price;
             }
 
             // Product Quantity Stats
             order.items.forEach(item => {
                 const normalizedName = item.name.trim();
                 if (normalizedName) {
-                    acc.productQuantities[normalizedName] = (acc.productQuantities[normalizedName] || 0) + (item.quantity || 0);
+                    const qty = Number(item.quantity) || 0;
+                    acc.productQuantities[normalizedName] = (acc.productQuantities[normalizedName] || 0) + qty;
                 }
             });
         }
@@ -392,116 +395,130 @@ const TrackingDashboard: React.FC = () => {
 
   return (
     <div className="space-y-6 animate-fade-in pb-20">
-      {/* Modern Toolbar */}
-      <div className="bg-white/80 backdrop-blur-md p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col md:flex-row gap-4 items-center justify-between sticky top-20 z-30 transition-all hover:shadow-md">
-         {/* Search & Filters */}
-         <div className="flex flex-col sm:flex-row flex-1 w-full gap-3">
-            <div className="relative flex-grow group w-full">
-               <i className="fas fa-search absolute left-4 top-3.5 text-gray-400 group-focus-within:text-eco-500 transition-colors"></i>
-               <input 
-                  placeholder="Tìm tên, sđt, địa chỉ..."
-                  value={searchTerm}
-                  onChange={e => setSearchTerm(e.target.value)}
-                  className="w-full pl-10 pr-4 py-3 rounded-xl bg-gray-50 border-transparent focus:bg-white focus:border-eco-200 focus:ring-4 focus:ring-eco-50/50 text-sm font-medium outline-none transition-all duration-200"
-               />
-            </div>
-            
-            <div className="flex gap-2 overflow-x-auto pb-1 sm:pb-0 no-scrollbar">
-                {/* Batch Filter */}
-                <div className="relative min-w-[130px] flex-1 sm:flex-none">
-                     <select 
-                       value={filterBatch} 
-                       onChange={e => setFilterBatch(e.target.value)}
-                       className="w-full h-full pl-3 pr-8 py-3 rounded-xl bg-gray-50 border-transparent focus:bg-white focus:ring-2 focus:ring-eco-100 text-sm font-bold text-gray-700 appearance-none cursor-pointer outline-none"
-                    >
-                       <option value="ALL">Tất cả Lô</option>
-                       {batches.map(b => <option key={b} value={b}>{b}</option>)}
-                    </select>
-                    <i className="fas fa-chevron-down absolute right-3 top-4 text-gray-400 text-xs pointer-events-none"></i>
-                </div>
-
-                {/* User Filter (New) */}
-                {users.length > 0 && (
-                    <div className="relative min-w-[130px] flex-1 sm:flex-none">
-                        <select 
-                        value={filterUser} 
-                        onChange={e => setFilterUser(e.target.value)}
-                        className="w-full h-full pl-3 pr-8 py-3 rounded-xl bg-gray-50 border-transparent focus:bg-white focus:ring-2 focus:ring-eco-100 text-sm font-medium text-gray-700 appearance-none cursor-pointer outline-none"
-                        >
-                        <option value="ALL">Người xử lý</option>
-                        {users.map(u => <option key={u} value={u}>{u}</option>)}
-                        </select>
-                        <i className="fas fa-user absolute right-3 top-4 text-gray-400 text-xs pointer-events-none"></i>
-                    </div>
-                )}
-
-                {/* Status Filter */}
-                <div className="relative min-w-[140px] flex-1 sm:flex-none">
-                     <select 
-                       value={filterStatus} 
-                       onChange={e => setFilterStatus(e.target.value as any)}
-                       className="w-full h-full pl-3 pr-8 py-3 rounded-xl bg-gray-50 border-transparent focus:bg-white focus:ring-2 focus:ring-eco-100 text-sm font-medium appearance-none cursor-pointer outline-none"
-                    >
-                       <option value="ALL">Mọi trạng thái</option>
-                       {Object.entries(statusLabels).map(([k,v]) => <option key={k} value={k}>{v}</option>)}
-                    </select>
-                    <i className="fas fa-filter absolute right-3 top-4 text-gray-400 text-xs pointer-events-none"></i>
-                </div>
-            </div>
+      {/* Modern Toolbar with Collapsible Feature */}
+      <div className="bg-white/95 backdrop-blur-md rounded-2xl shadow-sm border border-gray-100 sticky top-16 z-30 transition-all hover:shadow-md overflow-hidden">
+         {/* Toggle Button */}
+         <div 
+            className="flex items-center justify-center p-1 bg-gray-50 border-b border-gray-100 cursor-pointer hover:bg-gray-100 transition-colors"
+            onClick={() => setIsToolbarExpanded(!isToolbarExpanded)}
+            title={isToolbarExpanded ? "Thu gọn công cụ" : "Mở rộng công cụ"}
+         >
+             <i className={`fas fa-chevron-${isToolbarExpanded ? 'up' : 'down'} text-gray-400 text-xs`}></i>
          </div>
 
-         {/* Tools & Sorting */}
-         <div className="flex gap-3 w-full md:w-auto overflow-x-auto pb-1 md:pb-0 no-scrollbar items-center">
-            {/* View Mode Toggle */}
-             <button 
-                onClick={() => setIsCompactMode(!isCompactMode)}
-                className={`w-10 h-10 flex-shrink-0 flex items-center justify-center rounded-xl border transition-all ${isCompactMode ? 'bg-eco-100 text-eco-700 border-eco-200' : 'bg-gray-50 text-gray-400 border-gray-200'}`}
-                title={isCompactMode ? "Chế độ chi tiết" : "Chế độ thu gọn"}
-            >
-                <i className={`fas ${isCompactMode ? 'fa-list' : 'fa-th-large'}`}></i>
-            </button>
-            
-            {/* Print List Button */}
-            <button 
-                onClick={handlePrintList}
-                className="w-10 h-10 flex-shrink-0 flex items-center justify-center rounded-xl bg-gray-50 text-gray-500 hover:text-blue-600 hover:bg-blue-50 border border-gray-200 transition-all"
-                title="In danh sách hiện tại"
-            >
-                <i className="fas fa-print"></i>
-            </button>
+         {/* Collapsible Content */}
+         <div className={`transition-all duration-300 ease-in-out ${isToolbarExpanded ? 'max-h-[500px] opacity-100 p-4' : 'max-h-0 opacity-0 overflow-hidden p-0'}`}>
+            <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
+                {/* Search & Filters */}
+                <div className="flex flex-col sm:flex-row flex-1 w-full gap-3">
+                    <div className="relative flex-grow group w-full">
+                    <i className="fas fa-search absolute left-4 top-3.5 text-gray-400 group-focus-within:text-eco-500 transition-colors"></i>
+                    <input 
+                        placeholder="Tìm tên, sđt, địa chỉ..."
+                        value={searchTerm}
+                        onChange={e => setSearchTerm(e.target.value)}
+                        className="w-full pl-10 pr-4 py-3 rounded-xl bg-gray-50 border-transparent focus:bg-white focus:border-eco-200 focus:ring-4 focus:ring-eco-50/50 text-sm font-medium outline-none transition-all duration-200"
+                    />
+                    </div>
+                    
+                    <div className="flex gap-2 overflow-x-auto pb-1 sm:pb-0 no-scrollbar">
+                        {/* Batch Filter */}
+                        <div className="relative min-w-[130px] flex-1 sm:flex-none">
+                            <select 
+                            value={filterBatch} 
+                            onChange={e => setFilterBatch(e.target.value)}
+                            className="w-full h-full pl-3 pr-8 py-3 rounded-xl bg-gray-50 border-transparent focus:bg-white focus:ring-2 focus:ring-eco-100 text-sm font-bold text-gray-700 appearance-none cursor-pointer outline-none"
+                            >
+                            <option value="ALL">Tất cả Lô</option>
+                            {batches.map(b => <option key={b} value={b}>{b}</option>)}
+                            </select>
+                            <i className="fas fa-chevron-down absolute right-3 top-4 text-gray-400 text-xs pointer-events-none"></i>
+                        </div>
 
-             {/* Copy Route Button */}
-            <button 
-                onClick={copyRouteToClipboard}
-                className="w-10 h-10 flex-shrink-0 flex items-center justify-center rounded-xl bg-gray-50 text-gray-500 hover:text-eco-600 hover:bg-eco-50 border border-gray-200 transition-all"
-                title="Copy danh sách địa chỉ giao hàng"
-            >
-                <i className="fas fa-map-marked-alt"></i>
-            </button>
+                        {/* User Filter (New) */}
+                        {users.length > 0 && (
+                            <div className="relative min-w-[130px] flex-1 sm:flex-none">
+                                <select 
+                                value={filterUser} 
+                                onChange={e => setFilterUser(e.target.value)}
+                                className="w-full h-full pl-3 pr-8 py-3 rounded-xl bg-gray-50 border-transparent focus:bg-white focus:ring-2 focus:ring-eco-100 text-sm font-medium text-gray-700 appearance-none cursor-pointer outline-none"
+                                >
+                                <option value="ALL">Người xử lý</option>
+                                {users.map(u => <option key={u} value={u}>{u}</option>)}
+                                </select>
+                                <i className="fas fa-user absolute right-3 top-4 text-gray-400 text-xs pointer-events-none"></i>
+                            </div>
+                        )}
 
-            {/* Sort Switcher */}
-            <div className="flex p-1 bg-gray-100 rounded-xl flex-shrink-0">
-                 <button 
-                    onClick={() => setSortBy('NEWEST')}
-                    className={`px-3 py-2 rounded-lg text-xs font-bold transition-all ${sortBy === 'NEWEST' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-                 >
-                    Mới nhất
-                 </button>
-                 <button 
-                    onClick={() => setSortBy('ROUTE')}
-                    className={`px-3 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-1 ${sortBy === 'ROUTE' ? 'bg-white text-eco-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-                 >
-                    <i className="fas fa-route"></i> Lộ trình
-                 </button>
+                        {/* Status Filter */}
+                        <div className="relative min-w-[140px] flex-1 sm:flex-none">
+                            <select 
+                            value={filterStatus} 
+                            onChange={e => setFilterStatus(e.target.value as any)}
+                            className="w-full h-full pl-3 pr-8 py-3 rounded-xl bg-gray-50 border-transparent focus:bg-white focus:ring-2 focus:ring-eco-100 text-sm font-medium appearance-none cursor-pointer outline-none"
+                            >
+                            <option value="ALL">Mọi trạng thái</option>
+                            {Object.entries(statusLabels).map(([k,v]) => <option key={k} value={k}>{v}</option>)}
+                            </select>
+                            <i className="fas fa-filter absolute right-3 top-4 text-gray-400 text-xs pointer-events-none"></i>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Tools & Sorting */}
+                <div className="flex gap-3 w-full md:w-auto overflow-x-auto pb-1 md:pb-0 no-scrollbar items-center">
+                    {/* View Mode Toggle */}
+                    <button 
+                        onClick={() => setIsCompactMode(!isCompactMode)}
+                        className={`w-10 h-10 flex-shrink-0 flex items-center justify-center rounded-xl border transition-all ${isCompactMode ? 'bg-eco-100 text-eco-700 border-eco-200' : 'bg-gray-50 text-gray-400 border-gray-200'}`}
+                        title={isCompactMode ? "Chế độ chi tiết" : "Chế độ thu gọn"}
+                    >
+                        <i className={`fas ${isCompactMode ? 'fa-list' : 'fa-th-large'}`}></i>
+                    </button>
+                    
+                    {/* Print List Button */}
+                    <button 
+                        onClick={handlePrintList}
+                        className="w-10 h-10 flex-shrink-0 flex items-center justify-center rounded-xl bg-gray-50 text-gray-500 hover:text-blue-600 hover:bg-blue-50 border border-gray-200 transition-all"
+                        title="In danh sách hiện tại"
+                    >
+                        <i className="fas fa-print"></i>
+                    </button>
+
+                    {/* Copy Route Button */}
+                    <button 
+                        onClick={copyRouteToClipboard}
+                        className="w-10 h-10 flex-shrink-0 flex items-center justify-center rounded-xl bg-gray-50 text-gray-500 hover:text-eco-600 hover:bg-eco-50 border border-gray-200 transition-all"
+                        title="Copy danh sách địa chỉ giao hàng"
+                    >
+                        <i className="fas fa-map-marked-alt"></i>
+                    </button>
+
+                    {/* Sort Switcher */}
+                    <div className="flex p-1 bg-gray-100 rounded-xl flex-shrink-0">
+                        <button 
+                            onClick={() => setSortBy('NEWEST')}
+                            className={`px-3 py-2 rounded-lg text-xs font-bold transition-all ${sortBy === 'NEWEST' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                        >
+                            Mới nhất
+                        </button>
+                        <button 
+                            onClick={() => setSortBy('ROUTE')}
+                            className={`px-3 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-1 ${sortBy === 'ROUTE' ? 'bg-white text-eco-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                        >
+                            <i className="fas fa-route"></i> Lộ trình
+                        </button>
+                    </div>
+                    
+                    <button 
+                        onClick={() => setShowReport(!showReport)}
+                        className={`w-10 h-10 flex-shrink-0 flex items-center justify-center rounded-xl border transition-all ${showReport ? 'bg-black text-white border-black' : 'bg-white text-gray-400 border-gray-200 hover:border-gray-400'}`}
+                        title="Báo cáo"
+                    >
+                        <i className="fas fa-chart-bar text-lg"></i>
+                    </button>
+                </div>
             </div>
-            
-            <button 
-                onClick={() => setShowReport(!showReport)}
-                className={`w-10 h-10 flex-shrink-0 flex items-center justify-center rounded-xl border transition-all ${showReport ? 'bg-black text-white border-black' : 'bg-white text-gray-400 border-gray-200 hover:border-gray-400'}`}
-                title="Báo cáo"
-            >
-                <i className="fas fa-chart-bar text-lg"></i>
-            </button>
          </div>
       </div>
 
