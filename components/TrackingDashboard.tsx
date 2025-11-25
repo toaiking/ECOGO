@@ -1,3 +1,4 @@
+
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { v4 as uuidv4 } from 'uuid';
@@ -446,7 +447,7 @@ const TrackingDashboard: React.FC = () => {
                             <i className="fas fa-chevron-down absolute right-3 top-4 text-gray-400 text-xs pointer-events-none"></i>
                         </div>
 
-                        {/* User Filter (New) */}
+                        {/* User Filter */}
                         {users.length > 0 && (
                             <div className="relative min-w-[130px] flex-1 sm:flex-none">
                                 <select 

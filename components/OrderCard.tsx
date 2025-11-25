@@ -221,17 +221,29 @@ export const OrderCard: React.FC<Props> = ({
     if (order.paymentMethod === PaymentMethod.CASH) {
         return <span className="text-[10px] font-bold text-gray-500 bg-gray-100 px-1 rounded border border-gray-200">TM</span>;
     }
-    if (order.paymentMethod === PaymentMethod.PAID) {
-        return <span className="text-[10px] font-bold text-green-700 bg-green-100 px-1 rounded border border-green-200">Đã TT</span>;
-    }
+    
     return (
-        <span 
-            className={`text-[10px] font-bold px-1 rounded border cursor-pointer ${order.paymentVerified ? 'text-green-700 bg-green-100 border-green-200' : 'text-blue-600 bg-blue-50 border-blue-200'}`}
-            onClick={(e) => { e.stopPropagation(); togglePaymentVerification(); }}
-            title={order.paymentVerified ? "Đã nhận tiền" : "Chờ xác nhận"}
-        >
-           {order.paymentVerified ? 'CK-OK' : 'CK?'}
-        </span>
+       <div className="flex items-center gap-1">
+            {order.paymentMethod === PaymentMethod.PAID ? (
+                <span className="text-[10px] font-bold text-green-700 bg-green-100 px-1 rounded border border-green-200">Đã TT</span>
+            ) : (
+                <span 
+                    className={`text-[10px] font-bold px-1 rounded border cursor-pointer ${order.paymentVerified ? 'text-green-700 bg-green-100 border-green-200' : 'text-blue-600 bg-blue-50 border-blue-200'}`}
+                    onClick={(e) => { e.stopPropagation(); togglePaymentVerification(); }}
+                    title={order.paymentVerified ? "Đã nhận tiền" : "Chờ xác nhận"}
+                >
+                {order.paymentVerified ? 'CK-OK' : 'CK?'}
+                </span>
+            )}
+            
+            <button 
+                onClick={showVietQR}
+                className="w-5 h-5 flex items-center justify-center rounded bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white transition-colors border border-blue-100"
+                title="Mã QR"
+            >
+                <i className="fas fa-qrcode text-[10px]"></i>
+            </button>
+       </div>
     );
   };
 
@@ -434,28 +446,9 @@ export const OrderCard: React.FC<Props> = ({
                      {new Intl.NumberFormat('vi-VN').format(order.totalPrice)}
                    </span>
                    
-                   {order.paymentMethod === PaymentMethod.CASH ? (
-                       <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-gray-100 text-gray-500 border border-gray-200">Tiền mặt</span>
-                   ) : order.paymentMethod === PaymentMethod.PAID ? (
-                       <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-green-100 text-green-700 border border-green-200">Đã TT</span>
-                   ) : (
-                       <div className="flex items-center gap-1">
-                           <button 
-                             onClick={(e) => { e.stopPropagation(); togglePaymentVerification(); }}
-                             className={`px-2 py-0.5 rounded text-[10px] font-bold border flex items-center gap-1 transition-all ${order.paymentVerified ? 'bg-green-100 text-green-700 border-green-200' : 'bg-blue-50 text-blue-600 border-blue-200 hover:bg-blue-100'}`}
-                           >
-                             {order.paymentVerified ? <i className="fas fa-check-circle"></i> : <i className="far fa-circle"></i>} CK
-                           </button>
-                           {/* PERSISTENT QR BUTTON - Always show if Transfer */}
-                           <button 
-                               onClick={showVietQR}
-                               className="w-6 h-6 flex items-center justify-center rounded-full bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white transition-colors"
-                               title="Lấy mã QR"
-                           >
-                               <i className="fas fa-qrcode text-[10px]"></i>
-                           </button>
-                       </div>
-                   )}
+                   <div className="mt-0.5">
+                       <PaymentBadge />
+                   </div>
                </div>
 
                <button 
@@ -536,7 +529,7 @@ export const OrderCard: React.FC<Props> = ({
       </div>
       
       {showImageModal && order.deliveryProof && (
-          <div className="fixed inset-0 z-[9999] bg-black/95 flex items-center justify-center p-4 animate-fade-in" onClick={() => setShowImageModal(false)}>
+          <div className="fixed inset-0 z-[99999] bg-black/95 flex items-center justify-center p-4 animate-fade-in" onClick={() => setShowImageModal(false)}>
               <div className="relative w-full h-full flex items-center justify-center">
                   <img 
                     src={order.deliveryProof} 
@@ -555,7 +548,7 @@ export const OrderCard: React.FC<Props> = ({
       )}
 
       {showQR && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-gray-900/80 backdrop-blur-sm p-4 animate-fade-in" onClick={() => setShowQR(false)}>
+        <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-gray-900/80 backdrop-blur-sm p-4 animate-fade-in" onClick={() => setShowQR(false)}>
             <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-sm w-full text-center" onClick={e => e.stopPropagation()}>
                 <h3 className="text-lg font-bold text-gray-900 mb-1">Thanh toán Chuyển khoản</h3>
                 <p className="text-sm text-gray-500 mb-4">Quét mã để thanh toán đơn hàng #{order.id}</p>
