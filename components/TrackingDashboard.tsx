@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { v4 as uuidv4 } from 'uuid';
@@ -99,9 +98,21 @@ const TrackingDashboard: React.FC = () => {
       return statusMatch && batchMatch && userMatch && searchMatch;
     });
 
-    if (sortBy === 'NEWEST') return result.sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
+    if (sortBy === 'NEWEST') {
+      return result.sort((a, b) => {
+        const timeA = Number(a.createdAt) || 0;
+        const timeB = Number(b.createdAt) || 0;
+        return timeB - timeA;
+      });
+    }
     if (sortBy === 'STATUS') return result.sort((a, b) => a.status.localeCompare(b.status));
-    if (sortBy === 'ROUTE') return result.sort((a, b) => (Number(a.orderIndex) || 0) - (Number(b.orderIndex) || 0));
+    if (sortBy === 'ROUTE') {
+      return result.sort((a, b) => {
+        const idxA = Number(a.orderIndex) || 0;
+        const idxB = Number(b.orderIndex) || 0;
+        return idxA - idxB;
+      });
+    }
     
     return result;
   }, [orders, filterStatus, filterBatch, filterUser, searchTerm, sortBy]);
@@ -156,7 +167,7 @@ const TrackingDashboard: React.FC = () => {
   }, [filteredOrders]);
 
   const productStatsList = useMemo(() => {
-      return Object.entries(report.productQuantities).sort((a, b) => b[1] - a[1]);
+      return Object.entries(report.productQuantities).sort((a, b) => Number(b[1]) - Number(a[1]));
   }, [report.productQuantities]);
 
   // Handlers
@@ -626,7 +637,7 @@ const TrackingDashboard: React.FC = () => {
 
       {/* Extended Edit Modal */}
       {editingOrder && (
-        <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in">
+        <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4 animate-fade-in">
             <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl flex flex-col" ref={editModalRef}>
                 <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50">
                     <div>
@@ -710,7 +721,7 @@ const TrackingDashboard: React.FC = () => {
                                         
                                         {/* Edit Modal Product Droplist */}
                                         {activeEditProductRow === idx && (
-                                            <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-100 rounded-lg shadow-xl z-[60] max-h-40 overflow-y-auto">
+                                            <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-100 rounded-lg shadow-xl z-[70] max-h-40 overflow-y-auto">
                                                  {availableProducts.length === 0 ? (
                                                      <div className="p-2 text-xs text-gray-400 text-center">
                                                          {products.length === 0 ? "Kho trống" : "Không tìm thấy hoặc đã chọn"}

@@ -76,7 +76,6 @@ export const OrderCard: React.FC<Props> = ({
   
   const handleStatusChange = async (newStatus: OrderStatus) => {
     await storageService.updateStatus(order.id, newStatus);
-    // Subscription handles UI update
   };
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -125,7 +124,7 @@ export const OrderCard: React.FC<Props> = ({
           return;
       }
 
-      // Format VietQR: https://img.vietqr.io/image/[BANK_ID]-[ACCOUNT_NO]-[TEMPLATE].png?amount=[AMOUNT]&addInfo=[CONTENT]&accountName=[NAME]
+      // Format VietQR
       const desc = `TT Don ${order.id}`;
       const url = `https://img.vietqr.io/image/${bankConfig.bankId}-${bankConfig.accountNo}-${bankConfig.template}.png?amount=${order.totalPrice}&addInfo=${encodeURIComponent(desc)}&accountName=${encodeURIComponent(bankConfig.accountName)}`;
       
@@ -135,12 +134,9 @@ export const OrderCard: React.FC<Props> = ({
 
   const sendSMS = async () => {
     const msg = await generateDeliveryMessage(order);
-    // Detect OS for correct separator
     const ua = navigator.userAgent.toLowerCase();
     const isIOS = ua.indexOf('iphone') > -1 || ua.indexOf('ipad') > -1;
     const separator = isIOS ? '&' : '?';
-    
-    // Open native SMS app
     window.open(`sms:${order.customerPhone}${separator}body=${encodeURIComponent(msg)}`, '_self');
   };
 
@@ -221,7 +217,6 @@ export const OrderCard: React.FC<Props> = ({
   const config = statusConfig[order.status];
   const isCompleted = order.status === OrderStatus.DELIVERED || order.status === OrderStatus.CANCELLED;
   
-  // Payment Badge Component
   const PaymentBadge = () => {
     if (order.paymentMethod === PaymentMethod.CASH) {
         return <span className="text-[10px] font-bold text-gray-500 bg-gray-100 px-1 rounded border border-gray-200">TM</span>;
@@ -240,25 +235,21 @@ export const OrderCard: React.FC<Props> = ({
     );
   };
 
-  // --- COMPACT VIEW MODE ---
   if (isCompactMode) {
       return (
           <div className="group px-3 py-2 hover:bg-gray-50 transition-colors cursor-pointer" onClick={() => onEdit(order)}>
                {/* Desktop: Single Row */}
                <div className="hidden md:flex items-center gap-3 text-sm">
-                    {/* Status Dot */}
                     <div 
                         className={`w-2.5 h-2.5 rounded-full flex-shrink-0 cursor-pointer ${config.bg.replace('100','500')}`} 
                         title={`${config.label} ${order.lastUpdatedBy ? `- bởi ${order.lastUpdatedBy}` : ''}`}
                     ></div>
                     
-                    {/* Customer & Phone */}
                     <div className="w-40 flex flex-col justify-center" title={order.customerName}>
                         <div className="font-bold text-gray-800 truncate">{order.customerName}</div>
                         <a href={`tel:${order.customerPhone}`} onClick={e => e.stopPropagation()} className="text-[11px] text-eco-600 hover:text-eco-800 font-mono leading-tight hover:underline">{order.customerPhone}</a>
                     </div>
                     
-                    {/* Items & Address */}
                     <div className="flex-grow flex items-center text-gray-500 text-xs gap-2 overflow-hidden">
                         <span className="truncate max-w-[200px] text-gray-900">{order.address}</span>
                         <span className="text-gray-300">|</span>
@@ -271,15 +262,12 @@ export const OrderCard: React.FC<Props> = ({
                         </span>
                     </div>
 
-                    {/* Price & Payment */}
                     <div className="w-28 text-right flex flex-col items-end leading-tight">
                          <span className="font-bold text-gray-900">{new Intl.NumberFormat('vi-VN').format(order.totalPrice)}</span>
                          <div className="mt-0.5"><PaymentBadge /></div>
                     </div>
 
-                    {/* Simple Compact Actions */}
                     <div className="flex items-center gap-1 w-20 justify-end pl-2 border-l border-gray-100">
-                         {/* Status Advance Button */}
                          {!isCompleted && (
                              <button 
                                 onClick={nextStatus}
@@ -289,7 +277,6 @@ export const OrderCard: React.FC<Props> = ({
                                 <i className="fas fa-arrow-right text-[10px]"></i>
                              </button>
                          )}
-                         {/* Print Button */}
                          <button onClick={handlePrint} className="w-7 h-7 flex items-center justify-center text-gray-400 hover:text-gray-700 hover:bg-gray-200 rounded transition-colors" title="In phiếu">
                             <i className="fas fa-print text-[10px]"></i>
                          </button>
@@ -298,7 +285,6 @@ export const OrderCard: React.FC<Props> = ({
 
                {/* Mobile: 2 Rows Strictly */}
                <div className="md:hidden flex flex-col gap-0.5">
-                    {/* Row 1: Status Dot | Name/Phone | Price | Payment */}
                     <div className="flex justify-between items-center">
                         <div className="flex items-center gap-2 overflow-hidden">
                             <div className={`w-2 h-2 rounded-full flex-shrink-0 ${config.bg.replace('100','500')}`}></div>
@@ -319,7 +305,6 @@ export const OrderCard: React.FC<Props> = ({
                         </div>
                     </div>
                     
-                    {/* Row 2: Address/Items | Actions */}
                     <div className="flex justify-between items-center text-xs text-gray-500">
                         <div className="flex-grow truncate pr-2">
                              <span className="text-gray-900 mr-1">{order.items.length > 0 ? `${order.items[0].name} (x${order.items[0].quantity})` : 'Chưa có hàng'}</span>
@@ -344,7 +329,7 @@ export const OrderCard: React.FC<Props> = ({
       );
   }
 
-  // --- FULL CARD MODE (Existing) ---
+  // --- FULL CARD MODE ---
   return (
     <>
     <div 
@@ -353,7 +338,6 @@ export const OrderCard: React.FC<Props> = ({
         ${isSortMode ? 'border-dashed border-2 border-gray-300 hover:border-eco-400' : 'border-gray-100 hover:shadow-md'}
     `}>
       
-      {/* Visual Grip Handle for Sort Mode */}
       {isSortMode && (
           <div className="absolute left-0 top-0 bottom-0 w-8 bg-gray-50 flex items-center justify-center border-r border-gray-100 z-10 cursor-grab active:cursor-grabbing">
               <span className="text-sm font-bold text-gray-400 transform -rotate-90">#{index !== undefined ? index + 1 : ''}</span>
@@ -361,20 +345,17 @@ export const OrderCard: React.FC<Props> = ({
       )}
 
       <div className={`${isSortMode ? 'pl-8' : ''}`}>
-          {/* Header */}
           <div className="flex justify-between items-start p-4 pb-2">
              <div className="flex flex-col">
                  <div className="flex items-center flex-wrap gap-2 mb-1">
                     <span className="font-bold text-gray-900 text-base">{order.customerName}</span>
                     
-                    {/* Phone Number Badge - CLICKABLE */}
                     <div className="flex items-center gap-1">
                         <a href={`tel:${order.customerPhone}`} onClick={e => e.stopPropagation()} className="text-xs text-gray-600 hover:text-white hover:bg-gray-600 transition-colors font-mono bg-gray-50 px-1.5 py-0.5 rounded border border-gray-100 flex items-center cursor-pointer" title="Gọi điện">
                             <i className="fas fa-phone-alt text-[10px] mr-1"></i>
                             {order.customerPhone}
                         </a>
                         
-                        {/* NEW: Zalo & Maps Buttons */}
                         <a 
                             href={`https://zalo.me/${order.customerPhone}`} 
                             target="_blank" 
@@ -407,7 +388,6 @@ export const OrderCard: React.FC<Props> = ({
                         <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${config.bg} ${config.color}`}>
                            {config.label}
                         </span>
-                        {/* Compact User Indicator */}
                         {order.lastUpdatedBy && (
                             <span className="text-[10px] text-gray-400 flex items-center gap-0.5 bg-gray-50 px-1.5 py-0.5 rounded border border-gray-100" title={`Cập nhật bởi ${order.lastUpdatedBy}`}>
                                <i className="fas fa-user-edit text-[8px]"></i> {order.lastUpdatedBy}
@@ -420,7 +400,6 @@ export const OrderCard: React.FC<Props> = ({
                  </div>
              </div>
              
-             {/* Context Menu (Edit/Delete/Print) */}
              <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-20">
                 <button onClick={handlePrint} className="p-1.5 text-gray-400 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors" title="In phiếu"><i className="fas fa-print text-xs"></i></button>
                 <button onClick={(e) => { e.stopPropagation(); onEdit(order); }} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"><i className="fas fa-pen text-xs"></i></button>
@@ -428,7 +407,6 @@ export const OrderCard: React.FC<Props> = ({
              </div>
           </div>
 
-          {/* Content Body */}
           <div className="px-4 py-2">
             {order.notes && (
                 <div className="mb-3 px-3 py-2 bg-yellow-50/50 border border-yellow-100 rounded-lg text-xs text-yellow-800 flex gap-2">
@@ -437,7 +415,6 @@ export const OrderCard: React.FC<Props> = ({
                 </div>
             )}
 
-            {/* Items */}
             <div className="space-y-1 mb-4">
                {order.items.map((item, idx) => (
                  <div key={idx} className="flex justify-between items-center text-sm group/item">
@@ -451,15 +428,12 @@ export const OrderCard: React.FC<Props> = ({
                ))}
             </div>
 
-            {/* Price & Payment Footer */}
             <div className="flex items-center justify-between pt-3 border-t border-gray-50">
                <div className="flex items-center gap-2">
-                   {/* Price */}
                    <span className="text-lg font-black text-gray-900">
                      {new Intl.NumberFormat('vi-VN').format(order.totalPrice)}
                    </span>
                    
-                   {/* Payment Info & Quick Actions */}
                    {order.paymentMethod === PaymentMethod.CASH ? (
                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-gray-100 text-gray-500 border border-gray-200">Tiền mặt</span>
                    ) : order.paymentMethod === PaymentMethod.PAID ? (
@@ -472,16 +446,14 @@ export const OrderCard: React.FC<Props> = ({
                            >
                              {order.paymentVerified ? <i className="fas fa-check-circle"></i> : <i className="far fa-circle"></i>} CK
                            </button>
-                           {/* PERSISTENT QR BUTTON */}
-                           {!order.paymentVerified && (
-                               <button 
-                                   onClick={showVietQR}
-                                   className="w-6 h-6 flex items-center justify-center rounded-full bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white transition-colors"
-                                   title="Lấy mã QR"
-                               >
-                                   <i className="fas fa-qrcode text-[10px]"></i>
-                               </button>
-                           )}
+                           {/* PERSISTENT QR BUTTON - Always show if Transfer */}
+                           <button 
+                               onClick={showVietQR}
+                               className="w-6 h-6 flex items-center justify-center rounded-full bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white transition-colors"
+                               title="Lấy mã QR"
+                           >
+                               <i className="fas fa-qrcode text-[10px]"></i>
+                           </button>
                        </div>
                    )}
                </div>
@@ -495,7 +467,6 @@ export const OrderCard: React.FC<Props> = ({
             </div>
           </div>
 
-          {/* Action Bar (Shipper Tools) */}
           <div className="p-3 bg-gray-50/50 border-t border-gray-100 relative z-10" onClick={(e) => e.stopPropagation()}>
             {order.status === OrderStatus.PENDING && (
                 <button onClick={() => handleStatusChange(OrderStatus.PICKED_UP)} className="w-full py-2.5 rounded-xl bg-gray-900 text-white text-sm font-bold hover:bg-gray-800 transition-all shadow-lg shadow-gray-200">
@@ -511,7 +482,6 @@ export const OrderCard: React.FC<Props> = ({
             
             {order.status === OrderStatus.IN_TRANSIT && (
                 <div className="space-y-3">
-                    {/* Quick Payment Switch - Needed for operation but card badge is hidden */}
                     <div className="flex bg-white p-1 rounded-lg border border-gray-200 shadow-sm">
                         <button 
                             onClick={() => handlePaymentMethodChange(PaymentMethod.CASH)}
@@ -529,13 +499,11 @@ export const OrderCard: React.FC<Props> = ({
                     </div>
                     
                     <div className="flex gap-2">
-                        {/* Camera Button */}
                         <label className={`w-12 h-10 flex items-center justify-center rounded-xl border border-gray-200 cursor-pointer transition-colors ${uploading ? 'bg-gray-100' : 'bg-white hover:border-eco-500 hover:text-eco-500 text-gray-500'}`}>
                             <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handlePhotoUpload} disabled={uploading} />
                             {uploading ? <i className="fas fa-spinner fa-spin text-sm"></i> : <i className="fas fa-camera text-lg"></i>}
                         </label>
                         
-                        {/* Complete Button */}
                         <button onClick={() => handleStatusChange(OrderStatus.DELIVERED)} className="flex-1 py-2 rounded-xl bg-green-600 text-white text-sm font-bold hover:bg-green-700 transition-all shadow-lg shadow-green-100">
                             Hoàn Tất
                         </button>
@@ -567,7 +535,6 @@ export const OrderCard: React.FC<Props> = ({
           </div>
       </div>
       
-      {/* Lightbox Modal (Fixed Z-Index) */}
       {showImageModal && order.deliveryProof && (
           <div className="fixed inset-0 z-[9999] bg-black/95 flex items-center justify-center p-4 animate-fade-in" onClick={() => setShowImageModal(false)}>
               <div className="relative w-full h-full flex items-center justify-center">
@@ -587,7 +554,6 @@ export const OrderCard: React.FC<Props> = ({
           </div>
       )}
 
-      {/* QR Modal Overlay */}
       {showQR && (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-gray-900/80 backdrop-blur-sm p-4 animate-fade-in" onClick={() => setShowQR(false)}>
             <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-sm w-full text-center" onClick={e => e.stopPropagation()}>
