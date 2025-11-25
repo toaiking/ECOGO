@@ -573,6 +573,7 @@ export const OrderCard: React.FC<Props> = ({
             </div>
         </div>
       )}
+    </div>
     </>
   );
 };
