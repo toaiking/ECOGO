@@ -4,7 +4,7 @@ import toast from 'react-hot-toast';
 import { v4 as uuidv4 } from 'uuid';
 import { Order, OrderStatus, PaymentMethod, OrderItem, Product } from '../types';
 import { storageService } from '../services/storageService';
-import OrderCard from './OrderCard';
+import { OrderCard } from './OrderCard';
 import ConfirmModal from './ConfirmModal';
 
 type SortOption = 'NEWEST' | 'ROUTE' | 'STATUS';
@@ -98,7 +98,7 @@ const TrackingDashboard: React.FC = () => {
       return statusMatch && batchMatch && userMatch && searchMatch;
     });
 
-    if (sortBy === 'NEWEST') return result.sort((a, b) => b.createdAt - a.createdAt);
+    if (sortBy === 'NEWEST') return result.sort((a, b) => Number(b.createdAt) - Number(a.createdAt));
     if (sortBy === 'STATUS') return result.sort((a, b) => a.status.localeCompare(b.status));
     if (sortBy === 'ROUTE') return result.sort((a, b) => (Number(a.orderIndex) || 0) - (Number(b.orderIndex) || 0));
     

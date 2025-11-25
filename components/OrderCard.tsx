@@ -65,13 +65,14 @@ const compressImage = (file: File): Promise<string> => {
     });
 };
 
-const OrderCard: React.FC<Props> = ({ 
+export const OrderCard: React.FC<Props> = ({ 
   order, onUpdate, onDelete, onEdit, 
   isSortMode, index, isCompactMode
 }) => {
   const [uploading, setUploading] = useState(false);
   const [showQR, setShowQR] = useState(false);
   const [qrUrl, setQrUrl] = useState('');
+  const [showImageModal, setShowImageModal] = useState(false);
   
   const handleStatusChange = async (newStatus: OrderStatus) => {
     await storageService.updateStatus(order.id, newStatus);
@@ -344,6 +345,7 @@ const OrderCard: React.FC<Props> = ({
 
   // --- FULL CARD MODE (Existing) ---
   return (
+    <>
     <div 
       className={`
         group relative bg-white rounded-2xl border shadow-sm transition-all duration-300 overflow-hidden
@@ -576,9 +578,12 @@ const OrderCard: React.FC<Props> = ({
                 <div className="flex items-center justify-center pt-1 gap-2">
                     {order.deliveryProof ? (
                         <div className="flex items-center gap-2">
-                            <a href={order.deliveryProof} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-xs font-bold text-eco-600 hover:underline">
+                            <button 
+                                onClick={(e) => { e.stopPropagation(); setShowImageModal(true); }}
+                                className="flex items-center gap-2 text-xs font-bold text-eco-600 hover:underline"
+                            >
                                 <i className="fas fa-image"></i> Xem ảnh
-                            </a>
+                            </button>
                             <button onClick={handleDeletePhoto} className="w-5 h-5 flex items-center justify-center bg-gray-100 hover:bg-red-100 text-gray-400 hover:text-red-600 rounded-full transition-colors" title="Xóa ảnh">
                                 <i className="fas fa-trash-alt text-[10px]"></i>
                             </button>
@@ -592,8 +597,26 @@ const OrderCard: React.FC<Props> = ({
             )}
           </div>
       </div>
-    </div>
+      
+      {/* Lightbox Modal */}
+      {showImageModal && order.deliveryProof && (
+          <div className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4 animate-fade-in" onClick={() => setShowImageModal(false)}>
+              <div className="relative max-w-4xl max-h-screen w-full flex flex-col items-center justify-center">
+                  <img 
+                    src={order.deliveryProof} 
+                    alt="Proof" 
+                    className="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl" 
+                    onClick={e => e.stopPropagation()}
+                  />
+                  <button 
+                    onClick={() => setShowImageModal(false)}
+                    className="absolute -top-10 right-0 text-white text-xl p-2 hover:text-gray-300 transition-colors"
+                  >
+                      <i className="fas fa-times"></i> Đóng
+                  </button>
+              </div>
+          </div>
+      )}
+    </>
   );
 };
-
-export default OrderCard;
