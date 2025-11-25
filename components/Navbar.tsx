@@ -1,24 +1,32 @@
 
-import React, { useState, useEffect } from 'react';
-import { NavLink } from 'react-router-dom';
+import React, { useState, useEffect, useRef } from 'react';
+import { NavLink, useLocation } from 'react-router-dom';
 import { storageService } from '../services/storageService';
 import toast from 'react-hot-toast';
 import { db } from '../firebaseConfig';
 import ConfirmModal from './ConfirmModal';
 import SettingsModal from './SettingsModal';
 
+// Khai báo để TypeScript không báo lỗi
+declare const __APP_VERSION__: string;
+
 interface Props {
   onLogout: () => void;
 }
 
 const Navbar: React.FC<Props> = ({ onLogout }) => {
-  const currentUser = storageService.getCurrentUser();
   const [isSyncing, setIsSyncing] = useState(false);
   const [showConfirmSync, setShowConfirmSync] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [installPrompt, setInstallPrompt] = useState<any>(null);
   const [isIOS, setIsIOS] = useState(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  
+  const mobileMenuRef = useRef<HTMLDivElement>(null);
+  const location = useLocation();
   const isOnline = !!db;
+  
+  const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.0.1';
 
   useEffect(() => {
     // Check if iOS
@@ -26,7 +34,7 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
     const ios = /iphone|ipad|ipod/.test(userAgent);
     setIsIOS(ios);
 
-    // Listen for install prompt (Android/Desktop)
+    // Listen for install prompt
     const handleBeforeInstallPrompt = (e: any) => {
       e.preventDefault();
       setInstallPrompt(e);
@@ -34,40 +42,44 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
 
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
 
+    // Close mobile menu when clicking outside
+    const handleClickOutside = (event: MouseEvent) => {
+      if (mobileMenuRef.current && !mobileMenuRef.current.contains(event.target as Node)) {
+        setIsMobileMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+
     return () => {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      document.removeEventListener('mousedown', handleClickOutside);
     };
   }, []);
+
+  // Close menu when route changes
+  useEffect(() => {
+      setIsMobileMenuOpen(false);
+  }, [location]);
 
   const handleInstallClick = () => {
     if (isIOS) {
       toast((t) => (
         <div className="flex flex-col gap-2">
           <span className="font-bold">Cài đặt trên iPhone/iPad:</span>
-          <span className="text-sm">1. Bấm nút Chia sẻ <i className="fas fa-share-square mx-1"></i> (ở dưới cùng hoặc trên cùng trình duyệt).</span>
-          <span className="text-sm">2. Chọn "Thêm vào MH chính" (Add to Home Screen).</span>
+          <span className="text-sm">1. Bấm nút Chia sẻ <i className="fas fa-share-square mx-1"></i></span>
+          <span className="text-sm">2. Chọn "Thêm vào MH chính".</span>
           <button onClick={() => toast.dismiss(t.id)} className="bg-gray-200 px-2 py-1 rounded text-xs mt-1">Đóng</button>
         </div>
       ), { duration: 6000, icon: '📱' });
     } else if (installPrompt) {
       installPrompt.prompt();
       installPrompt.userChoice.then((choiceResult: any) => {
-        if (choiceResult.outcome === 'accepted') {
-          console.log('User accepted the A2HS prompt');
-        }
         setInstallPrompt(null);
       });
     } else {
-        toast.success("App đã được cài đặt hoặc trình duyệt không hỗ trợ.");
+        toast.success("App đã được cài đặt.");
     }
   };
-
-  const linkClass = (isActive: boolean) =>
-    `flex items-center px-4 py-2 rounded-md transition-colors duration-200 ${
-      isActive
-        ? 'bg-eco-700 text-white font-medium'
-        : 'text-eco-100 hover:bg-eco-600 hover:text-white'
-    }`;
 
   const handleSyncClick = () => {
     if (!isOnline) {
@@ -75,6 +87,7 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
       return;
     }
     setShowConfirmSync(true);
+    setIsMobileMenuOpen(false);
   };
 
   const confirmSync = async () => {
@@ -82,130 +95,173 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
     setIsSyncing(true);
     try {
         const count = await storageService.syncLocalToCloud();
-        toast.success(`Đã đồng bộ ${count} đơn hàng lên Cloud!`);
+        toast.success(`Đã đồng bộ ${count} đơn hàng!`);
     } catch (e) {
         console.error(e);
-        toast.error("Lỗi đồng bộ. Kiểm tra console.");
+        toast.error("Lỗi đồng bộ.");
     } finally {
         setIsSyncing(false);
     }
   };
 
+  // Styles
+  const desktopLinkClass = (isActive: boolean) =>
+    `flex items-center px-3 py-2 rounded-xl transition-all duration-300 ${
+      isActive
+        ? 'bg-white text-eco-800 font-bold shadow-lg transform scale-105'
+        : 'text-eco-100 hover:bg-eco-700/50 hover:text-white font-medium'
+    }`;
+
+  const mobileLinkClass = (isActive: boolean) => 
+    `p-3 rounded-xl transition-all flex items-center justify-center ${
+        isActive 
+        ? 'bg-white text-eco-800 shadow-md' 
+        : 'text-eco-100 hover:bg-eco-800'
+    }`;
+
+  const menuItemClass = "flex items-center gap-3 w-full px-4 py-3 text-left hover:bg-gray-50 text-gray-700 font-medium transition-colors rounded-lg";
+
   return (
     <>
-      <nav className="bg-eco-800 shadow-lg sticky top-0 z-50">
+      <nav className="bg-gradient-to-r from-eco-800 to-eco-900 shadow-xl sticky top-0 z-50 border-b border-eco-700 select-none">
         <div className="container mx-auto px-4">
           <div className="flex justify-between items-center h-16">
-            <div className="flex items-center space-x-2">
-              <div className="w-8 h-8 bg-white rounded-full flex items-center justify-center text-eco-700 font-bold text-xl">
+            
+            {/* Logo Area */}
+            <div className="flex items-center space-x-3">
+              <NavLink to="/dashboard" className="w-9 h-9 bg-white rounded-xl shadow-md flex items-center justify-center text-eco-700 font-bold text-xl hover:rotate-12 transition-transform">
                 <i className="fas fa-leaf"></i>
-              </div>
+              </NavLink>
               <div className="flex flex-col">
-                 <span className="text-white text-lg font-bold leading-tight">EcoGo</span>
-                 <div className="flex items-center gap-1">
-                     <span className={`w-2 h-2 rounded-full ${isOnline ? 'bg-green-400' : 'bg-gray-400'}`}></span>
-                     <span className="text-eco-200 text-xs">{currentUser} | {isOnline ? 'Cloud' : 'Local'}</span>
+                 <span className="text-white text-lg font-black leading-tight">EcoGo</span>
+                 <div className="flex items-center gap-1.5 opacity-90">
+                     <span className={`w-2 h-2 rounded-full ${isOnline ? 'bg-green-400 shadow-[0_0_8px_rgba(74,222,128,0.6)]' : 'bg-gray-400'}`}></span>
+                     <span className="text-eco-200 text-[10px] font-medium tracking-wide">{isOnline ? 'Cloud' : 'Local'} v{appVersion}</span>
                  </div>
               </div>
             </div>
             
-            <div className="flex items-center space-x-2">
-              <div className="hidden md:flex space-x-1">
-                <NavLink
-                  to="/dashboard"
-                  className={({ isActive }) => linkClass(isActive)}
-                >
-                  <i className="fas fa-home mr-2"></i>
-                  <span>Tổng Quan</span>
+            {/* DESKTOP MENU (Hidden on Mobile) */}
+            <div className="hidden md:flex items-center space-x-1">
+                <NavLink to="/dashboard" className={({ isActive }) => desktopLinkClass(isActive)}>
+                  <i className="fas fa-chart-pie mr-2 text-sm"></i> Tổng Quan
                 </NavLink>
-                <NavLink
-                  to="/order"
-                  className={({ isActive }) => linkClass(isActive)}
-                >
-                  <i className="fas fa-plus-circle mr-2"></i>
-                  <span>Tạo Đơn</span>
+                <NavLink to="/order" className={({ isActive }) => desktopLinkClass(isActive)}>
+                  <i className="fas fa-plus-circle mr-2 text-sm"></i> Tạo Đơn
                 </NavLink>
-                <NavLink
-                  to="/tracking"
-                  className={({ isActive }) => linkClass(isActive)}
-                >
-                  <i className="fas fa-shipping-fast mr-2"></i>
-                  <span>Theo Dõi</span>
+                <NavLink to="/tracking" className={({ isActive }) => desktopLinkClass(isActive)}>
+                  <i className="fas fa-shipping-fast mr-2 text-sm"></i> Theo Dõi
                 </NavLink>
-                <NavLink
-                  to="/inventory"
-                  className={({ isActive }) => linkClass(isActive)}
-                >
-                  <i className="fas fa-warehouse mr-2"></i>
-                  <span>Kho Hàng</span>
+                <NavLink to="/inventory" className={({ isActive }) => desktopLinkClass(isActive)}>
+                  <i className="fas fa-warehouse mr-2 text-sm"></i> Kho
                 </NavLink>
-                <NavLink
-                  to="/customers"
-                  className={({ isActive }) => linkClass(isActive)}
-                >
-                  <i className="fas fa-users mr-2"></i>
-                  <span>Khách Hàng</span>
+                <NavLink to="/customers" className={({ isActive }) => desktopLinkClass(isActive)}>
+                  <i className="fas fa-address-book mr-2 text-sm"></i> Khách
                 </NavLink>
-              </div>
 
-              {/* Mobile Menu Icon (Simplified for this view) */}
-              <div className="md:hidden flex space-x-4 pr-2 text-eco-100">
-                  <NavLink to="/dashboard"><i className="fas fa-home text-xl"></i></NavLink>
-                  <NavLink to="/order"><i className="fas fa-plus-circle text-xl"></i></NavLink>
-                  <NavLink to="/tracking"><i className="fas fa-shipping-fast text-xl"></i></NavLink>
-                  <NavLink to="/customers"><i className="fas fa-users text-xl"></i></NavLink>
-              </div>
-              
-              {/* Install App Button */}
-              {(installPrompt || isIOS) && (
-                 <button 
-                    onClick={handleInstallClick}
-                    className="ml-2 text-white bg-eco-600 hover:bg-eco-500 px-3 py-1 rounded text-xs flex items-center gap-1 transition-colors border border-eco-500 animate-pulse"
-                    title="Cài đặt ứng dụng"
-                 >
-                    <i className="fas fa-download"></i>
-                    <span className="hidden sm:inline">Cài App</span>
-                 </button>
-              )}
+                <div className="w-px h-6 bg-eco-700 mx-2"></div>
 
-              {isOnline && (
-                  <button 
-                      onClick={handleSyncClick}
-                      disabled={isSyncing}
-                      className="ml-2 text-eco-200 hover:text-white bg-eco-900/50 hover:bg-eco-700 px-3 py-1 rounded text-xs flex items-center gap-1 transition-colors"
-                      title="Đồng bộ dữ liệu cũ lên Cloud"
-                  >
+                {isOnline && (
+                  <button onClick={handleSyncClick} className="p-2 text-eco-200 hover:text-white" title="Đồng bộ">
                       <i className={`fas fa-cloud-upload-alt ${isSyncing ? 'animate-bounce' : ''}`}></i>
                   </button>
-              )}
-              
-              <button
-                onClick={() => setShowSettings(true)}
-                className="ml-2 text-eco-200 hover:text-white transition-colors p-2"
-                title="Cài đặt"
-              >
-                <i className="fas fa-cog"></i>
-              </button>
-              
-              <button 
-                onClick={onLogout}
-                className="ml-2 text-eco-200 hover:text-white transition-colors p-2"
-                title="Đăng xuất"
-              >
-                <i className="fas fa-sign-out-alt"></i>
-              </button>
+                )}
+                <button onClick={() => setShowSettings(true)} className="p-2 text-eco-200 hover:text-white" title="Cài đặt">
+                    <i className="fas fa-cog"></i>
+                </button>
+                <button onClick={onLogout} className="p-2 text-eco-200 hover:text-red-300" title="Đăng xuất">
+                    <i className="fas fa-sign-out-alt"></i>
+                </button>
+            </div>
+
+            {/* MOBILE ACTION BAR */}
+            <div className="md:hidden flex items-center gap-3">
+                {/* Priority Actions */}
+                <NavLink to="/order" className={({ isActive }) => mobileLinkClass(isActive)}>
+                    <i className="fas fa-plus-circle text-xl"></i>
+                </NavLink>
+                <NavLink to="/tracking" className={({ isActive }) => mobileLinkClass(isActive)}>
+                    <i className="fas fa-shipping-fast text-xl"></i>
+                </NavLink>
+
+                {/* More / Menu Button */}
+                <button 
+                    onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+                    className={`p-3 rounded-xl transition-all ${isMobileMenuOpen ? 'bg-eco-700 text-white shadow-inner' : 'text-eco-100'}`}
+                >
+                    <i className="fas fa-bars text-xl"></i>
+                </button>
             </div>
           </div>
         </div>
+
+        {/* MOBILE DROPDOWN MENU */}
+        {isMobileMenuOpen && (
+            <div 
+                ref={mobileMenuRef}
+                className="absolute top-16 right-2 w-64 bg-white rounded-2xl shadow-2xl z-[100] border border-gray-100 overflow-hidden animate-fade-in-down origin-top-right md:hidden"
+            >
+                {/* User Info Header */}
+                <div className="bg-gray-50 p-4 border-b border-gray-100 flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-eco-100 flex items-center justify-center text-eco-600">
+                        <i className="fas fa-user"></i>
+                    </div>
+                    <div>
+                        <div className="font-bold text-gray-800">{storageService.getCurrentUser()}</div>
+                        <div className="text-xs text-green-600 font-medium">Đang hoạt động</div>
+                    </div>
+                </div>
+
+                <div className="p-2 space-y-1 max-h-[70vh] overflow-y-auto">
+                    <NavLink to="/dashboard" className={({isActive}) => `${menuItemClass} ${isActive ? 'bg-eco-50 text-eco-700' : ''}`}>
+                        <i className="fas fa-chart-pie w-6 text-center"></i> Tổng Quan
+                    </NavLink>
+                    
+                    <NavLink to="/inventory" className={({isActive}) => `${menuItemClass} ${isActive ? 'bg-eco-50 text-eco-700' : ''}`}>
+                        <i className="fas fa-warehouse w-6 text-center"></i> Kho Hàng
+                    </NavLink>
+                    
+                    <NavLink to="/customers" className={({isActive}) => `${menuItemClass} ${isActive ? 'bg-eco-50 text-eco-700' : ''}`}>
+                        <i className="fas fa-address-book w-6 text-center"></i> Khách Hàng
+                    </NavLink>
+
+                    <hr className="my-2 border-gray-100" />
+
+                    {isOnline && (
+                        <button onClick={handleSyncClick} className={menuItemClass}>
+                            <i className={`fas fa-cloud-upload-alt w-6 text-center ${isSyncing ? 'text-blue-500' : 'text-gray-400'}`}></i> 
+                            <span>Đồng bộ Cloud</span>
+                            {isSyncing && <span className="text-xs ml-auto text-blue-500 animate-pulse">Đang chạy...</span>}
+                        </button>
+                    )}
+
+                    <button onClick={() => { setShowSettings(true); setIsMobileMenuOpen(false); }} className={menuItemClass}>
+                        <i className="fas fa-cog w-6 text-center text-gray-400"></i> Cài đặt & Ngân hàng
+                    </button>
+
+                    {(installPrompt || isIOS) && (
+                        <button onClick={handleInstallClick} className={menuItemClass}>
+                            <i className="fas fa-download w-6 text-center text-gray-400"></i> Cài đặt App
+                        </button>
+                    )}
+
+                    <hr className="my-2 border-gray-100" />
+
+                    <button onClick={onLogout} className={`${menuItemClass} text-red-600 hover:bg-red-50`}>
+                        <i className="fas fa-sign-out-alt w-6 text-center"></i> Đăng xuất
+                    </button>
+                </div>
+            </div>
+        )}
       </nav>
 
       <ConfirmModal 
         isOpen={showConfirmSync}
         title="Đồng bộ dữ liệu"
-        message="Bạn có muốn đẩy toàn bộ dữ liệu cũ (từ máy này) lên Cloud không? Lưu ý: Dữ liệu trùng ID trên Cloud sẽ bị ghi đè."
+        message="Dữ liệu từ máy này sẽ được đẩy lên Cloud. Nếu trùng ID, dữ liệu Cloud sẽ bị ghi đè."
         onConfirm={confirmSync}
         onCancel={() => setShowConfirmSync(false)}
-        confirmLabel="Bắt đầu đồng bộ"
+        confirmLabel="Đồng ý"
         isDanger={false}
       />
       
