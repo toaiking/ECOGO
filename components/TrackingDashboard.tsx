@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { v4 as uuidv4 } from 'uuid';
@@ -21,7 +20,7 @@ const TrackingDashboard: React.FC = () => {
   const [editingOrder, setEditingOrder] = useState<Order | null>(null);
   const [activeEditProductRow, setActiveEditProductRow] = useState<number | null>(null); 
   const [showReport, setShowReport] = useState(false);
-  const [isToolbarExpanded, setIsToolbarExpanded] = useState(true);
+  const [isToolbarExpanded, setIsToolbarExpanded] = useState(false);
 
   // Delete Modal State
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -60,7 +59,7 @@ const TrackingDashboard: React.FC = () => {
       return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [activeEditProductRow]);
 
-  // SMART BATCHES: Only show the top 50 active batches to prevent clutter
+  // SMART BATCHES
   const batches = useMemo(() => {
     const batchActivity = new Map<string, number>();
     orders.forEach(o => {
@@ -71,9 +70,9 @@ const TrackingDashboard: React.FC = () => {
     });
 
     return Array.from(batchActivity.entries())
-        .sort((a, b) => b[1] - a[1]) // Sort desc by timestamp
+        .sort((a, b) => b[1] - a[1])
         .map(entry => entry[0])
-        .slice(0, 50); // Limit to 50
+        .slice(0, 50);
   }, [orders]);
 
   // USERS LIST for Filter
@@ -211,10 +210,9 @@ const TrackingDashboard: React.FC = () => {
       newItems[index] = { ...newItems[index], [field]: value };
       
       if (field === 'name') {
-           newItems[index].productId = undefined; // Reset ID on manual name change
+           newItems[index].productId = undefined; 
       }
 
-      // Auto calc total price when item changes
       const newTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0);
       setEditingOrder({ ...editingOrder, items: newItems, totalPrice: newTotal });
   };
@@ -251,17 +249,13 @@ const TrackingDashboard: React.FC = () => {
       setEditingOrder({ ...editingOrder, items: newItems, totalPrice: newTotal });
   };
 
-  // --- Sorting Logic ---
   const saveReorderedList = async (newSortedList: Order[]) => {
       const reindexedList = newSortedList.map((o, idx) => ({ ...o, orderIndex: idx }));
-      
-      // Optimistic update
       const newMainOrders = orders.map(o => {
         const found = reindexedList.find(ro => ro.id === o.id);
         return found ? found : o;
       });
       setOrders(newMainOrders);
-      
       await storageService.saveOrdersList(reindexedList);
   };
 
@@ -289,7 +283,6 @@ const TrackingDashboard: React.FC = () => {
     dragOverItem.current = null;
   };
 
-  // --- Utils ---
   const copyRouteToClipboard = () => {
       const addressList = filteredOrders
         .filter(o => o.status !== OrderStatus.CANCELLED && o.status !== OrderStatus.DELIVERED)

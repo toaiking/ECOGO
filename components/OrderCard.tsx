@@ -102,10 +102,11 @@ export const OrderCard: React.FC<Props> = ({
       }
   };
 
-  const handlePaymentMethodChange = async (method: PaymentMethod) => {
+  const handleFinishOrder = async (method: PaymentMethod) => {
       const updated = { ...order, paymentMethod: method };
       await storageService.updateOrderDetails(updated);
-      toast.success('Đã cập nhật thanh toán');
+      await storageService.updateStatus(order.id, OrderStatus.DELIVERED);
+      toast.success(`Đã hoàn tất (${method === PaymentMethod.CASH ? 'Tiền mặt' : 'Chuyển khoản'})`);
   };
 
   const togglePaymentVerification = async () => {
@@ -127,7 +128,6 @@ export const OrderCard: React.FC<Props> = ({
           return;
       }
 
-      // Format VietQR
       const desc = `TT Don ${order.id}`;
       const url = `https://img.vietqr.io/image/${bankConfig.bankId}-${bankConfig.accountNo}-${bankConfig.template}.png?amount=${order.totalPrice}&addInfo=${encodeURIComponent(desc)}&accountName=${encodeURIComponent(bankConfig.accountName)}`;
       
@@ -149,9 +149,8 @@ export const OrderCard: React.FC<Props> = ({
                   files: [file]
               });
           } else {
-              // Fallback
               await navigator.clipboard.writeText(qrUrl);
-              toast.success("Đã copy link ảnh QR (Thiết bị không hỗ trợ chia sẻ file)");
+              toast.success("Đã copy link ảnh QR");
           }
       } catch (e) {
           console.error(e);
@@ -160,12 +159,10 @@ export const OrderCard: React.FC<Props> = ({
   };
 
   const sendSMS = async () => {
-    // Generate text instantly
     const msg = await generateDeliveryMessage(order);
     const ua = navigator.userAgent.toLowerCase();
     const isIOS = ua.indexOf('iphone') > -1 || ua.indexOf('ipad') > -1;
     const separator = isIOS ? '&' : '?';
-    // Open native SMS app
     window.open(`sms:${order.customerPhone}${separator}body=${encodeURIComponent(msg)}`, '_self');
   };
 
@@ -240,34 +237,31 @@ export const OrderCard: React.FC<Props> = ({
       e.stopPropagation();
       if(order.status === OrderStatus.PENDING) handleStatusChange(OrderStatus.PICKED_UP);
       else if(order.status === OrderStatus.PICKED_UP) handleStatusChange(OrderStatus.IN_TRANSIT);
-      else if(order.status === OrderStatus.IN_TRANSIT) handleStatusChange(OrderStatus.DELIVERED);
   }
 
   const config = statusConfig[order.status];
   const isCompleted = order.status === OrderStatus.DELIVERED || order.status === OrderStatus.CANCELLED;
   
   const PaymentBadge = () => {
-    if (order.paymentMethod === PaymentMethod.CASH) {
-        return <span className="text-[10px] font-bold text-gray-500 bg-gray-100 px-1 rounded border border-gray-200">TM</span>;
-    }
-    
     return (
        <div className="flex items-center gap-1">
-            {order.paymentMethod === PaymentMethod.PAID ? (
-                <span className="text-[10px] font-bold text-green-700 bg-green-100 px-1 rounded border border-green-200">Đã TT</span>
+            {order.paymentMethod === PaymentMethod.CASH ? (
+                <span className="text-[10px] font-bold text-gray-500 bg-gray-100 px-2 py-1 rounded border border-gray-200 whitespace-nowrap">Tiền mặt</span>
+            ) : order.paymentMethod === PaymentMethod.PAID ? (
+                <span className="text-[10px] font-bold text-green-700 bg-green-100 px-2 py-1 rounded border border-green-200 whitespace-nowrap">Đã thanh toán</span>
             ) : (
                 <span 
-                    className={`text-[10px] font-bold px-1 rounded border cursor-pointer ${order.paymentVerified ? 'text-green-700 bg-green-100 border-green-200' : 'text-blue-600 bg-blue-50 border-blue-200'}`}
+                    className={`text-[10px] font-bold px-2 py-1 rounded border cursor-pointer whitespace-nowrap ${order.paymentVerified ? 'text-green-700 bg-green-100 border-green-200' : 'text-blue-600 bg-blue-50 border-blue-200'}`}
                     onClick={(e) => { e.stopPropagation(); togglePaymentVerification(); }}
                     title={order.paymentVerified ? "Đã nhận tiền" : "Chờ xác nhận"}
                 >
-                {order.paymentVerified ? 'CK-OK' : 'CK?'}
+                {order.paymentVerified ? 'Đã nhận tiền' : 'Chờ CK'}
                 </span>
             )}
             
             <button 
                 onClick={showVietQR}
-                className="w-5 h-5 flex items-center justify-center rounded bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white transition-colors border border-blue-100"
+                className="w-6 h-6 flex-shrink-0 flex items-center justify-center rounded bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white transition-colors border border-blue-100 shadow-sm"
                 title="Mã QR"
             >
                 <i className="fas fa-qrcode text-[10px]"></i>
@@ -276,25 +270,25 @@ export const OrderCard: React.FC<Props> = ({
     );
   };
 
+  // --- COMPACT MODE (3-Line Layout) ---
   if (isCompactMode) {
       return (
-          <div className="group px-3 py-2 hover:bg-gray-50 transition-colors cursor-pointer" onClick={() => onEdit(order)}>
+          <div className="group px-4 py-3 hover:bg-gray-50 transition-colors cursor-pointer border-b border-gray-100 last:border-0" onClick={() => onEdit(order)}>
                {/* Desktop: Single Row */}
-               <div className="hidden md:flex items-center gap-3 text-sm">
+               <div className="hidden md:flex items-center gap-4 text-sm">
                     <div 
-                        className={`w-2.5 h-2.5 rounded-full flex-shrink-0 cursor-pointer ${config.bg.replace('100','500')}`} 
+                        className={`w-3 h-3 rounded-full flex-shrink-0 cursor-pointer ${config.bg.replace('100','500')}`} 
                         title={`${config.label} ${order.lastUpdatedBy ? `- bởi ${order.lastUpdatedBy}` : ''}`}
                     ></div>
                     
-                    <div className="w-40 flex flex-col justify-center" title={order.customerName}>
+                    <div className="w-48 flex flex-col justify-center" title={order.customerName}>
                         <div className="font-bold text-gray-800 truncate">{order.customerName}</div>
-                        <a href={`tel:${order.customerPhone}`} onClick={e => e.stopPropagation()} className="text-[11px] text-eco-600 hover:text-eco-800 font-mono leading-tight hover:underline">{order.customerPhone}</a>
+                        <a href={`tel:${order.customerPhone}`} onClick={e => e.stopPropagation()} className="text-xs text-eco-600 hover:text-eco-800 font-mono hover:underline">{order.customerPhone}</a>
                     </div>
                     
-                    <div className="flex-grow flex items-center text-gray-500 text-xs gap-2 overflow-hidden">
-                        <span className="truncate max-w-[200px] text-gray-900">{order.address}</span>
-                        <span className="text-gray-300">|</span>
-                        <span className="italic truncate text-gray-600">
+                    <div className="flex-grow flex flex-col justify-center text-xs overflow-hidden">
+                        <span className="text-gray-800 truncate font-medium">{order.address}</span>
+                        <span className="text-gray-500 italic truncate">
                             {order.items.map((i, idx) => (
                                 <span key={idx}>
                                     {i.name} <b className="text-gray-900">x{i.quantity}</b>{idx < order.items.length - 1 ? ', ' : ''}
@@ -303,64 +297,78 @@ export const OrderCard: React.FC<Props> = ({
                         </span>
                     </div>
 
-                    <div className="w-28 text-right flex flex-col items-end leading-tight">
-                         <span className="font-bold text-gray-900">{new Intl.NumberFormat('vi-VN').format(order.totalPrice)}</span>
-                         <div className="mt-0.5"><PaymentBadge /></div>
+                    <div className="w-36 text-right flex flex-col items-end">
+                         <span className="font-bold text-gray-900 text-base">{new Intl.NumberFormat('vi-VN').format(order.totalPrice)}</span>
+                         <div className="mt-1"><PaymentBadge /></div>
                     </div>
 
-                    <div className="flex items-center gap-1 w-20 justify-end pl-2 border-l border-gray-100">
+                    <div className="flex items-center gap-2 w-auto justify-end pl-4 border-l border-gray-100">
+                         <button onClick={(e) => { e.stopPropagation(); sendSMS(); }} className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="SMS">
+                            <i className="fas fa-comment-dots"></i>
+                         </button>
                          {!isCompleted && (
                              <button 
                                 onClick={nextStatus}
-                                className="w-7 h-7 flex items-center justify-center rounded bg-gray-100 text-gray-600 hover:bg-black hover:text-white transition-colors"
-                                title="Chuyển trạng thái tiếp theo"
+                                className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 text-gray-600 hover:bg-black hover:text-white transition-colors"
+                                title="Chuyển trạng thái"
                              >
-                                <i className="fas fa-arrow-right text-[10px]"></i>
+                                <i className="fas fa-arrow-right"></i>
                              </button>
                          )}
-                         <button onClick={handlePrint} className="w-7 h-7 flex items-center justify-center text-gray-400 hover:text-gray-700 hover:bg-gray-200 rounded transition-colors" title="In phiếu">
-                            <i className="fas fa-print text-[10px]"></i>
+                         <button onClick={handlePrint} className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-700 hover:bg-gray-200 rounded-lg transition-colors" title="In phiếu">
+                            <i className="fas fa-print"></i>
                          </button>
                     </div>
                </div>
 
-               {/* Mobile: 2 Rows Strictly */}
-               <div className="md:hidden flex flex-col gap-0.5">
-                    <div className="flex justify-between items-center">
+               {/* Mobile: 3-Line Layout */}
+               <div className="md:hidden flex flex-col gap-2 relative">
+                    {/* Row 1: Name + Tools + Price */}
+                    <div className="flex justify-between items-start">
                         <div className="flex items-center gap-2 overflow-hidden">
-                            <div className={`w-2 h-2 rounded-full flex-shrink-0 ${config.bg.replace('100','500')}`}></div>
-                            <div className="flex flex-col min-w-0">
-                                <span className="font-bold text-gray-800 text-sm truncate">{order.customerName}</span>
-                                <a href={`tel:${order.customerPhone}`} onClick={e => e.stopPropagation()} className="text-[10px] text-eco-600 font-mono leading-none hover:underline">{order.customerPhone}</a>
+                            <span className="font-black text-gray-900 text-sm truncate max-w-[140px]">{order.customerName}</span>
+                            {/* Grouped Call & SMS */}
+                            <div className="flex bg-gray-100 rounded-lg p-0.5 items-center h-7 shrink-0 border border-gray-200">
+                                <a href={`tel:${order.customerPhone}`} onClick={e => e.stopPropagation()} className="w-8 flex items-center justify-center text-eco-700 active:bg-white rounded-md transition-all h-full">
+                                    <i className="fas fa-phone text-xs"></i>
+                                </a>
+                                <div className="w-px h-3 bg-gray-300"></div>
+                                <button onClick={(e) => { e.stopPropagation(); sendSMS(); }} className="w-8 flex items-center justify-center text-blue-600 active:bg-white rounded-md transition-all h-full">
+                                    <i className="fas fa-comment-dots text-xs"></i>
+                                </button>
                             </div>
-                            
-                            {order.lastUpdatedBy && (
-                                <span className="text-[9px] text-gray-400 bg-gray-100 px-1 rounded flex items-center gap-0.5 ml-1 flex-shrink-0">
-                                    <i className="fas fa-user-edit text-[8px]"></i> {order.lastUpdatedBy}
-                                </span>
-                            )}
                         </div>
-                        <div className="flex items-center gap-1.5 flex-shrink-0">
-                             <span className="font-bold text-gray-900 text-sm">{new Intl.NumberFormat('vi-VN').format(order.totalPrice)}</span>
-                             <PaymentBadge />
+                        <div className="text-right">
+                            <span className="font-black text-gray-900 text-base block leading-none">
+                                {new Intl.NumberFormat('vi-VN').format(order.totalPrice)}<small className="text-[10px] text-gray-500">đ</small>
+                            </span>
                         </div>
                     </div>
-                    
-                    <div className="flex justify-between items-center text-xs text-gray-500">
-                        <div className="flex-grow truncate pr-2">
-                             <span className="text-gray-900 mr-1">{order.items.length > 0 ? `${order.items[0].name} (x${order.items[0].quantity})` : 'Chưa có hàng'}</span>
-                             {order.items.length > 1 && <span className="text-gray-400">+{order.items.length - 1} món</span>}
-                             <span className="mx-1 text-gray-300">-</span>
-                             <span className="italic">{order.address}</span>
+
+                    {/* Row 2: Address */}
+                    <div className="text-xs text-gray-500 truncate flex items-center gap-1.5">
+                        <i className="fas fa-map-marker-alt text-gray-400 text-[10px]"></i>
+                        {order.address}
+                    </div>
+
+                    {/* Row 3: Items + Payment/Action */}
+                    <div className="flex justify-between items-end pt-1">
+                        <div className="flex-grow text-xs text-gray-600 italic truncate pr-2 leading-relaxed">
+                           {order.items.map(i => `${i.name} (x${i.quantity})`).join(', ')}
                         </div>
                         
+                        {/* Integrated Payment Badge with QR (Small) */}
                         <div className="flex items-center gap-2 flex-shrink-0">
+                            <div onClick={e => e.stopPropagation()} className="flex items-center">
+                                <PaymentBadge />
+                            </div>
+
                             {!isCompleted && (
                                 <button 
                                     onClick={nextStatus}
-                                    className={`px-2 py-0.5 rounded text-[10px] font-bold text-white bg-gray-800`}
+                                    className="w-8 h-8 flex items-center justify-center bg-gray-900 text-white rounded-lg shadow-md active:scale-95 ml-1"
                                 >
-                                    {config.label} <i className="fas fa-chevron-right ml-0.5 text-[8px]"></i>
+                                    <i className="fas fa-arrow-right text-xs"></i>
                                 </button>
                             )}
                         </div>
@@ -375,8 +383,8 @@ export const OrderCard: React.FC<Props> = ({
     <>
     <div 
       className={`
-        group relative bg-white rounded-2xl border shadow-sm transition-all duration-300 overflow-hidden
-        ${isSortMode ? 'border-dashed border-2 border-gray-300 hover:border-eco-400' : 'border-gray-100 hover:shadow-md'}
+        group relative bg-white rounded-2xl border shadow-sm transition-all duration-300 overflow-hidden flex flex-col
+        ${isSortMode ? 'border-dashed border-2 border-gray-300 hover:border-eco-400' : 'border-gray-100 hover:shadow-lg'}
     `}>
       
       {isSortMode && (
@@ -385,171 +393,172 @@ export const OrderCard: React.FC<Props> = ({
           </div>
       )}
 
-      <div className={`${isSortMode ? 'pl-8' : ''}`}>
-          <div className="flex justify-between items-start p-4 pb-2">
-             <div className="flex flex-col">
-                 <div className="flex items-center flex-wrap gap-2 mb-1">
-                    <span className="font-bold text-gray-900 text-base">{order.customerName}</span>
-                    
-                    <div className="flex items-center gap-1">
-                        <a href={`tel:${order.customerPhone}`} onClick={e => e.stopPropagation()} className="text-xs text-gray-600 hover:text-white hover:bg-gray-600 transition-colors font-mono bg-gray-50 px-1.5 py-0.5 rounded border border-gray-100 flex items-center cursor-pointer" title="Gọi điện">
-                            <i className="fas fa-phone-alt text-[10px] mr-1"></i>
-                            {order.customerPhone}
-                        </a>
-                        
-                        <a 
-                            href={`https://zalo.me/${order.customerPhone}`} 
-                            target="_blank" 
-                            rel="noreferrer"
-                            onClick={e => e.stopPropagation()} 
-                            className="w-6 h-6 flex items-center justify-center rounded bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white border border-blue-100 transition-colors"
-                            title="Chat Zalo"
-                        >
-                            <span className="font-black text-[9px]">Z</span>
-                        </a>
-                        
-                        <a 
-                            href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(order.address)}`} 
-                            target="_blank" 
-                            rel="noreferrer"
-                            onClick={e => e.stopPropagation()} 
-                            className="w-6 h-6 flex items-center justify-center rounded bg-red-50 text-red-600 hover:bg-red-600 hover:text-white border border-red-100 transition-colors"
-                            title="Chỉ đường Google Maps"
-                        >
-                            <i className="fas fa-map-marker-alt text-[10px]"></i>
-                        </a>
-                    </div>
-
-                    {order.batchId && (
-                        <span className="text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded border border-gray-200">
-                            {order.batchId}
-                        </span>
-                    )}
-                    <div className="flex items-center gap-1">
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${config.bg} ${config.color}`}>
-                           {config.label}
-                        </span>
-                        {order.lastUpdatedBy && (
-                            <span className="text-[10px] text-gray-400 flex items-center gap-0.5 bg-gray-50 px-1.5 py-0.5 rounded border border-gray-100" title={`Cập nhật bởi ${order.lastUpdatedBy}`}>
-                               <i className="fas fa-user-edit text-[8px]"></i> {order.lastUpdatedBy}
-                            </span>
-                        )}
-                    </div>
+      <div className={`flex-grow flex flex-col ${isSortMode ? 'pl-8' : ''}`}>
+          
+          {/* HEADER: Split Left (Customer) / Right (Finance) */}
+          <div className="p-4 pb-3 flex justify-between items-start gap-4">
+             {/* Left: Customer Info */}
+             <div className="flex-grow min-w-0">
+                 <div className="flex items-center gap-2 mb-1">
+                    <h3 className="font-black text-gray-900 text-lg truncate" title={order.customerName}>
+                        {order.customerName}
+                    </h3>
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider whitespace-nowrap ${config.bg} ${config.color}`}>
+                        {config.label}
+                    </span>
                  </div>
-                 <div className="flex items-start gap-1.5 text-gray-500 text-sm">
-                    <span className="line-clamp-2 leading-tight">{order.address}</span>
-                 </div>
+                 
+                 <a href={`tel:${order.customerPhone}`} onClick={e => e.stopPropagation()} className="inline-flex items-center text-sm font-bold text-gray-600 hover:text-eco-700 transition-colors mb-2">
+                    <i className="fas fa-phone-alt text-xs mr-1.5 opacity-60"></i>
+                    {order.customerPhone}
+                 </a>
              </div>
-             
-             <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-20">
-                <button onClick={handlePrint} className="p-1.5 text-gray-400 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors" title="In phiếu"><i className="fas fa-print text-xs"></i></button>
-                <button onClick={(e) => { e.stopPropagation(); onEdit(order); }} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"><i className="fas fa-pen text-xs"></i></button>
-                <button onClick={(e) => { e.stopPropagation(); onDelete(order.id); }} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"><i className="fas fa-trash text-xs"></i></button>
+
+             {/* Right: Price & Payment Status */}
+             <div className="text-right flex flex-col items-end flex-shrink-0">
+                 <div className="text-xl font-black text-eco-700 leading-none mb-1.5">
+                    {new Intl.NumberFormat('vi-VN').format(order.totalPrice)}
+                    <span className="text-xs text-eco-500 ml-0.5 align-top">đ</span>
+                 </div>
+                 <div onClick={e => e.stopPropagation()}>
+                    <PaymentBadge />
+                 </div>
              </div>
           </div>
 
-          <div className="px-4 py-2">
+          {/* SUB-HEADER: Address & Tools */}
+          <div className="px-4 flex justify-between items-center gap-3 mb-3">
+              <div className="text-xs text-gray-500 truncate flex items-center gap-1.5 flex-grow">
+                  <i className="fas fa-map-marker-alt text-gray-300"></i>
+                  <span className="truncate">{order.address}</span>
+              </div>
+
+              <div className="flex gap-1.5 flex-shrink-0">
+                    <a 
+                        href={`https://zalo.me/${order.customerPhone}`} 
+                        target="_blank" 
+                        rel="noreferrer"
+                        onClick={e => e.stopPropagation()} 
+                        className="w-7 h-7 flex items-center justify-center rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white transition-colors"
+                        title="Chat Zalo"
+                    >
+                        <span className="font-black text-[10px]">Z</span>
+                    </a>
+                    <a 
+                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(order.address)}`} 
+                        target="_blank" 
+                        rel="noreferrer"
+                        onClick={e => e.stopPropagation()} 
+                        className="w-7 h-7 flex items-center justify-center rounded-lg bg-red-50 text-red-600 hover:bg-red-600 hover:text-white transition-colors"
+                        title="Google Maps"
+                    >
+                        <i className="fas fa-map-marker-alt text-[10px]"></i>
+                    </a>
+                    <button onClick={(e) => { e.stopPropagation(); sendSMS(); }} className="w-7 h-7 flex items-center justify-center rounded-lg bg-green-50 text-green-600 hover:bg-green-600 hover:text-white transition-colors" title="SMS">
+                        <i className="fas fa-comment-dots text-[10px]"></i>
+                    </button>
+              </div>
+          </div>
+
+          {/* BODY: Items List */}
+          <div className="px-4 py-3 bg-gray-50 border-t border-gray-100 border-b flex-grow">
             {order.notes && (
-                <div className="mb-3 px-3 py-2 bg-yellow-50/50 border border-yellow-100 rounded-lg text-xs text-yellow-800 flex gap-2">
-                    <i className="fas fa-comment-alt mt-0.5 text-yellow-400"></i>
-                    <span className="italic">{order.notes}</span>
+                <div className="mb-3 px-3 py-2 bg-yellow-50 border border-yellow-100 rounded-lg text-xs text-yellow-800 italic flex gap-2 items-start">
+                    <i className="fas fa-sticky-note text-yellow-400 mt-0.5"></i>
+                    <span>{order.notes}</span>
                 </div>
             )}
 
-            <div className="space-y-1 mb-4">
+            <div className="space-y-2">
                {order.items.map((item, idx) => (
                  <div key={idx} className="flex justify-between items-center text-sm group/item">
                     <div className="flex items-center gap-2 overflow-hidden">
-                        <span className="w-1.5 h-1.5 rounded-full bg-gray-200 group-hover/item:bg-eco-400 transition-colors"></span>
-                        <span className="text-gray-700 truncate">{item.name}</span>
-                        <span className="text-gray-400 text-xs">x{item.quantity}</span>
+                        <span className="w-1.5 h-1.5 rounded-full bg-gray-300"></span>
+                        <span className="text-gray-700 font-medium truncate">{item.name}</span>
                     </div>
-                    <span className="font-medium text-gray-900">{new Intl.NumberFormat('vi-VN').format(item.price * item.quantity)}</span>
+                    <div className="flex items-center gap-3">
+                        <span className="text-xs font-bold bg-white border border-gray-200 text-gray-600 px-1.5 py-0.5 rounded">x{item.quantity}</span>
+                    </div>
                  </div>
                ))}
             </div>
-
-            <div className="flex items-center justify-between pt-3 border-t border-gray-50">
-               <div className="flex items-center gap-2">
-                   <span className="text-lg font-black text-gray-900">
-                     {new Intl.NumberFormat('vi-VN').format(order.totalPrice)}
-                   </span>
-                   
-                   <div className="mt-0.5">
-                       <PaymentBadge />
-                   </div>
-               </div>
-
-               <button 
-                  onClick={(e) => { e.stopPropagation(); sendSMS(); }} 
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gray-50 text-gray-600 text-xs font-bold hover:bg-eco-50 hover:text-eco-700 transition-colors"
-               >
-                   <i className="fas fa-sms"></i> <span className="hidden sm:inline">SMS</span>
-               </button>
+            
+            {/* Meta Info Footer */}
+            <div className="flex justify-between items-center mt-3 pt-2 border-t border-gray-200/50">
+                <div className="flex items-center gap-2">
+                    {order.batchId && (
+                        <span className="text-[9px] text-gray-400 bg-white border border-gray-200 px-1.5 py-0.5 rounded uppercase tracking-wider">{order.batchId}</span>
+                    )}
+                </div>
+                <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button onClick={(e) => { e.stopPropagation(); onEdit(order); }} className="text-gray-400 hover:text-blue-600 text-[10px] uppercase font-bold flex items-center gap-1"><i className="fas fa-pen"></i> Sửa</button>
+                    <button onClick={handlePrint} className="text-gray-400 hover:text-gray-800 text-[10px] uppercase font-bold flex items-center gap-1"><i className="fas fa-print"></i> In</button>
+                    <button onClick={(e) => { e.stopPropagation(); onDelete(order.id); }} className="text-gray-400 hover:text-red-600 text-[10px] uppercase font-bold flex items-center gap-1"><i className="fas fa-trash"></i> Xóa</button>
+                </div>
             </div>
           </div>
 
-          <div className="p-3 bg-gray-50/50 border-t border-gray-100 relative z-10" onClick={(e) => e.stopPropagation()}>
+          {/* FOOTER: Main Actions */}
+          <div className="p-3 bg-white relative z-10" onClick={(e) => e.stopPropagation()}>
+            {/* State 1: Pending -> Picked Up */}
             {order.status === OrderStatus.PENDING && (
-                <button onClick={() => handleStatusChange(OrderStatus.PICKED_UP)} className="w-full py-2.5 rounded-xl bg-gray-900 text-white text-sm font-bold hover:bg-gray-800 transition-all shadow-lg shadow-gray-200">
-                Nhận Đơn
+                <button onClick={() => handleStatusChange(OrderStatus.PICKED_UP)} className="w-full py-3 rounded-xl bg-gray-900 text-white text-sm font-bold hover:bg-gray-800 transition-all shadow-md">
+                    Nhận Đơn
                 </button>
             )}
             
+            {/* State 2: Picked Up -> In Transit */}
             {order.status === OrderStatus.PICKED_UP && (
-                <button onClick={() => handleStatusChange(OrderStatus.IN_TRANSIT)} className="w-full py-2.5 rounded-xl bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-100">
-                <i className="fas fa-motorcycle mr-2"></i> Giao Hàng
+                <button onClick={() => handleStatusChange(OrderStatus.IN_TRANSIT)} className="w-full py-3 rounded-xl bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 transition-all shadow-md shadow-blue-100">
+                    <i className="fas fa-motorcycle mr-2"></i> Đi Giao Hàng
                 </button>
             )}
             
+            {/* State 3: In Transit -> Completed (Split Choice) */}
             {order.status === OrderStatus.IN_TRANSIT && (
-                <div className="space-y-3">
-                    <div className="flex bg-white p-1 rounded-lg border border-gray-200 shadow-sm">
-                        <button 
-                            onClick={() => handlePaymentMethodChange(PaymentMethod.CASH)}
-                            className={`flex-1 text-xs font-bold py-1.5 rounded-md transition-all ${order.paymentMethod === PaymentMethod.CASH ? 'bg-gray-100 text-gray-900' : 'text-gray-400 hover:text-gray-600'}`}
-                        >
-                            Tiền mặt
-                        </button>
-                        <div className="w-px bg-gray-200 my-1"></div>
-                        <button 
-                            onClick={() => handlePaymentMethodChange(PaymentMethod.TRANSFER)}
-                            className={`flex-1 text-xs font-bold py-1.5 rounded-md transition-all ${order.paymentMethod === PaymentMethod.TRANSFER ? 'bg-blue-50 text-blue-600' : 'text-gray-400 hover:text-gray-600'}`}
-                        >
-                            Chuyển khoản
-                        </button>
-                    </div>
+                <div className="flex gap-2">
+                    <button 
+                        onClick={() => handleFinishOrder(PaymentMethod.CASH)} 
+                        className="flex-1 py-3 rounded-xl bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700 transition-all shadow-md shadow-emerald-100 flex flex-col items-center justify-center gap-0.5 leading-tight"
+                    >
+                        <span>Thu tiền mặt</span>
+                        <span className="text-[9px] opacity-80 font-normal">Hoàn tất</span>
+                    </button>
                     
-                    <div className="flex gap-2">
-                        <label className={`w-12 h-10 flex items-center justify-center rounded-xl border border-gray-200 cursor-pointer transition-colors ${uploading ? 'bg-gray-100' : 'bg-white hover:border-eco-500 hover:text-eco-500 text-gray-500'}`}>
-                            <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handlePhotoUpload} disabled={uploading} />
-                            {uploading ? <i className="fas fa-spinner fa-spin text-sm"></i> : <i className="fas fa-camera text-lg"></i>}
-                        </label>
-                        
-                        <button onClick={() => handleStatusChange(OrderStatus.DELIVERED)} className="flex-1 py-2 rounded-xl bg-green-600 text-white text-sm font-bold hover:bg-green-700 transition-all shadow-lg shadow-green-100">
-                            Hoàn Tất
-                        </button>
-                    </div>
+                    <button 
+                        onClick={() => handleFinishOrder(PaymentMethod.TRANSFER)} 
+                        className="flex-1 py-3 rounded-xl bg-blue-600 text-white text-xs font-bold hover:bg-blue-700 transition-all shadow-md shadow-blue-100 flex flex-col items-center justify-center gap-0.5 leading-tight"
+                    >
+                        <span>Chuyển khoản</span>
+                        <span className="text-[9px] opacity-80 font-normal">Hoàn tất</span>
+                    </button>
+                    
+                    <label className={`w-12 flex items-center justify-center rounded-xl border-2 border-dashed border-gray-300 cursor-pointer transition-colors ${uploading ? 'bg-gray-100' : 'bg-white hover:border-eco-500 hover:text-eco-500 text-gray-400'}`}>
+                        <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handlePhotoUpload} disabled={uploading} />
+                        {uploading ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-camera"></i>}
+                    </label>
                 </div>
             )}
             
+            {/* State 4: Completed */}
             {isCompleted && (
                 <div className="flex items-center justify-center pt-1 gap-2">
                     {order.deliveryProof ? (
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 bg-green-50 px-3 py-1.5 rounded-lg border border-green-100">
                             <button 
                                 onClick={(e) => { e.stopPropagation(); setShowImageModal(true); }}
-                                className="flex items-center gap-2 text-xs font-bold text-eco-600 hover:underline"
+                                className="flex items-center gap-2 text-xs font-bold text-green-700 hover:underline"
                             >
-                                <i className="fas fa-image"></i> Xem ảnh
+                                <i className="fas fa-check-circle"></i> Xem ảnh xác thực
                             </button>
-                            <button onClick={handleDeletePhoto} className="w-5 h-5 flex items-center justify-center bg-gray-100 hover:bg-red-100 text-gray-400 hover:text-red-600 rounded-full transition-colors" title="Xóa ảnh">
+                            <div className="w-px h-3 bg-green-200 mx-1"></div>
+                            <button onClick={handleDeletePhoto} className="text-gray-400 hover:text-red-600 transition-colors" title="Xóa ảnh">
                                 <i className="fas fa-trash-alt text-[10px]"></i>
                             </button>
                         </div>
                     ) : (
-                        <span className="text-xs font-medium text-gray-400">
-                            {order.status === OrderStatus.DELIVERED ? <><i className="fas fa-check mr-1"></i> Đã giao</> : <><i className="fas fa-times mr-1"></i> Đã hủy</>}
+                        <span className="text-xs font-medium text-gray-400 flex items-center gap-1">
+                            {order.status === OrderStatus.DELIVERED ? <><i className="fas fa-check text-green-500"></i> Đã giao thành công</> : <><i className="fas fa-times text-red-500"></i> Đã hủy đơn</>}
                         </span>
                     )}
                 </div>
@@ -557,6 +566,7 @@ export const OrderCard: React.FC<Props> = ({
           </div>
       </div>
       
+      {/* LIGHTBOX MODAL */}
       {showImageModal && order.deliveryProof && (
           <div className="fixed inset-0 z-[99999] bg-black/95 flex items-center justify-center p-4 animate-fade-in" onClick={() => setShowImageModal(false)}>
               <div className="relative w-full h-full flex items-center justify-center">
@@ -576,6 +586,7 @@ export const OrderCard: React.FC<Props> = ({
           </div>
       )}
 
+      {/* QR MODAL */}
       {showQR && (
         <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-gray-900/80 backdrop-blur-sm p-4 animate-fade-in" onClick={() => setShowQR(false)}>
             <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-sm w-full text-center" onClick={e => e.stopPropagation()}>
@@ -587,7 +598,7 @@ export const OrderCard: React.FC<Props> = ({
                         <img src={qrUrl} alt="VietQR" className="w-64 h-64 object-contain" />
                     ) : (
                         <div className="w-64 h-64 flex items-center justify-center text-gray-400 bg-gray-50">
-                            Đang tải...
+                            <i className="fas fa-spinner fa-spin mr-2"></i> Đang tạo mã...
                         </div>
                     )}
                 </div>
@@ -596,13 +607,12 @@ export const OrderCard: React.FC<Props> = ({
                     {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(order.totalPrice)}
                 </div>
                 
-                <p className="text-xs text-amber-600 bg-amber-50 p-2 rounded-lg mb-6 border border-amber-100">
+                <p className="text-xs text-amber-600 bg-amber-50 p-2 rounded-lg mb-6 border border-amber-100 text-left">
                     <i className="fas fa-info-circle mr-1"></i>
-                    Sau khi chuyển khoản, vui lòng đưa màn hình cho nhân viên để xác nhận.
+                    Khách hàng quét mã sẽ tự động điền số tiền và nội dung.
                 </p>
 
                 <div className="flex gap-3">
-                    {/* New Share Button */}
                     <button 
                         onClick={handleShareQR}
                         className="w-12 flex items-center justify-center bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-xl transition-colors"
