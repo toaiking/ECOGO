@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { Order, OrderStatus, PaymentMethod } from '../types';
 import { storageService } from '../services/storageService';
@@ -16,14 +16,13 @@ interface Props {
 }
 
 const statusConfig: Record<OrderStatus, { color: string; bg: string; label: string; icon: string }> = {
-  [OrderStatus.PENDING]: { bg: 'bg-yellow-100', color: 'text-yellow-700', label: 'Chờ xử lý', icon: 'fa-clock' },
-  [OrderStatus.PICKED_UP]: { bg: 'bg-blue-100', color: 'text-blue-700', label: 'Đã lấy', icon: 'fa-box-open' },
-  [OrderStatus.IN_TRANSIT]: { bg: 'bg-purple-100', color: 'text-purple-700', label: 'Đang giao', icon: 'fa-shipping-fast' },
-  [OrderStatus.DELIVERED]: { bg: 'bg-green-100', color: 'text-green-700', label: 'Hoàn tất', icon: 'fa-check-circle' },
-  [OrderStatus.CANCELLED]: { bg: 'bg-red-100', color: 'text-red-700', label: 'Hủy', icon: 'fa-times-circle' },
+  [OrderStatus.PENDING]: { bg: 'bg-yellow-50', color: 'text-yellow-700', label: 'Chờ xử lý', icon: 'fa-clock' },
+  [OrderStatus.PICKED_UP]: { bg: 'bg-blue-50', color: 'text-blue-700', label: 'Đã lấy', icon: 'fa-box-open' },
+  [OrderStatus.IN_TRANSIT]: { bg: 'bg-purple-50', color: 'text-purple-700', label: 'Đang giao', icon: 'fa-shipping-fast' },
+  [OrderStatus.DELIVERED]: { bg: 'bg-green-50', color: 'text-green-700', label: 'Hoàn tất', icon: 'fa-check-circle' },
+  [OrderStatus.CANCELLED]: { bg: 'bg-red-50', color: 'text-red-700', label: 'Hủy', icon: 'fa-times-circle' },
 };
 
-// Image Compression Helper
 const compressImage = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -35,28 +34,13 @@ const compressImage = (file: File): Promise<string> => {
                 const canvas = document.createElement('canvas');
                 const ctx = canvas.getContext('2d');
                 if (!ctx) { resolve(img.src); return; }
-
-                // Resize logic: Max 800px width/height
                 const MAX_DIM = 800;
                 let width = img.width;
                 let height = img.height;
-
-                if (width > height) {
-                    if (width > MAX_DIM) {
-                        height *= MAX_DIM / width;
-                        width = MAX_DIM;
-                    }
-                } else {
-                    if (height > MAX_DIM) {
-                        width *= MAX_DIM / height;
-                        height = MAX_DIM;
-                    }
-                }
-
+                if (width > height) { if (width > MAX_DIM) { height *= MAX_DIM / width; width = MAX_DIM; } } else { if (height > MAX_DIM) { width *= MAX_DIM / height; height = MAX_DIM; } }
                 canvas.width = width;
                 canvas.height = height;
                 ctx.drawImage(img, 0, 0, width, height);
-                // Compress to JPEG 70% quality
                 resolve(canvas.toDataURL('image/jpeg', 0.7));
             };
             img.onerror = reject;
@@ -73,14 +57,22 @@ export const OrderCard: React.FC<Props> = ({
   const [showQR, setShowQR] = useState(false);
   const [qrUrl, setQrUrl] = useState('');
   const [showImageModal, setShowImageModal] = useState(false);
-  
-  // State for Payment Choice in Compact Mode
   const [showCompactPaymentChoice, setShowCompactPaymentChoice] = useState(false);
+  const [showActionMenu, setShowActionMenu] = useState(false);
   
-  const handleStatusChange = async (newStatus: OrderStatus) => {
-    await storageService.updateStatus(order.id, newStatus);
-  };
+  const actionMenuRef = useRef<HTMLDivElement>(null);
 
+  useEffect(() => {
+      const handleClickOutside = (event: MouseEvent) => {
+          if (actionMenuRef.current && !actionMenuRef.current.contains(event.target as Node)) {
+              setShowActionMenu(false);
+          }
+      };
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const handleStatusChange = async (newStatus: OrderStatus) => { await storageService.updateStatus(order.id, newStatus); };
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -88,650 +80,199 @@ export const OrderCard: React.FC<Props> = ({
       try {
           const compressedBase64 = await compressImage(file);
           await storageService.updateStatus(order.id, OrderStatus.DELIVERED, compressedBase64);
-          toast.success('Đã lưu ảnh & Hoàn tất đơn');
-      } catch (error) {
-          toast.error("Lỗi xử lý ảnh");
-          console.error(error);
-      } finally {
-          setUploading(false);
-      }
+          toast.success('Đã lưu ảnh & Hoàn tất');
+      } catch (error) { toast.error("Lỗi xử lý ảnh"); } finally { setUploading(false); }
     }
   };
-
-  const handleDeletePhoto = async () => {
-      if (window.confirm("Xóa ảnh xác thực này?")) {
-          await storageService.deleteDeliveryProof(order.id);
-          toast.success("Đã xóa ảnh");
-      }
-  };
-
+  const handleDeletePhoto = async () => { if (window.confirm("Xóa ảnh?")) { await storageService.deleteDeliveryProof(order.id); toast.success("Đã xóa"); } };
   const handleShareProof = async () => {
       if (!order.deliveryProof) return;
       try {
-          // 1. Convert Base64 to Blob/File
           const base64Response = await fetch(order.deliveryProof);
           const blob = await base64Response.blob();
           const file = new File([blob], `delivery-${order.id}.jpg`, { type: "image/jpeg" });
-
-          // 2. Prepare Text
-          const itemsSummary = order.items.map(i => `${i.name} x${i.quantity}`).join(', ');
-          const text = `Đã giao đơn #${order.id}\nKhách: ${order.customerName}\nĐịa chỉ: ${order.address}\nHàng: ${itemsSummary}\nThu: ${new Intl.NumberFormat('vi-VN').format(order.totalPrice)}đ (${order.paymentMethod === PaymentMethod.CASH ? 'TM' : 'CK'})`;
-
-          // 3. Share
-          if (navigator.share) {
-              // Try to copy text first because some apps ignore text when sharing files
-              await navigator.clipboard.writeText(text);
-              toast("Đã copy nội dung! Dán khi gửi ảnh.", { icon: '📋' });
-              
-              await navigator.share({
-                  title: `Giao hàng #${order.id}`,
-                  text: text,
-                  files: [file]
-              });
-          } else {
-              await navigator.clipboard.writeText(text);
-              toast.success('Đã copy thông tin. Gửi ảnh thủ công nhé!');
-          }
-      } catch (e) {
-          console.error(e);
-          toast.error("Không thể chia sẻ ảnh");
-      }
+          const text = `Đã giao đơn #${order.id} - ${order.customerName}`;
+          if (navigator.share) { await navigator.clipboard.writeText(text); toast("Đã copy nội dung!", { icon: '📋' }); await navigator.share({ title: `Giao hàng #${order.id}`, text: text, files: [file] }); } else { await navigator.clipboard.writeText(text); toast.success('Đã copy. Gửi thủ công nhé!'); }
+      } catch (e) { toast.error("Lỗi chia sẻ"); }
   };
-
   const handleFinishOrder = async (method: PaymentMethod) => {
       const updated = { ...order, paymentMethod: method };
       await storageService.updateOrderDetails(updated);
       await storageService.updateStatus(order.id, OrderStatus.DELIVERED);
-      toast.success(`Đã hoàn tất (${method === PaymentMethod.CASH ? 'Tiền mặt' : 'Chuyển khoản'})`);
+      toast.success(`Xong: ${method === PaymentMethod.CASH ? 'Tiền mặt' : 'Chuyển khoản'}`);
       setShowCompactPaymentChoice(false);
   };
-
-  const togglePaymentVerification = async () => {
-      await storageService.updatePaymentVerification(order.id, !order.paymentVerified);
-      if (!order.paymentVerified) {
-          toast.success("Đã xác nhận nhận tiền!");
-      }
-  };
-
+  const togglePaymentVerification = async () => { await storageService.updatePaymentVerification(order.id, !order.paymentVerified); if (!order.paymentVerified) toast.success("Đã xác nhận tiền!"); };
   const showVietQR = async (e?: React.MouseEvent) => {
       e?.stopPropagation();
-      if (showQR) {
-          setShowQR(false);
-          return;
-      }
+      if (showQR) { setShowQR(false); return; }
       const bankConfig = await storageService.getBankConfig();
-      if (!bankConfig || !bankConfig.accountNo) {
-          toast.error("Chưa cài đặt ngân hàng. Vào Menu > Cài đặt.");
-          return;
-      }
-
-      const desc = `TT Don ${order.id}`;
+      if (!bankConfig || !bankConfig.accountNo) { toast.error("Chưa cài đặt ngân hàng"); return; }
+      const desc = `DH ${order.id}`;
       const url = `https://img.vietqr.io/image/${bankConfig.bankId}-${bankConfig.accountNo}-${bankConfig.template}.png?amount=${order.totalPrice}&addInfo=${encodeURIComponent(desc)}&accountName=${encodeURIComponent(bankConfig.accountName)}`;
-      
       setQrUrl(url);
       setShowQR(true);
   };
-
   const handleShareQR = async () => {
       if (!qrUrl) return;
       try {
           const response = await fetch(qrUrl);
           const blob = await response.blob();
           const file = new File([blob], `qr-${order.id}.png`, { type: "image/png" });
-
-          if (navigator.share) {
-              await navigator.share({
-                  title: 'Mã QR Thanh toán',
-                  text: `Thanh toán đơn hàng #${order.id}. Số tiền: ${new Intl.NumberFormat('vi-VN').format(order.totalPrice)}đ`,
-                  files: [file]
-              });
-          } else {
-              await navigator.clipboard.writeText(qrUrl);
-              toast.success("Đã copy link ảnh QR");
-          }
-      } catch (e) {
-          console.error(e);
-          toast.error("Không thể chia sẻ ảnh QR");
-      }
+          if (navigator.share) { await navigator.share({ title: 'Mã QR', text: `Thanh toán ${order.totalPrice}đ`, files: [file] }); } else { await navigator.clipboard.writeText(qrUrl); toast.success("Đã copy link QR"); }
+      } catch (e) { toast.error("Lỗi chia sẻ QR"); }
   };
-
-  const sendSMS = async () => {
-    const msg = await generateDeliveryMessage(order);
-    const ua = navigator.userAgent.toLowerCase();
-    const isIOS = ua.indexOf('iphone') > -1 || ua.indexOf('ipad') > -1;
-    const separator = isIOS ? '&' : '?';
-    window.open(`sms:${order.customerPhone}${separator}body=${encodeURIComponent(msg)}`, '_self');
+  const sendSMS = async () => { const msg = await generateDeliveryMessage(order); const ua = navigator.userAgent.toLowerCase(); const isIOS = ua.indexOf('iphone') > -1 || ua.indexOf('ipad') > -1; const separator = isIOS ? '&' : '?'; window.open(`sms:${order.customerPhone}${separator}body=${encodeURIComponent(msg)}`, '_self'); };
+  const nextStatus = (e: React.MouseEvent) => { e.stopPropagation(); if(order.status === OrderStatus.PENDING) handleStatusChange(OrderStatus.PICKED_UP); else if(order.status === OrderStatus.PICKED_UP) handleStatusChange(OrderStatus.IN_TRANSIT); else if(order.status === OrderStatus.IN_TRANSIT) setShowCompactPaymentChoice(true); }
+  const handlePrint = () => {
+    const printWindow = window.open('', '_blank'); if (!printWindow) return;
+    const itemsStr = order.items.map(i => `<tr><td style="padding:5px;border-bottom:1px solid #ddd;">${i.name}</td><td style="padding:5px;border-bottom:1px solid #ddd;text-align:center;">${i.quantity}</td><td style="padding:5px;border-bottom:1px solid #ddd;text-align:right;">${new Intl.NumberFormat('vi-VN').format(i.price)}</td><td style="padding:5px;border-bottom:1px solid #ddd;text-align:right;">${new Intl.NumberFormat('vi-VN').format(i.price * i.quantity)}</td></tr>`).join('');
+    printWindow.document.write(`<html><head><title>Phiếu Giao Hàng - ${order.id}</title><style>body{font-family:sans-serif;padding:20px;font-size:13px;max-width:800px;margin:0 auto}.header{text-align:center;margin-bottom:20px;border-bottom:2px solid #000;padding-bottom:10px}.info-group{margin-bottom:15px}.label{font-weight:bold;width:120px;display:inline-block}table{width:100%;border-collapse:collapse;margin-top:20px}th{text-align:left;background:#f0f0f0;padding:8px;border-bottom:2px solid #ddd}.total-row td{font-weight:bold;padding:10px 5px;border-top:2px solid #000;font-size:15px}.footer{margin-top:40px;text-align:center;font-style:italic;font-size:11px;color:#666}</style></head><body><div class="header"><h1 style="margin:0;font-size:20px;">PHIẾU GIAO HÀNG</h1><div style="font-size:11px;margin-top:5px;">Mã đơn: <b>#${order.id}</b> | Ngày: ${new Date(order.createdAt).toLocaleDateString('vi-VN')}</div></div><div class="info-group"><div><span class="label">Người nhận:</span> <b>${order.customerName}</b></div><div><span class="label">Điện thoại:</span> ${order.customerPhone}</div><div><span class="label">Địa chỉ:</span> ${order.address}</div>${order.notes ? `<div><span class="label">Ghi chú:</span> ${order.notes}</div>` : ''}</div><table><thead><tr><th>Sản phẩm</th><th style="width:50px;text-align:center;">SL</th><th style="width:100px;text-align:right;">Đơn giá</th><th style="width:100px;text-align:right;">Thành tiền</th></tr></thead><tbody>${itemsStr}<tr class="total-row"><td colspan="3" style="text-align:right;">TỔNG THANH TOÁN:</td><td style="text-align:right;">${new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(order.totalPrice)}</td></tr></tbody></table><div style="margin-top:20px;border:1px dashed #ccc;padding:10px;"><div><b>Hình thức thanh toán:</b> ${order.paymentMethod === PaymentMethod.CASH ? 'Tiền mặt (COD)' : (order.paymentMethod === PaymentMethod.TRANSFER ? 'Chuyển khoản' : 'Đã thanh toán')}</div>${order.paymentMethod === PaymentMethod.CASH ? '<div><b>Thu hộ (COD):</b> ' + new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(order.totalPrice) + '</div>' : ''}</div><div class="footer">Cảm ơn quý khách đã ủng hộ!</div></body></html>`);
+    printWindow.document.close(); printWindow.print();
   };
-
-  const handlePrint = (e: React.MouseEvent) => {
-      e.stopPropagation();
-      const printWindow = window.open('', '_blank');
-      if (printWindow) {
-          const itemsHtml = order.items.map(item => `
-             <tr>
-                <td style="padding: 8px; border-bottom: 1px solid #ddd;">${item.name}</td>
-                <td style="padding: 8px; border-bottom: 1px solid #ddd; text-align: center;">${item.quantity}</td>
-                <td style="padding: 8px; border-bottom: 1px solid #ddd; text-align: right;">${new Intl.NumberFormat('vi-VN').format(item.price * item.quantity)}</td>
-             </tr>
-          `).join('');
-
-          const dateStr = new Date(order.createdAt).toLocaleDateString('vi-VN');
-
-          printWindow.document.write(`
-              <html>
-                <head>
-                  <title>Phiếu Giao Hàng - ${order.id}</title>
-                  <style>
-                    body { font-family: sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; }
-                    h1 { text-align: center; border-bottom: 2px solid #000; padding-bottom: 10px; }
-                    .info { margin-bottom: 20px; }
-                    .info p { margin: 5px 0; }
-                    table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-                    th { text-align: left; border-bottom: 2px solid #000; padding: 8px; }
-                    .total { text-align: right; font-size: 1.2em; font-weight: bold; margin-top: 20px; }
-                    .footer { margin-top: 40px; text-align: center; font-size: 0.8em; font-style: italic; }
-                  </style>
-                </head>
-                <body>
-                  <h1>PHIẾU GIAO HÀNG</h1>
-                  <div class="info">
-                      <p><strong>Mã đơn:</strong> #${order.id}</p>
-                      <p><strong>Khách hàng:</strong> ${order.customerName}</p>
-                      <p><strong>SĐT:</strong> ${order.customerPhone}</p>
-                      <p><strong>Địa chỉ:</strong> ${order.address}</p>
-                      <p><strong>Ngày:</strong> ${dateStr}</p>
-                  </div>
-                  <table>
-                    <thead>
-                        <tr>
-                            <th>Tên hàng</th>
-                            <th style="text-align: center;">SL</th>
-                            <th style="text-align: right;">Thành tiền</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${itemsHtml}
-                    </tbody>
-                  </table>
-                  <div class="total">
-                      Tổng thu: ${new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(order.totalPrice)}
-                      <br>
-                      <span style="font-size: 0.7em; font-weight: normal;">(${order.paymentMethod === PaymentMethod.CASH ? 'Tiền mặt' : 'Chuyển khoản/Đã TT'})</span>
-                  </div>
-                  <div class="footer">
-                      Cảm ơn quý khách đã mua hàng!<br>
-                      EcoGo Logistics
-                  </div>
-                </body>
-              </html>
-          `);
-          printWindow.document.close();
-          printWindow.print();
-      }
-  };
-
-  const nextStatus = (e: React.MouseEvent) => {
-      e.stopPropagation();
-      if(order.status === OrderStatus.PENDING) {
-          handleStatusChange(OrderStatus.PICKED_UP);
-      } else if(order.status === OrderStatus.PICKED_UP) {
-          handleStatusChange(OrderStatus.IN_TRANSIT);
-      } else if(order.status === OrderStatus.IN_TRANSIT) {
-          // In Compact Mode, show a quick choice
-          setShowCompactPaymentChoice(true);
-      }
-  }
 
   const config = statusConfig[order.status];
   const isCompleted = order.status === OrderStatus.DELIVERED || order.status === OrderStatus.CANCELLED;
-  
   const PaymentBadge = () => {
-    // Logic: Hide text if not completed/verified, but keep QR if needed
     const showText = isCompleted || order.paymentVerified;
-    
     return (
        <div className="flex items-center gap-1">
-            {showText && (
-                order.paymentMethod === PaymentMethod.CASH ? (
-                    <span className="text-[10px] font-bold text-gray-500 bg-gray-100 px-2 py-1 rounded border border-gray-200 whitespace-nowrap">Tiền mặt</span>
-                ) : order.paymentMethod === PaymentMethod.PAID ? (
-                    <span className="text-[10px] font-bold text-green-700 bg-green-100 px-2 py-1 rounded border border-green-200 whitespace-nowrap">Đã thanh toán</span>
-                ) : (
-                    <span 
-                        className={`text-[10px] font-bold px-2 py-1 rounded border cursor-pointer whitespace-nowrap ${order.paymentVerified ? 'text-green-700 bg-green-100 border-green-200' : 'text-blue-600 bg-blue-50 border-blue-200'}`}
-                        onClick={(e) => { e.stopPropagation(); togglePaymentVerification(); }}
-                        title={order.paymentVerified ? "Đã nhận tiền" : "Chờ xác nhận"}
-                    >
-                    {order.paymentVerified ? 'Đã nhận tiền' : 'Chờ CK'}
-                    </span>
-                )
-            )}
-            
-            {/* Integrated QR Button - Always visible for Transfer, small style */}
-            <button 
-                onClick={showVietQR}
-                className="w-5 h-5 flex-shrink-0 flex items-center justify-center rounded bg-white text-blue-600 hover:bg-blue-50 transition-colors border border-blue-100 shadow-sm"
-                title="Mã QR"
-            >
-                <i className="fas fa-qrcode text-[10px]"></i>
-            </button>
+            {showText && (order.paymentMethod === PaymentMethod.CASH ? (<span className="text-[9px] font-bold text-gray-500 bg-gray-50 px-1.5 py-0.5 rounded border border-gray-200 whitespace-nowrap">Tiền mặt</span>) : order.paymentMethod === PaymentMethod.PAID ? (<span className="text-[9px] font-bold text-green-700 bg-green-50 px-1.5 py-0.5 rounded border border-green-100 whitespace-nowrap">Đã TT</span>) : (<span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border cursor-pointer whitespace-nowrap ${order.paymentVerified ? 'text-green-700 bg-green-50 border-green-100' : 'text-blue-600 bg-blue-50 border-blue-100'}`} onClick={(e) => { e.stopPropagation(); togglePaymentVerification(); }}>{order.paymentVerified ? 'Đã nhận' : 'Chờ CK'}</span>))}
+            <button onClick={showVietQR} className="w-6 h-6 flex-shrink-0 flex items-center justify-center rounded bg-white text-blue-600 hover:bg-blue-50 border border-blue-100 shadow-sm"><i className="fas fa-qrcode text-[10px]"></i></button>
        </div>
     );
   };
 
-  // --- COMPACT MODE (3-Line Layout) ---
   if (isCompactMode) {
       return (
           <>
-          <div className="group px-4 py-3 hover:bg-gray-50 transition-colors cursor-pointer border-b border-gray-100 last:border-0 relative" onClick={() => onEdit(order)}>
-               {/* Desktop: Single Row */}
-               <div className="hidden md:flex items-center gap-4 text-sm">
-                    <div 
-                        className={`w-3 h-3 rounded-full flex-shrink-0 cursor-pointer ${config.bg.replace('100','500')}`} 
-                        title={`${config.label} ${order.lastUpdatedBy ? `- bởi ${order.lastUpdatedBy}` : ''}`}
-                    ></div>
-                    
-                    <div className="w-48 flex flex-col justify-center" title={order.customerName}>
-                        <div className="font-bold text-gray-800 truncate">{order.customerName}</div>
-                        <a href={`tel:${order.customerPhone}`} onClick={e => e.stopPropagation()} className="text-xs text-eco-600 hover:text-eco-800 font-mono hover:underline">{order.customerPhone}</a>
-                    </div>
-                    
-                    <div className="flex-grow flex flex-col justify-center text-xs overflow-hidden">
-                        <span className="text-gray-800 truncate font-medium">{order.address}</span>
-                        <span className="text-gray-500 italic truncate">
-                            {order.items.map((i, idx) => (
-                                <span key={idx}>
-                                    {i.name} <b className="text-gray-900">x{i.quantity}</b>{idx < order.items.length - 1 ? ', ' : ''}
-                                </span>
-                            ))}
-                        </span>
-                    </div>
-
-                    <div className="w-36 text-right flex flex-col items-end">
-                         <span className="font-bold text-gray-900 text-base">{new Intl.NumberFormat('vi-VN').format(order.totalPrice)}</span>
-                         <div className="mt-1"><PaymentBadge /></div>
-                    </div>
-
-                    <div className="flex items-center gap-2 w-auto justify-end pl-4 border-l border-gray-100">
-                         <button onClick={(e) => { e.stopPropagation(); sendSMS(); }} className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="SMS">
-                            <i className="fas fa-comment-dots"></i>
-                         </button>
-                         {!isCompleted && (
-                             <button 
-                                onClick={nextStatus}
-                                className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 text-gray-600 hover:bg-black hover:text-white transition-colors"
-                                title="Chuyển trạng thái"
-                             >
-                                <i className="fas fa-arrow-right"></i>
-                             </button>
-                         )}
-                         <button onClick={handlePrint} className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-700 hover:bg-gray-200 rounded-lg transition-colors" title="In phiếu">
-                            <i className="fas fa-print"></i>
-                         </button>
-                    </div>
+          <div className="group px-3 py-2 hover:bg-gray-50 transition-colors cursor-pointer border-b border-gray-100 last:border-0 relative" onClick={() => onEdit(order)}>
+               {/* DESKTOP COMPACT */}
+               <div className="hidden md:flex items-center gap-3 text-sm">
+                    <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${config.bg.replace('50','500')}`}></div>
+                    <div className="w-40 font-bold text-gray-800 truncate">{order.customerName}<div className="text-[10px] text-gray-400 font-normal">{order.customerPhone}</div></div>
+                    <div className="flex-grow text-xs text-gray-600 truncate">{order.address} - <span className="italic text-gray-400">{order.items.map(i=>i.name).join(', ')}</span></div>
+                    <div className="flex items-center gap-2"><span className="font-bold text-gray-900">{new Intl.NumberFormat('vi-VN').format(order.totalPrice)}</span><PaymentBadge /></div>
+                    <div className="flex items-center gap-1 pl-2">{!isCompleted && (<button onClick={nextStatus} className="w-7 h-7 flex items-center justify-center rounded bg-gray-100 hover:bg-black hover:text-white transition-colors"><i className="fas fa-arrow-right text-xs"></i></button>)}<button onClick={(e) => { e.stopPropagation(); sendSMS(); }} className="w-7 h-7 flex items-center justify-center text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded"><i className="fas fa-comment-dots text-xs"></i></button></div>
                </div>
-
-               {/* Mobile: 3-Line Layout */}
-               <div className="md:hidden flex flex-col gap-2 relative">
-                    {/* Row 1: Name + Tools + Price */}
-                    <div className="flex justify-between items-start">
-                        <div className="flex items-center gap-2 overflow-hidden">
-                            <span className="font-black text-gray-900 text-sm truncate max-w-[140px]">{order.customerName}</span>
-                            {/* Grouped Call & SMS */}
-                            <div className="flex bg-gray-100 rounded-lg p-0.5 items-center h-7 shrink-0 border border-gray-200">
-                                <a href={`tel:${order.customerPhone}`} onClick={e => e.stopPropagation()} className="w-8 flex items-center justify-center text-eco-700 active:bg-white rounded-md transition-all h-full">
-                                    <i className="fas fa-phone text-xs"></i>
-                                </a>
-                                <div className="w-px h-3 bg-gray-300"></div>
-                                <button onClick={(e) => { e.stopPropagation(); sendSMS(); }} className="w-8 flex items-center justify-center text-blue-600 active:bg-white rounded-md transition-all h-full">
-                                    <i className="fas fa-comment-dots text-xs"></i>
-                                </button>
-                            </div>
-                        </div>
-                        <div className="text-right">
-                            <span className="font-black text-gray-900 text-base block leading-none">
-                                {new Intl.NumberFormat('vi-VN').format(order.totalPrice)}<small className="text-[10px] text-gray-500">đ</small>
-                            </span>
-                        </div>
-                    </div>
-
-                    {/* Row 2: Address + Status Badge */}
+               
+               {/* MOBILE COMPACT - 3 LINE LAYOUT */}
+               <div className="md:hidden flex flex-col gap-1 relative">
+                    {/* Line 1: Name | Call/SMS | Price */}
                     <div className="flex justify-between items-center">
-                        <div className="text-xs text-gray-500 truncate flex items-center gap-1.5 max-w-[60%]">
-                            <i className="fas fa-map-marker-alt text-gray-400 text-[10px]"></i>
-                            {order.address}
+                        <div className="flex items-center gap-2 overflow-hidden max-w-[65%]">
+                            <span className="font-bold text-gray-900 text-sm truncate">{order.customerName}</span>
+                            <div className="flex bg-gray-100 rounded-md h-6 items-center flex-shrink-0">
+                                <a href={`tel:${order.customerPhone}`} onClick={e => e.stopPropagation()} className="w-7 flex items-center justify-center text-gray-600 active:text-eco-600 h-full"><i className="fas fa-phone text-[10px]"></i></a>
+                                <div className="w-px h-3 bg-gray-300"></div>
+                                <button onClick={(e) => { e.stopPropagation(); sendSMS(); }} className="w-7 flex items-center justify-center text-gray-600 active:text-blue-600 h-full"><i className="fas fa-comment-dots text-[10px]"></i></button>
+                            </div>
                         </div>
-                        <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${config.bg} ${config.color}`}>
-                            {config.label}
-                        </span>
+                        <span className="font-black text-gray-900 text-sm">{new Intl.NumberFormat('vi-VN').format(order.totalPrice)}<small className="text-[9px] text-gray-400 font-normal">đ</small></span>
+                    </div>
+                    
+                    {/* Line 2: Address | Status */}
+                    <div className="flex justify-between items-center">
+                        <div className="text-[11px] text-gray-500 truncate max-w-[70%] flex items-center gap-1">
+                            <i className="fas fa-map-marker-alt text-[9px] text-gray-300"></i> {order.address}
+                        </div>
+                        <span className={`text-[9px] px-1.5 rounded font-bold uppercase whitespace-nowrap ${config.bg} ${config.color}`}>{config.label}</span>
                     </div>
 
-                    {/* Row 3: Items + Payment/Action */}
-                    <div className="flex justify-between items-end pt-1">
-                        <div className="flex-grow text-xs text-gray-600 italic truncate pr-2 leading-relaxed">
-                           {order.items.map(i => `${i.name} (x${i.quantity})`).join(', ')}
+                    {/* Line 3: Items | Payment & Action */}
+                    <div className="flex justify-between items-center pt-1 border-t border-gray-50 mt-0.5">
+                        <div className="text-[10px] text-gray-400 italic truncate pr-2 flex-grow">
+                            {order.items.map(i => `${i.name} x${i.quantity}`).join(', ')}
                         </div>
-                        
-                        {/* Integrated Payment Badge with QR (Small) */}
-                        <div className="flex items-center gap-2 flex-shrink-0 relative">
-                            <div onClick={e => e.stopPropagation()} className="flex items-center">
-                                <PaymentBadge />
-                            </div>
-
+                        <div className="flex items-center gap-2 flex-shrink-0" onClick={e => e.stopPropagation()}>
+                            <PaymentBadge />
                             {!isCompleted && (
-                                <button 
-                                    onClick={nextStatus}
-                                    className="w-8 h-8 flex items-center justify-center bg-gray-900 text-white rounded-lg shadow-md active:scale-95 ml-1"
-                                >
-                                    <i className="fas fa-arrow-right text-xs"></i>
+                                <button onClick={nextStatus} className="w-6 h-6 flex items-center justify-center bg-gray-900 text-white rounded shadow-sm active:scale-95">
+                                    <i className="fas fa-arrow-right text-[9px]"></i>
                                 </button>
                             )}
                         </div>
                     </div>
                </div>
           </div>
-          
-          {/* FIXED MODAL for Payment Choice (Works on both Mobile & Desktop in Compact Mode) */}
-          {showCompactPaymentChoice && (
-             <div className="fixed inset-0 z-[99999] bg-gray-900/50 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in" onClick={(e) => { e.stopPropagation(); setShowCompactPaymentChoice(false); }}>
-                 <div className="bg-white w-full max-w-xs rounded-2xl shadow-2xl p-5 transform scale-100 transition-all" onClick={e => e.stopPropagation()}>
-                     <h3 className="text-center font-black text-gray-800 mb-4 uppercase text-sm tracking-wider">Hoàn tất đơn hàng</h3>
-                     <div className="grid grid-cols-2 gap-3">
-                         <button 
-                             onClick={(e) => { e.stopPropagation(); handleFinishOrder(PaymentMethod.CASH); }}
-                             className="flex flex-col items-center justify-center p-4 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl transition-all active:scale-95"
-                         >
-                             <span className="text-2xl mb-2">💵</span>
-                             <span className="font-black text-emerald-700 text-lg">TM</span>
-                             <span className="text-[10px] font-bold text-emerald-600 uppercase">Tiền mặt</span>
-                         </button>
-                         <button 
-                             onClick={(e) => { e.stopPropagation(); handleFinishOrder(PaymentMethod.TRANSFER); }}
-                             className="flex flex-col items-center justify-center p-4 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl transition-all active:scale-95"
-                         >
-                             <span className="text-2xl mb-2">💳</span>
-                             <span className="font-black text-blue-700 text-lg">CK</span>
-                             <span className="text-[10px] font-bold text-blue-600 uppercase">Chuyển khoản</span>
-                         </button>
-                     </div>
-                     <button 
-                        onClick={() => setShowCompactPaymentChoice(false)}
-                        className="w-full mt-4 py-3 text-gray-500 font-bold text-sm hover:bg-gray-50 rounded-xl"
-                     >
-                        Hủy bỏ
-                     </button>
-                 </div>
-             </div>
-          )}
+          {showCompactPaymentChoice && (<div className="fixed inset-0 z-[99999] bg-gray-900/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={(e) => { e.stopPropagation(); setShowCompactPaymentChoice(false); }}><div className="bg-white w-full max-w-xs rounded-xl shadow-2xl p-4" onClick={e => e.stopPropagation()}><h3 className="text-center font-bold text-gray-800 mb-3 text-sm uppercase">Hoàn tất đơn hàng</h3><div className="grid grid-cols-2 gap-3"><button onClick={(e) => { e.stopPropagation(); handleFinishOrder(PaymentMethod.CASH); }} className="p-3 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg text-center"><span className="block text-xl">💵</span><span className="text-xs font-bold text-emerald-700">TIỀN MẶT</span></button><button onClick={(e) => { e.stopPropagation(); handleFinishOrder(PaymentMethod.TRANSFER); }} className="p-3 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg text-center"><span className="block text-xl">💳</span><span className="text-xs font-bold text-blue-700">CHUYỂN KHOẢN</span></button></div></div></div>)}
           </>
       );
   }
 
-  // --- FULL CARD MODE ---
+  // ULTRA COMPACT FULL CARD
   return (
     <>
-    <div 
-      className={`
-        group relative bg-white rounded-2xl border shadow-sm transition-all duration-300 overflow-hidden flex flex-col
-        ${isSortMode ? 'border-dashed border-2 border-gray-300 hover:border-eco-400' : 'border-gray-100 hover:shadow-lg'}
-    `}>
-      
-      {isSortMode && (
-          <div className="absolute left-0 top-0 bottom-0 w-8 bg-gray-50 flex items-center justify-center border-r border-gray-100 z-10 cursor-grab active:cursor-grabbing">
-              <span className="text-sm font-bold text-gray-400 transform -rotate-90">#{index !== undefined ? index + 1 : ''}</span>
-          </div>
-      )}
-
-      <div className={`flex-grow flex flex-col ${isSortMode ? 'pl-8' : ''}`}>
-          
-          {/* HEADER: Split Left (Customer) / Right (Finance) */}
-          <div className="p-4 pb-3 flex justify-between items-start gap-4">
+    <div className={`group relative bg-white rounded-lg border shadow-sm transition-all duration-200 flex flex-col ${isSortMode ? 'border-dashed border-2 border-gray-300' : 'border-gray-100 hover:shadow-md'}`}>
+      {isSortMode && (<div className="absolute left-0 top-0 bottom-0 w-6 bg-gray-50 flex items-center justify-center border-r border-gray-100 z-10 cursor-grab"><span className="text-xs font-bold text-gray-400">#{index !== undefined ? index + 1 : ''}</span></div>)}
+      <div className={`flex-grow flex flex-col ${isSortMode ? 'pl-6' : ''}`}>
+          {/* ULTRA COMPACT HEADER */}
+          <div className="p-2.5 flex justify-between items-start gap-3 border-b border-gray-50">
              {/* Left: Customer Info */}
              <div className="flex-grow min-w-0">
-                 <div className="flex items-center gap-2 mb-1">
-                    <h3 className="font-black text-gray-900 text-lg truncate" title={order.customerName}>
-                        {order.customerName}
-                    </h3>
-                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider whitespace-nowrap ${config.bg} ${config.color}`}>
-                        {config.label}
-                    </span>
+                 <div className="flex items-center gap-2 mb-0.5">
+                     <h3 className="font-bold text-gray-900 text-sm truncate leading-none">{order.customerName}</h3>
+                     <span className={`text-[9px] px-1.5 rounded-sm font-bold uppercase ${config.bg} ${config.color}`}>{config.label}</span>
                  </div>
-                 
-                 <a href={`tel:${order.customerPhone}`} onClick={e => e.stopPropagation()} className="inline-flex items-center text-sm font-bold text-gray-600 hover:text-eco-700 transition-colors mb-2">
-                    <i className="fas fa-phone-alt text-xs mr-1.5 opacity-60"></i>
-                    {order.customerPhone}
-                 </a>
+                 <div className="text-[11px] text-gray-500 leading-tight truncate">{order.address}</div>
+                 <div className="flex items-center gap-3 mt-1">
+                     <a href={`tel:${order.customerPhone}`} className="text-[10px] font-bold text-gray-400 hover:text-gray-800 font-mono flex items-center gap-1"><i className="fas fa-phone"></i> {order.customerPhone}</a>
+                     {order.lastUpdatedBy && <span className="text-[9px] text-gray-300 flex items-center gap-1"><i className="fas fa-user-edit"></i> {order.lastUpdatedBy}</span>}
+                 </div>
              </div>
-
-             {/* Right: Price & Payment Status */}
-             <div className="text-right flex flex-col items-end flex-shrink-0">
-                 <div className="text-xl font-black text-eco-700 leading-none mb-1.5">
-                    {new Intl.NumberFormat('vi-VN').format(order.totalPrice)}
-                    <span className="text-xs text-eco-500 ml-0.5 align-top">đ</span>
-                 </div>
-                 <div onClick={e => e.stopPropagation()}>
-                    <PaymentBadge />
-                 </div>
+             
+             {/* Right: Price & Payment */}
+             <div className="text-right flex-shrink-0 flex flex-col items-end gap-1">
+                 <div className="text-sm font-black text-eco-700 leading-none">{new Intl.NumberFormat('vi-VN').format(order.totalPrice)}<span className="text-[9px] text-gray-400 font-normal ml-0.5">đ</span></div>
+                 <div onClick={e => e.stopPropagation()}><PaymentBadge /></div>
              </div>
           </div>
 
-          {/* SUB-HEADER: Address & Tools */}
-          <div className="px-4 flex justify-between items-center gap-3 mb-3">
-              <div className="text-xs text-gray-500 truncate flex items-center gap-1.5 flex-grow">
-                  <i className="fas fa-map-marker-alt text-gray-300"></i>
-                  <span className="truncate">{order.address}</span>
-              </div>
-
-              <div className="flex gap-1.5 flex-shrink-0">
-                    <a 
-                        href={`https://zalo.me/${order.customerPhone}`} 
-                        target="_blank" 
-                        rel="noreferrer"
-                        onClick={e => e.stopPropagation()} 
-                        className="w-7 h-7 flex items-center justify-center rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white transition-colors"
-                        title="Chat Zalo"
-                    >
-                        <span className="font-black text-[10px]">Z</span>
-                    </a>
-                    <a 
-                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(order.address)}`} 
-                        target="_blank" 
-                        rel="noreferrer"
-                        onClick={e => e.stopPropagation()} 
-                        className="w-7 h-7 flex items-center justify-center rounded-lg bg-red-50 text-red-600 hover:bg-red-600 hover:text-white transition-colors"
-                        title="Google Maps"
-                    >
-                        <i className="fas fa-map-marker-alt text-[10px]"></i>
-                    </a>
-                    <button onClick={(e) => { e.stopPropagation(); sendSMS(); }} className="w-7 h-7 flex items-center justify-center rounded-lg bg-green-50 text-green-600 hover:bg-green-600 hover:text-white transition-colors" title="SMS">
-                        <i className="fas fa-comment-dots text-[10px]"></i>
-                    </button>
-              </div>
+          {/* ULTRA COMPACT BODY */}
+          <div className="p-2.5 bg-gray-50/30 flex-grow text-xs space-y-1">
+              {order.notes && <div className="text-[10px] text-yellow-700 bg-yellow-50 px-1.5 py-0.5 rounded italic truncate mb-1 border border-yellow-100"><i className="fas fa-sticky-note mr-1"></i>{order.notes}</div>}
+              {order.items.map((item, idx) => (
+                  <div key={idx} className="flex justify-between items-center text-[11px] leading-tight">
+                      <span className="text-gray-700 truncate max-w-[80%]">{item.name}</span>
+                      <span className="font-bold text-gray-900">x{item.quantity}</span>
+                  </div>
+              ))}
           </div>
 
-          {/* BODY: Items List */}
-          <div className="px-4 py-3 bg-gray-50 border-t border-gray-100 border-b flex-grow">
-            {order.notes && (
-                <div className="mb-3 px-3 py-2 bg-yellow-50 border border-yellow-100 rounded-lg text-xs text-yellow-800 italic flex gap-2 items-start">
-                    <i className="fas fa-sticky-note text-yellow-400 mt-0.5"></i>
-                    <span>{order.notes}</span>
+          {/* ULTRA COMPACT FOOTER */}
+          <div className="p-2 bg-white border-t border-gray-100 flex justify-between items-center" onClick={(e) => e.stopPropagation()}>
+                <div className="flex gap-1.5">
+                    {order.status === OrderStatus.PENDING && <button onClick={() => handleStatusChange(OrderStatus.PICKED_UP)} className="px-2.5 py-1 bg-gray-800 text-white text-[10px] font-bold rounded hover:bg-black transition-colors">Nhận</button>}
+                    {order.status === OrderStatus.PICKED_UP && <button onClick={() => handleStatusChange(OrderStatus.IN_TRANSIT)} className="px-2.5 py-1 bg-blue-600 text-white text-[10px] font-bold rounded hover:bg-blue-700 transition-colors">Giao</button>}
+                    {order.status === OrderStatus.IN_TRANSIT && (<div className="flex gap-1"><button onClick={() => handleFinishOrder(PaymentMethod.CASH)} className="px-2 py-1 bg-emerald-600 text-white text-[10px] font-bold rounded hover:bg-emerald-700">TM</button><button onClick={() => handleFinishOrder(PaymentMethod.TRANSFER)} className="px-2 py-1 bg-blue-600 text-white text-[10px] font-bold rounded hover:bg-blue-700">CK</button><label className="w-6 h-6 flex items-center justify-center border border-gray-200 rounded cursor-pointer hover:bg-gray-50 text-gray-400"><input type="file" accept="image/*" capture="environment" className="hidden" onChange={handlePhotoUpload} disabled={uploading} /><i className={`fas ${uploading ? 'fa-spinner fa-spin' : 'fa-camera'}`}></i></label></div>)}
+                    {isCompleted && order.deliveryProof && (<button onClick={() => setShowImageModal(true)} className="text-[10px] font-bold text-green-600 flex items-center gap-1 px-2 py-1 bg-green-50 rounded border border-green-100"><i className="fas fa-image"></i> Ảnh</button>)}
                 </div>
-            )}
-
-            <div className="space-y-2">
-               {order.items.map((item, idx) => (
-                 <div key={idx} className="flex justify-between items-center text-sm group/item">
-                    <div className="flex items-center gap-2 overflow-hidden">
-                        <span className="w-1.5 h-1.5 rounded-full bg-gray-300"></span>
-                        <span className="text-gray-700 font-medium truncate">{item.name}</span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                        <span className="text-xs font-bold bg-white border border-gray-200 text-gray-600 px-1.5 py-0.5 rounded">x{item.quantity}</span>
-                    </div>
-                 </div>
-               ))}
-            </div>
-            
-            {/* Meta Info Footer */}
-            <div className="flex justify-between items-center mt-3 pt-2 border-t border-gray-200/50">
-                <div className="flex items-center gap-2">
-                    {order.batchId && (
-                        <span className="text-[9px] text-gray-400 bg-white border border-gray-200 px-1.5 py-0.5 rounded uppercase tracking-wider">{order.batchId}</span>
-                    )}
-                </div>
-                <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button onClick={(e) => { e.stopPropagation(); onEdit(order); }} className="text-gray-400 hover:text-blue-600 text-[10px] uppercase font-bold flex items-center gap-1"><i className="fas fa-pen"></i> Sửa</button>
-                    <button onClick={handlePrint} className="text-gray-400 hover:text-gray-800 text-[10px] uppercase font-bold flex items-center gap-1"><i className="fas fa-print"></i> In</button>
-                    <button onClick={(e) => { e.stopPropagation(); onDelete(order.id); }} className="text-gray-400 hover:text-red-600 text-[10px] uppercase font-bold flex items-center gap-1"><i className="fas fa-trash"></i> Xóa</button>
-                </div>
-            </div>
-          </div>
-
-          {/* FOOTER: Main Actions */}
-          <div className="p-3 bg-white relative z-10" onClick={(e) => e.stopPropagation()}>
-            {/* State 1: Pending -> Picked Up */}
-            {order.status === OrderStatus.PENDING && (
-                <button onClick={() => handleStatusChange(OrderStatus.PICKED_UP)} className="w-full py-3 rounded-xl bg-gray-900 text-white text-sm font-bold hover:bg-gray-800 transition-all shadow-md">
-                    Nhận Đơn
-                </button>
-            )}
-            
-            {/* State 2: Picked Up -> In Transit */}
-            {order.status === OrderStatus.PICKED_UP && (
-                <button onClick={() => handleStatusChange(OrderStatus.IN_TRANSIT)} className="w-full py-3 rounded-xl bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 transition-all shadow-md shadow-blue-100">
-                    <i className="fas fa-motorcycle mr-2"></i> Đi Giao Hàng
-                </button>
-            )}
-            
-            {/* State 3: In Transit -> Completed (Split Choice) */}
-            {order.status === OrderStatus.IN_TRANSIT && (
-                <div className="flex gap-2">
-                    <button 
-                        onClick={() => handleFinishOrder(PaymentMethod.CASH)} 
-                        className="flex-1 py-3 rounded-xl bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700 transition-all shadow-md shadow-emerald-100 flex flex-col items-center justify-center gap-0.5 leading-tight"
-                    >
-                        <span>Thu tiền mặt</span>
-                        <span className="text-[9px] opacity-80 font-normal">Hoàn tất</span>
-                    </button>
+                
+                {/* Action Icons Group */}
+                <div className="flex gap-1">
+                    <a href={`https://zalo.me/${order.customerPhone}`} target="_blank" className="w-6 h-6 rounded bg-blue-50 text-blue-600 flex items-center justify-center hover:bg-blue-600 hover:text-white transition-colors font-bold text-[9px] border border-blue-100">Z</a>
+                    <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(order.address)}`} target="_blank" className="w-6 h-6 rounded bg-red-50 text-red-600 flex items-center justify-center hover:bg-red-600 hover:text-white transition-colors border border-red-100"><i className="fas fa-map-marker-alt text-[10px]"></i></a>
+                    <button onClick={() => sendSMS()} className="w-6 h-6 rounded bg-green-50 text-green-600 flex items-center justify-center hover:bg-green-600 hover:text-white transition-colors border border-green-100"><i className="fas fa-comment-dots text-[10px]"></i></button>
                     
-                    <button 
-                        onClick={() => handleFinishOrder(PaymentMethod.TRANSFER)} 
-                        className="flex-1 py-3 rounded-xl bg-blue-600 text-white text-xs font-bold hover:bg-blue-700 transition-all shadow-md shadow-blue-100 flex flex-col items-center justify-center gap-0.5 leading-tight"
-                    >
-                        <span>Chuyển khoản</span>
-                        <span className="text-[9px] opacity-80 font-normal">Hoàn tất</span>
-                    </button>
-                    
-                    <label className={`w-12 flex items-center justify-center rounded-xl border-2 border-dashed border-gray-300 cursor-pointer transition-colors ${uploading ? 'bg-gray-100' : 'bg-white hover:border-eco-500 hover:text-eco-500 text-gray-400'}`}>
-                        <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handlePhotoUpload} disabled={uploading} />
-                        {uploading ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-camera"></i>}
-                    </label>
+                    {/* Click Menu (No Hover) */}
+                    <div className="relative" ref={actionMenuRef}>
+                        <button onClick={() => setShowActionMenu(!showActionMenu)} className={`w-6 h-6 rounded text-gray-400 hover:text-gray-700 flex items-center justify-center border border-transparent hover:border-gray-200 ${showActionMenu ? 'bg-gray-100 text-gray-700' : ''}`}><i className="fas fa-ellipsis-v text-[10px]"></i></button>
+                        {showActionMenu && (
+                            <div className="absolute bottom-full right-0 mb-1 bg-white shadow-xl border border-gray-200 rounded-lg p-1 min-w-[110px] z-20 animate-fade-in">
+                                <button onClick={() => { onEdit(order); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-blue-600 font-bold flex items-center gap-2 rounded"><i className="fas fa-edit"></i> Sửa đơn</button>
+                                <button onClick={() => { handlePrint(); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-gray-600 flex items-center gap-2 rounded"><i className="fas fa-print"></i> In phiếu</button>
+                                {order.deliveryProof && <button onClick={() => { handleShareProof(); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-purple-600 flex items-center gap-2 rounded"><i className="fas fa-share-alt"></i> Gửi ảnh</button>}
+                                <div className="border-t border-gray-100 my-1"></div>
+                                {order.deliveryProof && <button onClick={() => { handleDeletePhoto(); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-red-50 text-xs text-red-500 flex items-center gap-2 rounded"><i className="fas fa-image"></i> Xóa ảnh</button>}
+                                <button onClick={() => { onDelete(order.id); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-red-50 text-xs text-red-600 flex items-center gap-2 rounded"><i className="fas fa-trash"></i> Xóa đơn</button>
+                            </div>
+                        )}
+                    </div>
                 </div>
-            )}
-            
-            {/* State 4: Completed */}
-            {isCompleted && (
-                <div className="flex items-center justify-center pt-1 gap-2">
-                    {order.deliveryProof ? (
-                        <div className="flex items-center gap-2 bg-green-50 px-3 py-1.5 rounded-lg border border-green-100">
-                            <button 
-                                onClick={(e) => { e.stopPropagation(); setShowImageModal(true); }}
-                                className="flex items-center gap-2 text-xs font-bold text-green-700 hover:underline"
-                            >
-                                <i className="fas fa-check-circle"></i> Xem ảnh
-                            </button>
-                            <div className="w-px h-3 bg-green-200 mx-1"></div>
-                            {/* Share Button */}
-                            <button 
-                                onClick={handleShareProof}
-                                className="text-green-600 hover:text-green-800 transition-colors"
-                                title="Chia sẻ ảnh Zalo"
-                            >
-                                <i className="fas fa-share-alt text-xs"></i>
-                            </button>
-                            <div className="w-px h-3 bg-green-200 mx-1"></div>
-                            <button onClick={handleDeletePhoto} className="text-gray-400 hover:text-red-600 transition-colors" title="Xóa ảnh">
-                                <i className="fas fa-trash-alt text-[10px]"></i>
-                            </button>
-                        </div>
-                    ) : (
-                        <span className="text-xs font-medium text-gray-400 flex items-center gap-1">
-                            {order.status === OrderStatus.DELIVERED ? <><i className="fas fa-check text-green-500"></i> Đã giao thành công</> : <><i className="fas fa-times text-red-500"></i> Đã hủy đơn</>}
-                        </span>
-                    )}
-                </div>
-            )}
           </div>
       </div>
-      
-      {/* LIGHTBOX MODAL */}
-      {showImageModal && order.deliveryProof && (
-          <div className="fixed inset-0 z-[99999] bg-black/95 flex items-center justify-center p-4 animate-fade-in" onClick={() => setShowImageModal(false)}>
-              <div className="relative w-full h-full flex items-center justify-center">
-                  <img 
-                    src={order.deliveryProof} 
-                    alt="Proof" 
-                    className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" 
-                    onClick={e => e.stopPropagation()}
-                  />
-                  <button 
-                    onClick={() => setShowImageModal(false)}
-                    className="absolute top-4 right-4 bg-white/10 hover:bg-white/20 text-white rounded-full w-10 h-10 flex items-center justify-center transition-colors"
-                  >
-                      <i className="fas fa-times text-xl"></i>
-                  </button>
-              </div>
-          </div>
-      )}
-
-      {/* QR MODAL */}
-      {showQR && (
-        <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-gray-900/80 backdrop-blur-sm p-4 animate-fade-in" onClick={() => setShowQR(false)}>
-            <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-sm w-full text-center" onClick={e => e.stopPropagation()}>
-                <h3 className="text-lg font-bold text-gray-900 mb-1">Thanh toán Chuyển khoản</h3>
-                <p className="text-sm text-gray-500 mb-4">Quét mã để thanh toán đơn hàng #{order.id}</p>
-                
-                <div className="bg-white p-2 rounded-lg border border-gray-100 shadow-inner mb-4 inline-block">
-                    {qrUrl ? (
-                        <img src={qrUrl} alt="VietQR" className="w-64 h-64 object-contain" />
-                    ) : (
-                        <div className="w-64 h-64 flex items-center justify-center text-gray-400 bg-gray-50">
-                            <i className="fas fa-spinner fa-spin mr-2"></i> Đang tạo mã...
-                        </div>
-                    )}
-                </div>
-                
-                <div className="text-2xl font-black text-gray-900 mb-2">
-                    {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(order.totalPrice)}
-                </div>
-                
-                <p className="text-xs text-amber-600 bg-amber-50 p-2 rounded-lg mb-6 border border-amber-100 text-left">
-                    <i className="fas fa-info-circle mr-1"></i>
-                    Khách hàng quét mã sẽ tự động điền số tiền và nội dung.
-                </p>
-
-                <div className="flex gap-3">
-                    <button 
-                        onClick={handleShareQR}
-                        className="w-12 flex items-center justify-center bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-xl transition-colors"
-                        title="Chia sẻ ảnh QR"
-                    >
-                        <i className="fas fa-share-alt"></i>
-                    </button>
-
-                    <button 
-                        onClick={() => { togglePaymentVerification(); setShowQR(false); }}
-                        className="flex-1 py-3 bg-green-600 hover:bg-green-700 text-white font-bold rounded-xl transition-colors shadow-lg shadow-green-100"
-                    >
-                        <i className="fas fa-check mr-2"></i>Đã nhận tiền
-                    </button>
-                    <button onClick={() => setShowQR(false)} className="px-4 py-3 bg-gray-100 hover:bg-gray-200 text-gray-800 font-bold rounded-xl transition-colors">
-                        Đóng
-                    </button>
-                </div>
-            </div>
-        </div>
-      )}
+      {showImageModal && order.deliveryProof && (<div className="fixed inset-0 z-[99999] bg-black/95 flex items-center justify-center p-4" onClick={() => setShowImageModal(false)}><img src={order.deliveryProof} className="max-w-full max-h-full object-contain rounded" onClick={e=>e.stopPropagation()} /><button onClick={() => setShowImageModal(false)} className="absolute top-4 right-4 text-white text-2xl"><i className="fas fa-times"></i></button></div>)}
+      {showQR && (<div className="fixed inset-0 z-[99999] flex items-center justify-center bg-gray-900/80 backdrop-blur-sm p-4" onClick={() => setShowQR(false)}><div className="bg-white p-5 rounded-xl shadow-2xl max-w-xs w-full text-center" onClick={e => e.stopPropagation()}><h3 className="text-base font-bold text-gray-800 mb-3">Thanh toán QR</h3>{qrUrl ? <img src={qrUrl} className="w-full h-auto rounded border mb-3" /> : <div className="h-48 flex items-center justify-center"><i className="fas fa-spinner fa-spin"></i></div>}<div className="text-xl font-black text-gray-900 mb-4">{new Intl.NumberFormat('vi-VN').format(order.totalPrice)}đ</div><div className="flex gap-2"><button onClick={handleShareQR} className="flex-1 py-2 bg-blue-50 text-blue-700 font-bold rounded text-xs">Chia sẻ QR</button><button onClick={() => { togglePaymentVerification(); setShowQR(false); }} className="flex-1 py-2 bg-green-600 text-white font-bold rounded text-xs">Đã nhận tiền</button></div><button onClick={() => setShowQR(false)} className="mt-3 text-gray-400 text-xs hover:text-gray-600">Đóng</button></div></div>)}
     </div>
     </>
   );
