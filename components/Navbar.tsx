@@ -32,7 +32,7 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
   const location = useLocation();
   const isOnline = !!db;
   
-  const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.1.10';
+  const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.1.13';
 
   useEffect(() => {
     // Check if iOS

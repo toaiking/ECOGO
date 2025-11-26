@@ -29,6 +29,7 @@ const TrackingDashboard: React.FC = () => {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
+  // Sorting & Drag state
   const dragItem = useRef<number | null>(null);
   const dragOverItem = useRef<number | null>(null);
   const editModalRef = useRef<HTMLDivElement>(null);
@@ -151,21 +152,74 @@ const TrackingDashboard: React.FC = () => {
   const selectProductForEditItem = (index: number, product: Product) => { if (!editingOrder) return; const newItems = [...editingOrder.items]; newItems[index] = { ...newItems[index], productId: product.id, name: product.name, price: product.defaultPrice }; const newTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0); setEditingOrder({ ...editingOrder, items: newItems, totalPrice: newTotal }); setActiveEditProductRow(null); };
   const addEditItem = () => { if (!editingOrder) return; const newItems = [...editingOrder.items, { id: uuidv4(), name: '', quantity: 1, price: 0 }]; setEditingOrder({ ...editingOrder, items: newItems }); };
   const removeEditItem = (index: number) => { if (!editingOrder) return; const newItems = [...editingOrder.items]; newItems.splice(index, 1); const newTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0); setEditingOrder({ ...editingOrder, items: newItems, totalPrice: newTotal }); };
-  const saveReorderedList = async (newSortedList: Order[]) => { const reindexedList = newSortedList.map((o, idx) => ({ ...o, orderIndex: idx })); const newMainOrders = orders.map(o => { const found = reindexedList.find(ro => ro.id === o.id); return found ? found : o; }); setOrders(newMainOrders); await storageService.saveOrdersList(reindexedList); };
   
-  const moveOrder = (index: number, direction: 'UP' | 'DOWN') => {
-      const newIndex = direction === 'UP' ? index - 1 : index + 1;
-      if (newIndex < 0 || newIndex >= filteredOrders.length) return;
-      const _orders = [...filteredOrders];
-      const item = _orders[index];
-      _orders.splice(index, 1);
-      _orders.splice(newIndex, 0, item);
-      saveReorderedList(_orders);
+  const saveReorderedList = async (newSortedList: Order[]) => { 
+      const reindexedList = newSortedList.map((o, idx) => ({ ...o, orderIndex: idx })); 
+      const newMainOrders = orders.map(o => { 
+          const found = reindexedList.find(ro => ro.id === o.id); 
+          return found ? found : o; 
+      }); 
+      setOrders(newMainOrders); 
+      await storageService.saveOrdersList(reindexedList); 
+  };
+  
+  // --- TOUCH DRAG HANDLERS FOR MOBILE ---
+  const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>, position: number) => {
+      dragItem.current = position;
+      // Visual feedback could be handled in OrderCard via props if needed, but for now relying on row ref
+      e.currentTarget.closest('.order-row')?.classList.add('opacity-50', 'bg-yellow-50');
   };
 
-  const handleDragStart = (e: React.DragEvent<HTMLDivElement>, position: number) => { dragItem.current = position; e.currentTarget.classList.add('opacity-40', 'scale-95'); if (e.dataTransfer) e.dataTransfer.effectAllowed = "move"; };
-  const handleDragEnter = (e: React.DragEvent<HTMLDivElement>, position: number) => { dragOverItem.current = position; e.preventDefault(); };
-  const handleDragEnd = (e: React.DragEvent<HTMLDivElement>) => { e.currentTarget.classList.remove('opacity-40', 'scale-95'); if (dragItem.current !== null && dragOverItem.current !== null && sortBy === 'ROUTE') { const _orders = [...filteredOrders]; const draggedItemContent = _orders[dragItem.current]; _orders.splice(dragItem.current, 1); _orders.splice(dragOverItem.current, 0, draggedItemContent); saveReorderedList(_orders); } dragItem.current = null; dragOverItem.current = null; };
+  const handleTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
+      if (dragItem.current === null) return;
+      
+      const touch = e.touches[0];
+      const element = document.elementFromPoint(touch.clientX, touch.clientY);
+      const row = element?.closest('[data-index]');
+      
+      if (row) {
+          const newIndex = parseInt(row.getAttribute('data-index') || '-1');
+          if (newIndex !== -1 && newIndex !== dragItem.current) {
+              const _orders = [...filteredOrders];
+              const draggedItemContent = _orders[dragItem.current];
+              _orders.splice(dragItem.current, 1);
+              _orders.splice(newIndex, 0, draggedItemContent);
+              
+              dragItem.current = newIndex;
+              saveReorderedList(_orders);
+          }
+      }
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
+      dragItem.current = null;
+      const rows = document.querySelectorAll('.order-row');
+      rows.forEach(r => r.classList.remove('opacity-50', 'bg-yellow-50'));
+  };
+
+  // --- DESKTOP DRAG HANDLERS ---
+  const handleDragStart = (e: React.DragEvent<HTMLDivElement>, position: number) => { 
+      dragItem.current = position; 
+      e.currentTarget.classList.add('opacity-40', 'scale-95'); 
+      if (e.dataTransfer) e.dataTransfer.effectAllowed = "move"; 
+  };
+  const handleDragEnter = (e: React.DragEvent<HTMLDivElement>, position: number) => { 
+      dragOverItem.current = position; 
+      e.preventDefault(); 
+  };
+  const handleDragEnd = (e: React.DragEvent<HTMLDivElement>) => { 
+      e.currentTarget.classList.remove('opacity-40', 'scale-95'); 
+      if (dragItem.current !== null && dragOverItem.current !== null && sortBy === 'ROUTE') { 
+          const _orders = [...filteredOrders]; 
+          const draggedItemContent = _orders[dragItem.current]; 
+          _orders.splice(dragItem.current, 1); 
+          _orders.splice(dragOverItem.current, 0, draggedItemContent); 
+          saveReorderedList(_orders); 
+      } 
+      dragItem.current = null; 
+      dragOverItem.current = null; 
+  };
+
   const copyRouteToClipboard = () => { const addressList = filteredOrders.filter(o => o.status !== OrderStatus.CANCELLED && o.status !== OrderStatus.DELIVERED).map(o => `- ${o.address} (${o.customerName})`).join('\n'); if (!addressList) { toast('Không có đơn hàng nào cần giao'); return; } navigator.clipboard.writeText(addressList); toast.success('Đã copy danh sách địa chỉ!'); };
   const handlePrintList = () => { 
       const printWindow = window.open('', '_blank'); if (!printWindow) return;
@@ -241,21 +295,48 @@ const TrackingDashboard: React.FC = () => {
       )}
 
       {sortBy === 'ROUTE' && !isCompactMode && (
-        <div className="flex items-center justify-center gap-3 p-3 bg-yellow-50/50 border border-yellow-100 rounded-lg text-yellow-800 text-sm mt-2"><i className="fas fa-hand-paper animate-pulse"></i><span className="font-medium">Kéo thả hoặc dùng mũi tên để sắp xếp lộ trình.</span></div>
+        <div className="flex items-center justify-center gap-3 p-3 bg-blue-50/50 border border-blue-100 rounded-lg text-blue-800 text-sm mt-2">
+            <i className="fas fa-hand-pointer animate-pulse"></i>
+            <span className="font-medium">Chế độ sắp xếp: Kéo thả thẻ (PC) hoặc giữ tay nắm 6 chấm (Mobile)</span>
+        </div>
       )}
 
       {/* Grid layout updated to support Tablet (md:grid-cols-2) - Minimized Top Margin (mt-0 or mt-1) */}
-      <div className={`${isCompactMode ? 'bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex flex-col divide-y divide-gray-100' : 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4'} mt-1`}>
+      <div 
+        className={`${isCompactMode ? 'bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex flex-col divide-y divide-gray-100' : (sortBy === 'ROUTE' ? 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4' : 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4')} mt-1`}
+      >
         {filteredOrders.length === 0 ? (<div className="col-span-full flex flex-col items-center justify-center py-20 text-gray-300"><i className="fas fa-box-open text-6xl mb-4 opacity-50"></i><p className="text-lg font-medium">Không tìm thấy đơn hàng nào</p></div>) : (
           filteredOrders.map((order, index) => (
-            <div key={order.id} draggable={sortBy === 'ROUTE'} onDragStart={(e) => handleDragStart(e, index)} onDragEnter={(e) => handleDragEnter(e, index)} onDragEnd={handleDragEnd} onDragOver={(e) => e.preventDefault()} className={`relative ${sortBy === 'ROUTE' && !isCompactMode ? 'cursor-grab active:cursor-grabbing' : ''} ${isCompactMode ? '' : 'transition-transform duration-200'}`}>
-               <OrderCard order={order} onUpdate={handleUpdate} onDelete={handleDeleteClick} onEdit={handleEdit} isSortMode={sortBy === 'ROUTE' && !isCompactMode} index={index} isCompactMode={isCompactMode} />
-                {sortBy === 'ROUTE' && !isCompactMode && (
-                    <div className="absolute right-2 top-12 flex flex-col gap-1 z-20 opacity-60 hover:opacity-100">
-                        {index > 0 && (<button onClick={(e) => { e.stopPropagation(); moveOrder(index, 'UP'); }} className="w-8 h-8 bg-white shadow-md rounded-full flex items-center justify-center text-gray-600 border border-gray-200"><i className="fas fa-arrow-up"></i></button>)}
-                        {index < filteredOrders.length - 1 && (<button onClick={(e) => { e.stopPropagation(); moveOrder(index, 'DOWN'); }} className="w-8 h-8 bg-white shadow-md rounded-full flex items-center justify-center text-gray-600 border border-gray-200"><i className="fas fa-arrow-down"></i></button>)}
-                    </div>
-                )}
+            <div 
+                key={order.id} 
+                data-index={index}
+                draggable={sortBy === 'ROUTE'} 
+                onDragStart={(e) => handleDragStart(e, index)} 
+                onDragEnter={(e) => handleDragEnter(e, index)} 
+                onDragEnd={handleDragEnd} 
+                onDragOver={(e) => e.preventDefault()} 
+                className={`relative transition-all duration-200 order-row`}
+            >
+               <div className="flex-grow h-full">
+                   {/* Grip handle is now handled INSIDE OrderCard via prop to avoid layout mess, but events are bubbled or OrderCard can have its own drag logic. 
+                       Actually, the wrapper 'draggable' handles desktop. 
+                       For mobile, we need the Touch events on a specific element.
+                       We will pass touch handlers to OrderCard to attach to the Grip button.
+                   */}
+                   <OrderCard 
+                        order={order} 
+                        onUpdate={handleUpdate} 
+                        onDelete={handleDeleteClick} 
+                        onEdit={handleEdit} 
+                        isSortMode={sortBy === 'ROUTE'} 
+                        index={index} 
+                        isCompactMode={isCompactMode}
+                        // Pass Touch Handlers for the Grip Button inside OrderCard
+                        onTouchStart={(e) => handleTouchStart(e, index)}
+                        onTouchMove={handleTouchMove}
+                        onTouchEnd={handleTouchEnd}
+                   />
+               </div>
             </div>
           ))
         )}

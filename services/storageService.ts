@@ -186,10 +186,14 @@ export const storageService = {
           const q = query(collection(db, "notifications"));
           const snap = await getDocs(q);
           const batch = writeBatch(db);
+          let count = 0;
           snap.forEach(d => {
-              if (!d.data().isRead) batch.update(d.ref, { isRead: true });
+              if (!d.data().isRead) {
+                  batch.update(d.ref, { isRead: true });
+                  count++;
+              }
           });
-          await batch.commit();
+          if (count > 0) await batch.commit();
       } else {
           const local = localStorage.getItem(NOTIF_KEY);
           if (!local) return;
@@ -271,11 +275,11 @@ export const storageService = {
       lastOrderDate: Date.now()
     });
 
-    // Notification
+    // Notification: Customer Name - Address
     const user = storageService.getCurrentUser() || 'Ai đó';
     storageService.addNotification(
-        'Đơn hàng mới', 
-        `${user} đã tạo đơn #${order.id} cho ${order.customerName}`,
+        `${order.customerName} - ${order.address.substring(0, 20)}...`, 
+        `${user} đã tạo đơn #${order.id}`,
         'success',
         order.id
     );
@@ -296,7 +300,7 @@ export const storageService = {
     }
     // Notification
     const user = storageService.getCurrentUser() || 'Ai đó';
-    storageService.addNotification('Cập nhật đơn', `${user} đã chỉnh sửa chi tiết đơn #${updatedOrder.id}`, 'info', updatedOrder.id);
+    storageService.addNotification(`${updatedOrder.customerName}`, `${user} đã chỉnh sửa đơn #${updatedOrder.id}`, 'info', updatedOrder.id);
   },
 
   updateStatus: async (id: string, status: OrderStatus, proof?: string): Promise<Order | null> => {

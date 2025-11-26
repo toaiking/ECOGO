@@ -13,6 +13,9 @@ interface Props {
   isSortMode?: boolean;
   index?: number;
   isCompactMode?: boolean; 
+  onTouchStart?: (e: React.TouchEvent<HTMLDivElement>) => void;
+  onTouchMove?: (e: React.TouchEvent<HTMLDivElement>) => void;
+  onTouchEnd?: (e: React.TouchEvent<HTMLDivElement>) => void;
 }
 
 const statusConfig: Record<OrderStatus, { color: string; bg: string; label: string; icon: string }> = {
@@ -51,7 +54,8 @@ const compressImage = (file: File): Promise<string> => {
 
 export const OrderCard: React.FC<Props> = ({ 
   order, onUpdate, onDelete, onEdit, 
-  isSortMode, index, isCompactMode
+  isSortMode, index, isCompactMode,
+  onTouchStart, onTouchMove, onTouchEnd
 }) => {
   const [uploading, setUploading] = useState(false);
   const [showQR, setShowQR] = useState(false);
@@ -154,7 +158,7 @@ export const OrderCard: React.FC<Props> = ({
     return (
        <div className="flex items-center gap-1">
             {showText && (order.paymentMethod === PaymentMethod.CASH ? (<span className="text-[9px] font-bold text-gray-500 bg-gray-50 px-1.5 py-0.5 rounded border border-gray-200 whitespace-nowrap">Tiền mặt</span>) : order.paymentMethod === PaymentMethod.PAID ? (<span className="text-[9px] font-bold text-green-700 bg-green-50 px-1.5 py-0.5 rounded border border-green-100 whitespace-nowrap">Đã TT</span>) : (<span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border cursor-pointer whitespace-nowrap ${order.paymentVerified ? 'text-green-700 bg-green-50 border-green-100' : 'text-blue-600 bg-blue-50 border-blue-100'}`} onClick={(e) => { e.stopPropagation(); togglePaymentVerification(); }}>{order.paymentVerified ? 'Đã nhận' : 'Chờ CK'}</span>))}
-            {/* QR Button integrated here - Always visible if needed */}
+            {/* QR Button integrated here - Always visible */}
             <button onClick={showVietQR} className="w-6 h-6 flex-shrink-0 flex items-center justify-center rounded bg-white text-blue-600 hover:bg-blue-50 border border-blue-100 shadow-sm"><i className="fas fa-qrcode text-[10px]"></i></button>
        </div>
     );
@@ -221,12 +225,23 @@ export const OrderCard: React.FC<Props> = ({
   return (
     <>
     <div className={`group relative bg-white rounded-lg border shadow-sm transition-all duration-200 flex flex-col ${isSortMode ? 'border-dashed border-2 border-gray-300' : 'border-gray-100 hover:shadow-md'}`}>
-      {isSortMode && (<div className="absolute left-0 top-0 bottom-0 w-6 bg-gray-50 flex items-center justify-center border-r border-gray-100 z-10 cursor-grab"><span className="text-xs font-bold text-gray-400">#{index !== undefined ? index + 1 : ''}</span></div>)}
-      <div className={`flex-grow flex flex-col ${isSortMode ? 'pl-6' : ''}`}>
+      <div className={`flex-grow flex flex-col`}>
           {/* ULTRA COMPACT HEADER */}
-          <div className="p-3 flex justify-between items-start gap-3 border-b border-gray-50">
+          <div className="p-3 flex justify-between items-start gap-3 border-b border-gray-50 relative">
+             {/* Grip Handle for Touch Sorting */}
+             {isSortMode && (
+                 <div 
+                    className="absolute top-0 right-0 p-2 cursor-grab active:cursor-grabbing touch-none text-gray-300 hover:text-eco-600 z-10"
+                    onTouchStart={onTouchStart}
+                    onTouchMove={onTouchMove}
+                    onTouchEnd={onTouchEnd}
+                 >
+                     <i className="fas fa-grip-vertical text-lg"></i>
+                 </div>
+             )}
+
              {/* Left: Customer Info */}
-             <div className="flex-grow min-w-0">
+             <div className={`flex-grow min-w-0 ${isSortMode ? 'pr-6' : ''}`}>
                  <div className="flex items-center gap-2 mb-1">
                      <h3 className="font-bold text-gray-900 text-sm truncate leading-snug pb-1">{order.customerName}</h3>
                      <span className={`text-[9px] px-1.5 rounded-sm font-bold uppercase ${config.bg} ${config.color}`}>{config.label}</span>
@@ -238,7 +253,7 @@ export const OrderCard: React.FC<Props> = ({
                  </div>
              </div>
              
-             {/* Right: Price & Payment */}
+             {/* Right: Price & Payment (Hide if sorting to make space for grip on mobile if needed, but usually okay) */}
              <div className="text-right flex-shrink-0 flex flex-col items-end gap-1">
                  <div className="text-sm font-black text-eco-700 leading-none">{new Intl.NumberFormat('vi-VN').format(order.totalPrice)}<span className="text-[9px] text-gray-400 font-normal ml-0.5">đ</span></div>
                  <div onClick={e => e.stopPropagation()}><PaymentBadge /></div>
