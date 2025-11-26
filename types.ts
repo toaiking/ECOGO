@@ -73,4 +73,15 @@ export interface BankConfig {
   accountNo: string;    // Số tài khoản
   accountName: string;  // Tên chủ tài khoản
   template: string;     // compact2 (mặc định)
+  sepayApiToken?: string; // Token SePay để check biến động
+}
+
+export interface Notification {
+  id: string;
+  title: string;
+  message: string;
+  type: 'info' | 'success' | 'warning' | 'error';
+  isRead: boolean;
+  createdAt: number;
+  relatedOrderId?: string;
 }

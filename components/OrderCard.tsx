@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { Order, OrderStatus, PaymentMethod } from '../types';
@@ -85,14 +86,30 @@ export const OrderCard: React.FC<Props> = ({
   };
   const handleDeletePhoto = async () => { if (window.confirm("Xóa ảnh?")) { await storageService.deleteDeliveryProof(order.id); toast.success("Đã xóa"); } };
   const handleShareProof = async () => {
-      if (!order.deliveryProof) return;
+      if (!order.deliveryProof) {
+          toast.error("Chưa có ảnh xác thực");
+          return;
+      }
       try {
           const base64Response = await fetch(order.deliveryProof);
           const blob = await base64Response.blob();
           const file = new File([blob], `delivery-${order.id}.jpg`, { type: "image/jpeg" });
           const text = `Đã giao đơn #${order.id} - ${order.customerName}`;
-          if (navigator.share) { await navigator.clipboard.writeText(text); toast("Đã copy nội dung!", { icon: '📋' }); await navigator.share({ title: `Giao hàng #${order.id}`, text: text, files: [file] }); } else { await navigator.clipboard.writeText(text); toast.success('Đã copy. Gửi thủ công nhé!'); }
-      } catch (e) { toast.error("Lỗi chia sẻ"); }
+          
+          // Copy text first
+          await navigator.clipboard.writeText(text); 
+          toast("Đã copy nội dung!", { icon: '📋' });
+          
+          // Then share image
+          if (navigator.share) { 
+              await navigator.share({ title: `Giao hàng #${order.id}`, text: text, files: [file] }); 
+          } else { 
+              toast.success('Trình duyệt không hỗ trợ Share ảnh. Hãy gửi thủ công.'); 
+          }
+      } catch (e) { 
+          console.error(e);
+          toast.error("Lỗi chia sẻ"); 
+      }
   };
   const handleFinishOrder = async (method: PaymentMethod) => {
       const updated = { ...order, paymentMethod: method };
@@ -137,6 +154,7 @@ export const OrderCard: React.FC<Props> = ({
     return (
        <div className="flex items-center gap-1">
             {showText && (order.paymentMethod === PaymentMethod.CASH ? (<span className="text-[9px] font-bold text-gray-500 bg-gray-50 px-1.5 py-0.5 rounded border border-gray-200 whitespace-nowrap">Tiền mặt</span>) : order.paymentMethod === PaymentMethod.PAID ? (<span className="text-[9px] font-bold text-green-700 bg-green-50 px-1.5 py-0.5 rounded border border-green-100 whitespace-nowrap">Đã TT</span>) : (<span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border cursor-pointer whitespace-nowrap ${order.paymentVerified ? 'text-green-700 bg-green-50 border-green-100' : 'text-blue-600 bg-blue-50 border-blue-100'}`} onClick={(e) => { e.stopPropagation(); togglePaymentVerification(); }}>{order.paymentVerified ? 'Đã nhận' : 'Chờ CK'}</span>))}
+            {/* QR Button integrated here - Always visible if needed */}
             <button onClick={showVietQR} className="w-6 h-6 flex-shrink-0 flex items-center justify-center rounded bg-white text-blue-600 hover:bg-blue-50 border border-blue-100 shadow-sm"><i className="fas fa-qrcode text-[10px]"></i></button>
        </div>
     );
@@ -205,12 +223,11 @@ export const OrderCard: React.FC<Props> = ({
     <div className={`group relative bg-white rounded-lg border shadow-sm transition-all duration-200 flex flex-col ${isSortMode ? 'border-dashed border-2 border-gray-300' : 'border-gray-100 hover:shadow-md'}`}>
       {isSortMode && (<div className="absolute left-0 top-0 bottom-0 w-6 bg-gray-50 flex items-center justify-center border-r border-gray-100 z-10 cursor-grab"><span className="text-xs font-bold text-gray-400">#{index !== undefined ? index + 1 : ''}</span></div>)}
       <div className={`flex-grow flex flex-col ${isSortMode ? 'pl-6' : ''}`}>
-          {/* ULTRA COMPACT HEADER - Adjusted padding and leading to prevent clipping */}
+          {/* ULTRA COMPACT HEADER */}
           <div className="p-3 flex justify-between items-start gap-3 border-b border-gray-50">
              {/* Left: Customer Info */}
              <div className="flex-grow min-w-0">
                  <div className="flex items-center gap-2 mb-1">
-                     {/* Changed leading-none to leading-snug and added pb-1 to fix clipping of descenders like g, y, p */}
                      <h3 className="font-bold text-gray-900 text-sm truncate leading-snug pb-1">{order.customerName}</h3>
                      <span className={`text-[9px] px-1.5 rounded-sm font-bold uppercase ${config.bg} ${config.color}`}>{config.label}</span>
                  </div>
@@ -261,6 +278,7 @@ export const OrderCard: React.FC<Props> = ({
                             <div className="absolute bottom-full right-0 mb-1 bg-white shadow-xl border border-gray-200 rounded-lg p-1 min-w-[110px] z-20 animate-fade-in">
                                 <button onClick={() => { onEdit(order); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-blue-600 font-bold flex items-center gap-2 rounded"><i className="fas fa-edit"></i> Sửa đơn</button>
                                 <button onClick={() => { handlePrint(); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-gray-600 flex items-center gap-2 rounded"><i className="fas fa-print"></i> In phiếu</button>
+                                {/* Share Proof Button */}
                                 {order.deliveryProof && <button onClick={() => { handleShareProof(); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-purple-600 flex items-center gap-2 rounded"><i className="fas fa-share-alt"></i> Gửi ảnh</button>}
                                 <div className="border-t border-gray-100 my-1"></div>
                                 {order.deliveryProof && <button onClick={() => { handleDeletePhoto(); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-red-50 text-xs text-red-500 flex items-center gap-2 rounded"><i className="fas fa-image"></i> Xóa ảnh</button>}

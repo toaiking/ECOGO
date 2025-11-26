@@ -1,6 +1,7 @@
 
-import { Order, OrderStatus, Product, Customer, BankConfig } from '../types';
+import { Order, OrderStatus, Product, Customer, BankConfig, Notification } from '../types';
 import { db } from '../firebaseConfig';
+import { v4 as uuidv4 } from 'uuid';
 import { 
   collection, 
   addDoc, 
@@ -13,7 +14,8 @@ import {
   orderBy,
   getDocs,
   writeBatch,
-  deleteField 
+  deleteField,
+  limit 
 } from "firebase/firestore";
 
 const ORDER_KEY = 'ecogo_orders_v3'; 
@@ -21,6 +23,7 @@ const PRODUCT_KEY = 'ecogo_products_v1';
 const CUSTOMER_KEY = 'ecogo_customers_v1';
 const USER_KEY = 'ecogo_current_user';
 const BANK_KEY = 'ecogo_bank_config';
+const NOTIF_KEY = 'ecogo_notifications_v1';
 
 // Helper to determine if we use Firebase
 const isOnline = () => !!db;
@@ -40,18 +43,15 @@ export const storageService = {
   // --- Bank Configuration ---
   saveBankConfig: async (config: BankConfig): Promise<void> => {
       localStorage.setItem(BANK_KEY, JSON.stringify(config));
-      // Nếu online, có thể lưu vào collection settings (Tùy chọn, hiện tại lưu local cho đơn giản mỗi máy một setting hoặc sync sau)
       if (isOnline()) {
           await setDoc(doc(db, "settings", "bankConfig"), config);
       }
   },
 
   getBankConfig: async (): Promise<BankConfig | null> => {
-      // Ưu tiên lấy từ Local trước để nhanh
       const localData = localStorage.getItem(BANK_KEY);
       if (localData) return JSON.parse(localData);
 
-      // Nếu không có local, thử lấy online
       if (isOnline()) {
          try {
              const snap = await getDocs(collection(db, "settings"));
@@ -60,7 +60,7 @@ export const storageService = {
                  if (d.id === 'bankConfig') config = d.data() as BankConfig;
              });
              if (config) {
-                 localStorage.setItem(BANK_KEY, JSON.stringify(config)); // Cache local
+                 localStorage.setItem(BANK_KEY, JSON.stringify(config)); 
                  return config;
              }
          } catch (e) { console.error(e); }
@@ -82,11 +82,9 @@ export const storageService = {
         const customers: Customer[] = localCustomersRaw ? JSON.parse(localCustomersRaw) : [];
 
         let count = 0;
-        const batch = writeBatch(db); // Use batch for atomicity (limit 500 ops)
+        const batch = writeBatch(db); 
 
-        // 1. Sync Orders
         for (const order of orders) {
-            // Fix data structure if needed
             const cleanOrder = {
                 ...order,
                 items: Array.isArray(order.items) ? order.items : [],
@@ -97,13 +95,11 @@ export const storageService = {
             count++;
         }
 
-        // 2. Sync Products
         for (const product of products) {
             const prodRef = doc(db, "products", product.id);
             batch.set(prodRef, product);
         }
 
-        // 3. Sync Customers
         for (const customer of customers) {
              const cid = customer.id || customer.phone || customer.name;
              if (cid) {
@@ -120,6 +116,89 @@ export const storageService = {
     }
   },
 
+  // --- Notifications System ---
+  
+  addNotification: async (title: string, message: string, type: 'info' | 'success' | 'warning' | 'error', relatedOrderId?: string) => {
+      const notif: Notification = {
+          id: uuidv4(),
+          title,
+          message,
+          type,
+          isRead: false,
+          createdAt: Date.now(),
+          relatedOrderId
+      };
+
+      if (isOnline()) {
+          await addDoc(collection(db, "notifications"), notif);
+      } else {
+          const local = localStorage.getItem(NOTIF_KEY);
+          const list: Notification[] = local ? JSON.parse(local) : [];
+          list.unshift(notif);
+          // Keep only last 50
+          if (list.length > 50) list.pop();
+          localStorage.setItem(NOTIF_KEY, JSON.stringify(list));
+          window.dispatchEvent(new Event('storage_notif'));
+      }
+  },
+
+  subscribeNotifications: (callback: (notifs: Notification[]) => void) => {
+      if (isOnline()) {
+          const q = query(collection(db, "notifications"), orderBy("createdAt", "desc"), limit(50));
+          return onSnapshot(q, (snapshot) => {
+              const list: Notification[] = [];
+              snapshot.forEach(d => list.push({ ...d.data(), id: d.id } as Notification));
+              callback(list);
+          });
+      } else {
+          const load = () => {
+              try {
+                  const data = localStorage.getItem(NOTIF_KEY);
+                  callback(data ? JSON.parse(data) : []);
+              } catch { callback([]); }
+          };
+          load();
+          const handler = () => load();
+          window.addEventListener('storage_notif', handler);
+          return () => window.removeEventListener('storage_notif', handler);
+      }
+  },
+
+  markNotificationRead: async (id: string) => {
+      if (isOnline()) {
+          await updateDoc(doc(db, "notifications", id), { isRead: true });
+      } else {
+          const local = localStorage.getItem(NOTIF_KEY);
+          if (!local) return;
+          const list: Notification[] = JSON.parse(local);
+          const idx = list.findIndex(n => n.id === id);
+          if (idx !== -1) {
+              list[idx].isRead = true;
+              localStorage.setItem(NOTIF_KEY, JSON.stringify(list));
+              window.dispatchEvent(new Event('storage_notif'));
+          }
+      }
+  },
+
+  markAllNotificationsRead: async () => {
+      if (isOnline()) {
+          // Client-side loop for simplicity in this context (or use batch if many)
+          const q = query(collection(db, "notifications"));
+          const snap = await getDocs(q);
+          const batch = writeBatch(db);
+          snap.forEach(d => {
+              if (!d.data().isRead) batch.update(d.ref, { isRead: true });
+          });
+          await batch.commit();
+      } else {
+          const local = localStorage.getItem(NOTIF_KEY);
+          if (!local) return;
+          const list: Notification[] = JSON.parse(local).map((n: Notification) => ({ ...n, isRead: true }));
+          localStorage.setItem(NOTIF_KEY, JSON.stringify(list));
+          window.dispatchEvent(new Event('storage_notif'));
+      }
+  },
+
   // --- Orders (Real-time & Sync) ---
   
   subscribeOrders: (callback: (orders: Order[]) => void) => {
@@ -130,7 +209,6 @@ export const storageService = {
         snapshot.forEach((doc) => {
           orders.push(doc.data() as Order);
         });
-        // Sort client side 
         orders.sort((a, b) => b.createdAt - a.createdAt);
         callback(orders);
       });
@@ -184,10 +262,7 @@ export const storageService = {
       window.dispatchEvent(new Event('storage'));
     }
     
-    // Inventory Deduct Logic
     await storageService.deductInventory(order);
-
-    // Customer Save Logic
     storageService.upsertCustomer({
       name: order.customerName,
       phone: order.customerPhone,
@@ -195,6 +270,15 @@ export const storageService = {
       id: order.customerPhone || order.customerName,
       lastOrderDate: Date.now()
     });
+
+    // Notification
+    const user = storageService.getCurrentUser() || 'Ai đó';
+    storageService.addNotification(
+        'Đơn hàng mới', 
+        `${user} đã tạo đơn #${order.id} cho ${order.customerName}`,
+        'success',
+        order.id
+    );
   },
 
   updateOrderDetails: async (updatedOrder: Order): Promise<void> => {
@@ -210,6 +294,9 @@ export const storageService = {
         window.dispatchEvent(new Event('storage'));
       }
     }
+    // Notification
+    const user = storageService.getCurrentUser() || 'Ai đó';
+    storageService.addNotification('Cập nhật đơn', `${user} đã chỉnh sửa chi tiết đơn #${updatedOrder.id}`, 'info', updatedOrder.id);
   },
 
   updateStatus: async (id: string, status: OrderStatus, proof?: string): Promise<Order | null> => {
@@ -223,21 +310,37 @@ export const storageService = {
 
     if (isOnline()) {
       await updateDoc(doc(db, "orders", id), updateData);
-      return null;
     } else {
       const orders = storageService.getOrdersSync();
       const index = orders.findIndex(o => o.id === id);
-      if (index === -1) return null;
-      orders[index] = { ...orders[index], ...updateData };
-      localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
-      window.dispatchEvent(new Event('storage'));
-      return orders[index];
+      if (index !== -1) {
+          orders[index] = { ...orders[index], ...updateData };
+          localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
+          window.dispatchEvent(new Event('storage'));
+      }
     }
+
+    // Notification logic for status change
+    let statusMsg = '';
+    if (status === OrderStatus.PICKED_UP) statusMsg = 'đã lấy hàng';
+    if (status === OrderStatus.IN_TRANSIT) statusMsg = 'đang giao';
+    if (status === OrderStatus.DELIVERED) statusMsg = 'đã giao thành công';
+    if (status === OrderStatus.CANCELLED) statusMsg = 'đã bị hủy';
+    
+    if (statusMsg) {
+        storageService.addNotification(
+            'Trạng thái đơn', 
+            `Đơn #${id} ${statusMsg} bởi ${currentUser}`,
+            status === OrderStatus.CANCELLED ? 'error' : (status === OrderStatus.DELIVERED ? 'success' : 'info'),
+            id
+        );
+    }
+
+    return null;
   },
 
   deleteDeliveryProof: async (id: string): Promise<void> => {
       if (isOnline()) {
-          // Use deleteField to remove the field from Firestore document
           await updateDoc(doc(db, "orders", id), {
               deliveryProof: deleteField(),
               updatedAt: Date.now()
@@ -255,6 +358,7 @@ export const storageService = {
   },
   
   updatePaymentVerification: async (id: string, verified: boolean): Promise<void> => {
+      const currentUser = storageService.getCurrentUser() || 'Admin';
       if (isOnline()) {
           await updateDoc(doc(db, "orders", id), { paymentVerified: verified, updatedAt: Date.now() });
       } else {
@@ -266,9 +370,13 @@ export const storageService = {
               window.dispatchEvent(new Event('storage'));
           }
       }
+      if (verified) {
+          storageService.addNotification('Thanh toán', `Đơn #${id} đã được xác nhận thanh toán bởi ${currentUser}`, 'success', id);
+      }
   },
 
   deleteOrder: async (id: string): Promise<void> => {
+    const currentUser = storageService.getCurrentUser() || 'Admin';
     if (isOnline()) {
       await deleteDoc(doc(db, "orders", id));
     } else {
@@ -277,6 +385,7 @@ export const storageService = {
       localStorage.setItem(ORDER_KEY, JSON.stringify(filtered));
       window.dispatchEvent(new Event('storage'));
     }
+    storageService.addNotification('Xóa đơn', `Đơn #${id} đã bị xóa bởi ${currentUser}`, 'warning', id);
   },
 
   saveOrdersList: async (orders: Order[]): Promise<void> => {

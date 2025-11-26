@@ -6,6 +6,8 @@ import toast from 'react-hot-toast';
 import { db } from '../firebaseConfig';
 import ConfirmModal from './ConfirmModal';
 import SettingsModal from './SettingsModal';
+import NotificationMenu from './NotificationMenu';
+import { Notification } from '../types';
 
 // Khai báo để TypeScript không báo lỗi
 declare const __APP_VERSION__: string;
@@ -18,15 +20,19 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [showConfirmSync, setShowConfirmSync] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showNotif, setShowNotif] = useState(false);
   const [installPrompt, setInstallPrompt] = useState<any>(null);
   const [isIOS, setIsIOS] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   
+  const [unreadCount, setUnreadCount] = useState(0);
+
   const mobileMenuRef = useRef<HTMLDivElement>(null);
+  const notifBtnRef = useRef<HTMLButtonElement>(null);
   const location = useLocation();
   const isOnline = !!db;
   
-  const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.0.1';
+  const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.1.10';
 
   useEffect(() => {
     // Check if iOS
@@ -47,18 +53,29 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
       if (mobileMenuRef.current && !mobileMenuRef.current.contains(event.target as Node)) {
         setIsMobileMenuOpen(false);
       }
+      // Also close notif if clicking outside (handled inside NotificationMenu too but safe here)
+      if (showNotif && notifBtnRef.current && !notifBtnRef.current.contains(event.target as Node) && !(event.target as Element).closest('.animate-fade-in-down')) {
+          setShowNotif(false);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
+
+    // Subscribe to notifications for badge
+    const unsubNotif = storageService.subscribeNotifications((notifs) => {
+        setUnreadCount(notifs.filter(n => !n.isRead).length);
+    });
 
     return () => {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
       document.removeEventListener('mousedown', handleClickOutside);
+      if (unsubNotif) unsubNotif();
     };
-  }, []);
+  }, [showNotif]);
 
   // Close menu when route changes
   useEffect(() => {
       setIsMobileMenuOpen(false);
+      setShowNotif(false);
   }, [location]);
 
   const handleInstallClick = () => {
@@ -161,6 +178,21 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
 
                 <div className="w-px h-6 bg-eco-700 mx-2"></div>
 
+                <div className="relative">
+                    <button 
+                        ref={notifBtnRef}
+                        onClick={() => setShowNotif(!showNotif)} 
+                        className="p-2 text-eco-200 hover:text-white relative" 
+                        title="Thông báo"
+                    >
+                        <i className="fas fa-bell"></i>
+                        {unreadCount > 0 && (
+                            <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-eco-900"></span>
+                        )}
+                    </button>
+                    <NotificationMenu isOpen={showNotif} onClose={() => setShowNotif(false)} />
+                </div>
+
                 {isOnline && (
                   <button onClick={handleSyncClick} className="p-2 text-eco-200 hover:text-white" title="Đồng bộ">
                       <i className={`fas fa-cloud-upload-alt ${isSyncing ? 'animate-bounce' : ''}`}></i>
@@ -176,6 +208,21 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
 
             {/* MOBILE ACTION BAR */}
             <div className="md:hidden flex items-center gap-3">
+                {/* Notification Bell (Mobile) */}
+                <div className="relative">
+                    <button 
+                        ref={notifBtnRef}
+                        onClick={() => setShowNotif(!showNotif)} 
+                        className={`p-3 rounded-xl transition-all relative ${showNotif ? 'bg-eco-700 text-white' : 'text-eco-100'}`}
+                    >
+                        <i className="fas fa-bell text-xl"></i>
+                        {unreadCount > 0 && (
+                            <span className="absolute top-2 right-2 w-3 h-3 bg-red-500 rounded-full border-2 border-eco-800"></span>
+                        )}
+                    </button>
+                    <NotificationMenu isOpen={showNotif} onClose={() => setShowNotif(false)} />
+                </div>
+
                 {/* Priority Actions */}
                 <NavLink to="/order" className={({ isActive }) => mobileLinkClass(isActive)}>
                     <i className="fas fa-plus-circle text-xl"></i>

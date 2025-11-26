@@ -1,7 +1,7 @@
 {
   "name": "ecogo-logistics",
   "private": true,
-  "version": "1.1.9",
+  "version": "1.1.11",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -15,7 +15,8 @@
     "react-dom": "^18.2.0",
     "react-hot-toast": "^2.4.1",
     "react-router-dom": "^6.22.0",
-    "uuid": "^9.0.1"
+    "uuid": "^9.0.1",
+    "date-fns": "^3.3.1"
   },
   "devDependencies": {
     "@types/react": "^18.2.55",
