@@ -76,14 +76,27 @@ export const OrderCard: React.FC<Props> = ({
       return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const handleStatusChange = async (newStatus: OrderStatus) => { await storageService.updateStatus(order.id, newStatus); };
+  const handleStatusChange = async (newStatus: OrderStatus) => { 
+      await storageService.updateStatus(
+          order.id, 
+          newStatus, 
+          undefined, 
+          { name: order.customerName, address: order.address }
+      ); 
+  };
+
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       setUploading(true);
       try {
           const compressedBase64 = await compressImage(file);
-          await storageService.updateStatus(order.id, OrderStatus.DELIVERED, compressedBase64);
+          await storageService.updateStatus(
+              order.id, 
+              OrderStatus.DELIVERED, 
+              compressedBase64,
+              { name: order.customerName, address: order.address }
+          );
           toast.success('Đã lưu ảnh & Hoàn tất');
       } catch (error) { toast.error("Lỗi xử lý ảnh"); } finally { setUploading(false); }
     }
@@ -118,11 +131,23 @@ export const OrderCard: React.FC<Props> = ({
   const handleFinishOrder = async (method: PaymentMethod) => {
       const updated = { ...order, paymentMethod: method };
       await storageService.updateOrderDetails(updated);
-      await storageService.updateStatus(order.id, OrderStatus.DELIVERED);
+      await storageService.updateStatus(
+          order.id, 
+          OrderStatus.DELIVERED, 
+          undefined,
+          { name: order.customerName, address: order.address }
+      );
       toast.success(`Xong: ${method === PaymentMethod.CASH ? 'Tiền mặt' : 'Chuyển khoản'}`);
       setShowCompactPaymentChoice(false);
   };
-  const togglePaymentVerification = async () => { await storageService.updatePaymentVerification(order.id, !order.paymentVerified); if (!order.paymentVerified) toast.success("Đã xác nhận tiền!"); };
+  const togglePaymentVerification = async () => { 
+      await storageService.updatePaymentVerification(
+          order.id, 
+          !order.paymentVerified,
+          { name: order.customerName }
+      ); 
+      if (!order.paymentVerified) toast.success("Đã xác nhận tiền!"); 
+  };
   const showVietQR = async (e?: React.MouseEvent) => {
       e?.stopPropagation();
       if (showQR) { setShowQR(false); return; }
@@ -158,7 +183,6 @@ export const OrderCard: React.FC<Props> = ({
     return (
        <div className="flex items-center gap-1">
             {showText && (order.paymentMethod === PaymentMethod.CASH ? (<span className="text-[9px] font-bold text-gray-500 bg-gray-50 px-1.5 py-0.5 rounded border border-gray-200 whitespace-nowrap">Tiền mặt</span>) : order.paymentMethod === PaymentMethod.PAID ? (<span className="text-[9px] font-bold text-green-700 bg-green-50 px-1.5 py-0.5 rounded border border-green-100 whitespace-nowrap">Đã TT</span>) : (<span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border cursor-pointer whitespace-nowrap ${order.paymentVerified ? 'text-green-700 bg-green-50 border-green-100' : 'text-blue-600 bg-blue-50 border-blue-100'}`} onClick={(e) => { e.stopPropagation(); togglePaymentVerification(); }}>{order.paymentVerified ? 'Đã nhận' : 'Chờ CK'}</span>))}
-            {/* QR Button integrated here - Always visible */}
             <button onClick={showVietQR} className="w-6 h-6 flex-shrink-0 flex items-center justify-center rounded bg-white text-blue-600 hover:bg-blue-50 border border-blue-100 shadow-sm"><i className="fas fa-qrcode text-[10px]"></i></button>
        </div>
     );
@@ -177,9 +201,8 @@ export const OrderCard: React.FC<Props> = ({
                     <div className="flex items-center gap-1 pl-2">{!isCompleted && (<button onClick={nextStatus} className="w-7 h-7 flex items-center justify-center rounded bg-gray-100 hover:bg-black hover:text-white transition-colors"><i className="fas fa-arrow-right text-xs"></i></button>)}<button onClick={(e) => { e.stopPropagation(); sendSMS(); }} className="w-7 h-7 flex items-center justify-center text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded"><i className="fas fa-comment-dots text-xs"></i></button></div>
                </div>
                
-               {/* MOBILE COMPACT - 3 LINE LAYOUT (Tighter Buffer) */}
+               {/* MOBILE COMPACT - 3 LINE LAYOUT */}
                <div className="md:hidden flex flex-col gap-0.5 relative">
-                    {/* Line 1: Name | Call/SMS | Price */}
                     <div className="flex justify-between items-center">
                         <div className="flex items-center gap-2 overflow-hidden max-w-[65%]">
                             <span className="font-bold text-gray-900 text-sm truncate">{order.customerName}</span>
@@ -192,7 +215,6 @@ export const OrderCard: React.FC<Props> = ({
                         <span className="font-black text-gray-900 text-sm">{new Intl.NumberFormat('vi-VN').format(order.totalPrice)}<small className="text-[9px] text-gray-400 font-normal">đ</small></span>
                     </div>
                     
-                    {/* Line 2: Address | Status Badge */}
                     <div className="flex justify-between items-center">
                         <div className="text-[10px] text-gray-500 truncate max-w-[70%] flex items-center gap-1">
                             <i className="fas fa-map-marker-alt text-[8px] text-gray-300"></i> {order.address}
@@ -200,7 +222,6 @@ export const OrderCard: React.FC<Props> = ({
                         <span className={`text-[9px] px-1.5 rounded font-bold uppercase whitespace-nowrap ${config.bg} ${config.color}`}>{config.label}</span>
                     </div>
 
-                    {/* Line 3: Items | Payment & Action */}
                     <div className="flex justify-between items-center pt-0.5 border-t border-gray-50 mt-0.5">
                         <div className="text-[10px] text-gray-400 italic truncate pr-2 flex-grow">
                             {order.items.map(i => `${i.name} x${i.quantity}`).join(', ')}
@@ -253,7 +274,7 @@ export const OrderCard: React.FC<Props> = ({
                  </div>
              </div>
              
-             {/* Right: Price & Payment (Hide if sorting to make space for grip on mobile if needed, but usually okay) */}
+             {/* Right: Price & Payment */}
              <div className="text-right flex-shrink-0 flex flex-col items-end gap-1">
                  <div className="text-sm font-black text-eco-700 leading-none">{new Intl.NumberFormat('vi-VN').format(order.totalPrice)}<span className="text-[9px] text-gray-400 font-normal ml-0.5">đ</span></div>
                  <div onClick={e => e.stopPropagation()}><PaymentBadge /></div>

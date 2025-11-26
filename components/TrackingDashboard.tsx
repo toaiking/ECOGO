@@ -12,7 +12,7 @@ type SortOption = 'NEWEST' | 'ROUTE' | 'STATUS';
 const TrackingDashboard: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [products, setProducts] = useState<Product[]>([]); 
-  const [filterStatus, setFilterStatus] = useState<OrderStatus | 'ALL'>('ALL');
+  const [filterStatus, setFilterStatus] = useState<OrderStatus[]>([]);
   const [filterBatch, setFilterBatch] = useState<string>('ALL');
   const [filterUser, setFilterUser] = useState<string>('ALL');
   const [searchTerm, setSearchTerm] = useState('');
@@ -22,7 +22,7 @@ const TrackingDashboard: React.FC = () => {
   const [activeEditProductRow, setActiveEditProductRow] = useState<number | null>(null); 
   const [showReport, setShowReport] = useState(false);
   
-  // Smart Scroll State: Intersection Observer for Zero Lag
+  // Smart Scroll State
   const [isHeaderVisible, setIsHeaderVisible] = useState(true);
   const observerTarget = useRef<HTMLDivElement>(null);
 
@@ -33,12 +33,21 @@ const TrackingDashboard: React.FC = () => {
   const dragItem = useRef<number | null>(null);
   const dragOverItem = useRef<number | null>(null);
   const editModalRef = useRef<HTMLDivElement>(null);
+  
+  // Dropdown Floating State
+  const statusDropdownBtnRef = useRef<HTMLButtonElement>(null);
+  const [isStatusDropdownOpen, setIsStatusDropdownOpen] = useState(false);
+  const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0, width: 0 });
 
-  // SCROLL LOGIC - ZERO LAG INTERSECTION OBSERVER
+  const statusLabels: Record<OrderStatus, string> = { [OrderStatus.PENDING]: 'Chờ xử lý', [OrderStatus.PICKED_UP]: 'Đã lấy hàng', [OrderStatus.IN_TRANSIT]: 'Đang giao', [OrderStatus.DELIVERED]: 'Đã giao', [OrderStatus.CANCELLED]: 'Đã hủy' };
+
+  // SCROLL LOGIC
   useEffect(() => {
       const observer = new IntersectionObserver(
           ([entry]) => {
               setIsHeaderVisible(entry.isIntersecting);
+              // Close dropdown on scroll to avoid detachment
+              setIsStatusDropdownOpen(false);
           },
           { threshold: 0, rootMargin: "-64px 0px 0px 0px" }
       );
@@ -57,9 +66,17 @@ const TrackingDashboard: React.FC = () => {
     const unsubscribeProducts = storageService.subscribeProducts((data) => {
         setProducts(data);
     });
+    
+    // Listener to close floating dropdown on resize/scroll
+    const handleWindowEvents = () => setIsStatusDropdownOpen(false);
+    window.addEventListener('resize', handleWindowEvents);
+    window.addEventListener('scroll', handleWindowEvents, true);
+
     return () => {
         if (typeof unsubscribeOrders === 'function') unsubscribeOrders();
         if (typeof unsubscribeProducts === 'function') unsubscribeProducts();
+        window.removeEventListener('resize', handleWindowEvents);
+        window.removeEventListener('scroll', handleWindowEvents, true);
     };
   }, []);
 
@@ -68,10 +85,18 @@ const TrackingDashboard: React.FC = () => {
           if (activeEditProductRow !== null && !(event.target as Element).closest('.product-dropdown-container')) {
               setActiveEditProductRow(null);
           }
+          // Logic for status dropdown click outside
+          if (isStatusDropdownOpen && statusDropdownBtnRef.current && !statusDropdownBtnRef.current.contains(event.target as Node)) {
+              // Check if clicked inside the floating dropdown (handled via class or id check if strictly needed, but simple toggle usually works)
+              const dropdown = document.getElementById('floating-status-dropdown');
+              if (dropdown && !dropdown.contains(event.target as Node)) {
+                  setIsStatusDropdownOpen(false);
+              }
+          }
       };
       document.addEventListener('mousedown', handleClickOutside);
       return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [activeEditProductRow]);
+  }, [activeEditProductRow, isStatusDropdownOpen]);
 
   const batches = useMemo(() => {
     const batchActivity = new Map<string, number>();
@@ -92,7 +117,7 @@ const TrackingDashboard: React.FC = () => {
   
   const filteredOrders = useMemo(() => {
     let result = orders.filter(o => {
-      const statusMatch = filterStatus === 'ALL' || o.status === filterStatus;
+      const statusMatch = filterStatus.length === 0 || filterStatus.includes(o.status);
       const batchMatch = filterBatch === 'ALL' || o.batchId === filterBatch;
       const userMatch = filterUser === 'ALL' || o.lastUpdatedBy === filterUser;
       const searchLower = searchTerm.toLowerCase();
@@ -145,7 +170,21 @@ const TrackingDashboard: React.FC = () => {
 
   const handleUpdate = (updatedOrder: Order) => {};
   const handleDeleteClick = (id: string) => { setDeleteId(id); setShowDeleteConfirm(true); };
-  const confirmDelete = async () => { if (deleteId) { await storageService.deleteOrder(deleteId); toast.success('Đã xóa đơn hàng'); setShowDeleteConfirm(false); setDeleteId(null); } };
+  
+  const confirmDelete = async () => { 
+      if (deleteId) { 
+          const orderToDelete = orders.find(o => o.id === deleteId);
+          // Pass customer info to ensure correct notification
+          await storageService.deleteOrder(
+              deleteId, 
+              orderToDelete ? { name: orderToDelete.customerName, address: orderToDelete.address } : undefined
+          ); 
+          toast.success('Đã xóa đơn hàng'); 
+          setShowDeleteConfirm(false); 
+          setDeleteId(null); 
+      } 
+  };
+
   const handleEdit = (order: Order) => { setEditingOrder(JSON.parse(JSON.stringify(order))); setActiveEditProductRow(null); };
   const saveEdit = async (e: React.FormEvent) => { e.preventDefault(); if (editingOrder) { await storageService.updateOrderDetails(editingOrder); setEditingOrder(null); toast.success('Đã lưu thay đổi'); } };
   const updateEditItem = (index: number, field: keyof OrderItem, value: any) => { if (!editingOrder) return; const newItems = [...editingOrder.items]; newItems[index] = { ...newItems[index], [field]: value }; if (field === 'name') newItems[index].productId = undefined; const newTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0); setEditingOrder({ ...editingOrder, items: newItems, totalPrice: newTotal }); };
@@ -163,20 +202,17 @@ const TrackingDashboard: React.FC = () => {
       await storageService.saveOrdersList(reindexedList); 
   };
   
-  // --- TOUCH DRAG HANDLERS FOR MOBILE ---
+  // --- TOUCH DRAG HANDLERS ---
   const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>, position: number) => {
       dragItem.current = position;
-      // Visual feedback could be handled in OrderCard via props if needed, but for now relying on row ref
       e.currentTarget.closest('.order-row')?.classList.add('opacity-50', 'bg-yellow-50');
   };
 
   const handleTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
       if (dragItem.current === null) return;
-      
       const touch = e.touches[0];
       const element = document.elementFromPoint(touch.clientX, touch.clientY);
       const row = element?.closest('[data-index]');
-      
       if (row) {
           const newIndex = parseInt(row.getAttribute('data-index') || '-1');
           if (newIndex !== -1 && newIndex !== dragItem.current) {
@@ -184,7 +220,6 @@ const TrackingDashboard: React.FC = () => {
               const draggedItemContent = _orders[dragItem.current];
               _orders.splice(dragItem.current, 1);
               _orders.splice(newIndex, 0, draggedItemContent);
-              
               dragItem.current = newIndex;
               saveReorderedList(_orders);
           }
@@ -235,39 +270,80 @@ const TrackingDashboard: React.FC = () => {
       printWindow.document.close(); printWindow.print();
   };
   const formatCurrency = (amount: number) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(amount);
-  const statusLabels: Record<OrderStatus, string> = { [OrderStatus.PENDING]: 'Chờ xử lý', [OrderStatus.PICKED_UP]: 'Đã lấy hàng', [OrderStatus.IN_TRANSIT]: 'Đang giao', [OrderStatus.DELIVERED]: 'Đã giao', [OrderStatus.CANCELLED]: 'Đã hủy' };
+  
+  const toggleStatusFilter = (status: OrderStatus) => {
+      setFilterStatus(prev => prev.includes(status) ? prev.filter(s => s !== status) : [...prev, status]);
+  };
+  const getStatusLabel = () => filterStatus.length === 0 ? 'Trạng thái' : (filterStatus.length === 1 ? statusLabels[filterStatus[0]] : `Đã chọn (${filterStatus.length})`);
+
+  // Calculate Dropdown Position using Fixed strategy
+  const openStatusDropdown = () => {
+      if (statusDropdownBtnRef.current) {
+          const rect = statusDropdownBtnRef.current.getBoundingClientRect();
+          setDropdownPos({
+              top: rect.bottom + 4,
+              left: rect.left,
+              width: Math.max(rect.width, 160)
+          });
+          setIsStatusDropdownOpen(!isStatusDropdownOpen);
+      }
+  };
 
   return (
     <div className="animate-fade-in pb-20">
-      {/* SMART STICKY HEADER with Intersection Observer */}
+      {/* SMART STICKY HEADER */}
       <div className="sticky top-16 z-30 bg-gray-50/95 backdrop-blur-sm transition-shadow shadow-sm">
-         
-         {/* 1. SEARCH BAR (Always Visible) */}
-         <div className="bg-white border-b border-gray-100 p-2 flex gap-2 items-center">
-            <div className="relative group flex-grow">
-                <i className="fas fa-search absolute left-4 top-3 text-gray-400"></i>
-                <input placeholder="Tìm tên, sđt, địa chỉ..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2 rounded-xl bg-gray-50 border-transparent focus:bg-white focus:border-eco-200 focus:ring-2 focus:ring-eco-50 text-sm font-medium outline-none transition-all" />
-            </div>
-         </div>
+         {/* Mobile Header Layout (2 rows grid) */}
+         <div className="bg-white border-b border-gray-200 p-2 shadow-sm">
+             {/* Row 1: Search + Actions */}
+             <div className="flex gap-2 items-center mb-2">
+                <div className="relative flex-grow">
+                    <i className="fas fa-search absolute left-3 top-2.5 text-gray-400 text-sm"></i>
+                    <input placeholder="Tìm tên, sđt, địa chỉ..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full pl-9 pr-3 py-2 rounded-lg bg-gray-100 border-transparent focus:bg-white focus:ring-2 focus:ring-eco-100 text-sm font-medium outline-none transition-all" />
+                </div>
+                <button onClick={() => setIsCompactMode(!isCompactMode)} className={`w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg border transition-all ${isCompactMode ? 'bg-eco-100 text-eco-700 border-eco-200' : 'bg-white text-gray-400 border-gray-200'}`}><i className={`fas ${isCompactMode ? 'fa-list' : 'fa-th-large'}`}></i></button>
+                <button onClick={handlePrintList} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-white text-gray-500 hover:text-blue-600 border border-gray-200"><i className="fas fa-print"></i></button>
+                <button onClick={copyRouteToClipboard} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-white text-gray-500 hover:text-eco-600 border border-gray-200"><i className="fas fa-map-marked-alt"></i></button>
+             </div>
 
-         {/* 2. FILTERS (Collapsible via CSS Grid Transition) */}
-         <div 
-            className={`grid transition-[grid-template-rows] duration-300 ease-out ${isHeaderVisible ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}
-         >
-             <div className="overflow-hidden">
-                 <div className="bg-white border-b border-gray-200 p-2 shadow-sm">
-                    <div className="flex flex-col md:flex-row gap-2 items-center justify-between">
-                        <div className="flex gap-2 w-full overflow-x-auto no-scrollbar">
-                            <div className="relative min-w-[120px] flex-1"><select value={filterBatch} onChange={e => setFilterBatch(e.target.value)} className="w-full pl-3 pr-8 py-2 rounded-lg bg-gray-50 border-transparent focus:bg-white text-xs font-bold text-gray-700 appearance-none cursor-pointer outline-none"><option value="ALL">Tất cả Lô</option>{batches.map(b => <option key={b} value={b}>{b}</option>)}</select><i className="fas fa-chevron-down absolute right-3 top-2.5 text-gray-400 text-xs pointer-events-none"></i></div>
-                            {users.length > 0 && (<div className="relative min-w-[110px] flex-1"><select value={filterUser} onChange={e => setFilterUser(e.target.value)} className="w-full pl-3 pr-8 py-2 rounded-lg bg-gray-50 border-transparent focus:bg-white text-xs font-medium text-gray-700 appearance-none cursor-pointer outline-none"><option value="ALL">Người xử lý</option>{users.map(u => <option key={u} value={u}>{u}</option>)}</select><i className="fas fa-user absolute right-3 top-2.5 text-gray-400 text-xs pointer-events-none"></i></div>)}
-                            <div className="relative min-w-[130px] flex-1"><select value={filterStatus} onChange={e => setFilterStatus(e.target.value as any)} className="w-full pl-3 pr-8 py-2 rounded-lg bg-gray-50 border-transparent focus:bg-white text-xs font-medium appearance-none cursor-pointer outline-none"><option value="ALL">Mọi trạng thái</option>{Object.entries(statusLabels).map(([k,v]) => <option key={k} value={k}>{v}</option>)}</select><i className="fas fa-filter absolute right-3 top-2.5 text-gray-400 text-xs pointer-events-none"></i></div>
+             {/* Row 2: Collapsible Filters */}
+             <div className={`grid transition-[grid-template-rows] duration-300 ease-out ${isHeaderVisible ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
+                 <div className="overflow-hidden">
+                    <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+                        {/* Batch Select */}
+                        <div className="relative flex-1 min-w-[100px]">
+                            <select value={filterBatch} onChange={e => setFilterBatch(e.target.value)} className="w-full pl-2 pr-6 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-xs font-bold text-gray-700 appearance-none outline-none">
+                                <option value="ALL">Lô: Tất cả</option>{batches.map(b => <option key={b} value={b}>{b}</option>)}
+                            </select>
+                            <i className="fas fa-chevron-down absolute right-2 top-2 text-gray-400 text-[10px] pointer-events-none"></i>
                         </div>
-                        <div className="flex gap-2 w-full md:w-auto overflow-x-auto no-scrollbar items-center justify-end">
-                            <button onClick={() => setIsCompactMode(!isCompactMode)} className={`w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg border transition-all ${isCompactMode ? 'bg-eco-100 text-eco-700 border-eco-200' : 'bg-gray-50 text-gray-400 border-gray-200'}`} title="Chế độ xem"><i className={`fas ${isCompactMode ? 'fa-list' : 'fa-th-large'}`}></i></button>
-                            <button onClick={handlePrintList} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-gray-50 text-gray-500 hover:text-blue-600 border border-gray-200 transition-all"><i className="fas fa-print"></i></button>
-                            <button onClick={copyRouteToClipboard} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-gray-50 text-gray-500 hover:text-eco-600 border border-gray-200 transition-all"><i className="fas fa-map-marked-alt"></i></button>
-                            <div className="flex p-1 bg-gray-100 rounded-lg flex-shrink-0"><button onClick={() => setSortBy('NEWEST')} className={`px-2 py-1 rounded text-[10px] font-bold transition-all ${sortBy === 'NEWEST' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500'}`}>Mới nhất</button><button onClick={() => setSortBy('ROUTE')} className={`px-2 py-1 rounded text-[10px] font-bold transition-all flex items-center gap-1 ${sortBy === 'ROUTE' ? 'bg-white text-eco-700 shadow-sm' : 'text-gray-500'}`}><i className="fas fa-route"></i> Lộ trình</button></div>
-                            <button onClick={() => setShowReport(!showReport)} className={`w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg border transition-all ${showReport ? 'bg-black text-white border-black' : 'bg-white text-gray-400 border-gray-200'}`}><i className="fas fa-chart-bar"></i></button>
+                        
+                        {/* User Select */}
+                        {users.length > 0 && (
+                            <div className="relative flex-1 min-w-[90px]">
+                                <select value={filterUser} onChange={e => setFilterUser(e.target.value)} className="w-full pl-2 pr-6 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-xs font-medium text-gray-700 appearance-none outline-none">
+                                    <option value="ALL">User: All</option>{users.map(u => <option key={u} value={u}>{u}</option>)}
+                                </select>
+                                <i className="fas fa-user absolute right-2 top-2 text-gray-400 text-[10px] pointer-events-none"></i>
+                            </div>
+                        )}
+                        
+                        {/* Status Dropdown Trigger */}
+                        <div className="relative flex-1 min-w-[110px]">
+                            <button 
+                                ref={statusDropdownBtnRef}
+                                onClick={openStatusDropdown}
+                                className="w-full pl-2 pr-6 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-xs font-medium text-gray-700 text-left flex items-center justify-between outline-none truncate"
+                            >
+                                <span className="truncate">{getStatusLabel()}</span>
+                                <i className="fas fa-chevron-down text-gray-400 text-[10px]"></i>
+                            </button>
+                        </div>
+
+                        {/* Route Toggle */}
+                        <div className="flex bg-gray-100 rounded-lg p-0.5 flex-shrink-0">
+                            <button onClick={() => setSortBy('NEWEST')} className={`px-2 py-1 rounded-md text-[10px] font-bold transition-all ${sortBy === 'NEWEST' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-400'}`}>Mới</button>
+                            <button onClick={() => setSortBy('ROUTE')} className={`px-2 py-1 rounded-md text-[10px] font-bold transition-all flex items-center gap-1 ${sortBy === 'ROUTE' ? 'bg-white shadow-sm text-eco-700' : 'text-gray-400'}`}><i className="fas fa-route"></i> Route</button>
                         </div>
                     </div>
                  </div>
@@ -275,7 +351,28 @@ const TrackingDashboard: React.FC = () => {
          </div>
       </div>
 
-      {/* SENTINEL FOR SCROLL DETECTION */}
+      {/* FLOATING DROPDOWN PORTAL (FIXED POSITION TO ESCAPE OVERFLOW) */}
+      {isStatusDropdownOpen && (
+          <div 
+            id="floating-status-dropdown"
+            className="fixed z-[9999] bg-white border border-gray-100 rounded-lg shadow-xl max-h-60 overflow-y-auto p-1 animate-fade-in"
+            style={{ top: dropdownPos.top, left: dropdownPos.left, minWidth: dropdownPos.width }}
+          >
+            <div onClick={() => setFilterStatus([])} className={`px-3 py-2 rounded-md text-xs font-bold cursor-pointer flex items-center gap-2 transition-colors ${filterStatus.length === 0 ? 'bg-eco-50 text-eco-700' : 'hover:bg-gray-50 text-gray-700'}`}><i className={`fas ${filterStatus.length === 0 ? 'fa-check-square' : 'fa-square text-gray-300'}`}></i>Tất cả</div>
+            <div className="border-t border-gray-50 my-1"></div>
+            {Object.entries(statusLabels).map(([key, label]) => { 
+                const status = key as OrderStatus; 
+                const isSelected = filterStatus.includes(status); 
+                return (
+                    <div key={status} onClick={() => toggleStatusFilter(status)} className={`px-3 py-2 rounded-md text-xs font-medium cursor-pointer flex items-center gap-2 transition-colors ${isSelected ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50 text-gray-700'}`}>
+                        <i className={`fas ${isSelected ? 'fa-check-square' : 'fa-square text-gray-300'}`}></i>{label}
+                    </div>
+                ); 
+            })}
+          </div>
+      )}
+
+      {/* SENTINEL */}
       <div ref={observerTarget} className="h-px w-full opacity-0 pointer-events-none"></div>
 
       {showReport && (
@@ -301,10 +398,7 @@ const TrackingDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* Grid layout updated to support Tablet (md:grid-cols-2) - Minimized Top Margin (mt-0 or mt-1) */}
-      <div 
-        className={`${isCompactMode ? 'bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex flex-col divide-y divide-gray-100' : (sortBy === 'ROUTE' ? 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4' : 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4')} mt-1`}
-      >
+      <div className={`${isCompactMode ? 'bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex flex-col divide-y divide-gray-100' : (sortBy === 'ROUTE' ? 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4' : 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4')} mt-1`}>
         {filteredOrders.length === 0 ? (<div className="col-span-full flex flex-col items-center justify-center py-20 text-gray-300"><i className="fas fa-box-open text-6xl mb-4 opacity-50"></i><p className="text-lg font-medium">Không tìm thấy đơn hàng nào</p></div>) : (
           filteredOrders.map((order, index) => (
             <div 
@@ -318,11 +412,6 @@ const TrackingDashboard: React.FC = () => {
                 className={`relative transition-all duration-200 order-row`}
             >
                <div className="flex-grow h-full">
-                   {/* Grip handle is now handled INSIDE OrderCard via prop to avoid layout mess, but events are bubbled or OrderCard can have its own drag logic. 
-                       Actually, the wrapper 'draggable' handles desktop. 
-                       For mobile, we need the Touch events on a specific element.
-                       We will pass touch handlers to OrderCard to attach to the Grip button.
-                   */}
                    <OrderCard 
                         order={order} 
                         onUpdate={handleUpdate} 
@@ -331,7 +420,6 @@ const TrackingDashboard: React.FC = () => {
                         isSortMode={sortBy === 'ROUTE'} 
                         index={index} 
                         isCompactMode={isCompactMode}
-                        // Pass Touch Handlers for the Grip Button inside OrderCard
                         onTouchStart={(e) => handleTouchStart(e, index)}
                         onTouchMove={handleTouchMove}
                         onTouchEnd={handleTouchEnd}
