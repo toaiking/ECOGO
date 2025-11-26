@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { v4 as uuidv4 } from 'uuid';
@@ -22,16 +21,32 @@ const TrackingDashboard: React.FC = () => {
   const [activeEditProductRow, setActiveEditProductRow] = useState<number | null>(null); 
   const [showReport, setShowReport] = useState(false);
   
-  // UI State: Scroll detection
-  const [isFiltersVisible, setIsFiltersVisible] = useState(true);
+  // Smart Scroll State: Intersection Observer for Zero Lag
+  const [isHeaderVisible, setIsHeaderVisible] = useState(true);
+  const observerTarget = useRef<HTMLDivElement>(null);
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   const dragItem = useRef<number | null>(null);
   const dragOverItem = useRef<number | null>(null);
-  
   const editModalRef = useRef<HTMLDivElement>(null);
+
+  // SCROLL LOGIC - ZERO LAG INTERSECTION OBSERVER
+  useEffect(() => {
+      const observer = new IntersectionObserver(
+          ([entry]) => {
+              setIsHeaderVisible(entry.isIntersecting);
+          },
+          { threshold: 0, rootMargin: "-64px 0px 0px 0px" }
+      );
+
+      if (observerTarget.current) {
+          observer.observe(observerTarget.current);
+      }
+
+      return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     const unsubscribeOrders = storageService.subscribeOrders((data) => {
@@ -46,23 +61,6 @@ const TrackingDashboard: React.FC = () => {
     };
   }, []);
 
-  // Scroll detection to hide filters
-  useEffect(() => {
-      let lastScrollY = window.scrollY;
-      const handleScroll = () => {
-          const currentScrollY = window.scrollY;
-          if (currentScrollY > 100 && currentScrollY > lastScrollY) {
-              setIsFiltersVisible(false); // Hide on scroll down
-          } else if (currentScrollY < lastScrollY || currentScrollY < 50) {
-              setIsFiltersVisible(true); // Show on scroll up or top
-          }
-          lastScrollY = currentScrollY;
-      };
-      window.addEventListener('scroll', handleScroll);
-      return () => window.removeEventListener('scroll', handleScroll);
-  }, []);
-
-  // Click outside for dropdown
   useEffect(() => {
       const handleClickOutside = (event: MouseEvent) => {
           if (activeEditProductRow !== null && !(event.target as Element).closest('.product-dropdown-container')) {
@@ -185,35 +183,45 @@ const TrackingDashboard: React.FC = () => {
   const statusLabels: Record<OrderStatus, string> = { [OrderStatus.PENDING]: 'Chờ xử lý', [OrderStatus.PICKED_UP]: 'Đã lấy hàng', [OrderStatus.IN_TRANSIT]: 'Đang giao', [OrderStatus.DELIVERED]: 'Đã giao', [OrderStatus.CANCELLED]: 'Đã hủy' };
 
   return (
-    <div className="space-y-6 animate-fade-in pb-20">
-      {/* STICKY HEADER CONTAINER */}
-      <div className="sticky top-16 z-30">
+    <div className="animate-fade-in pb-20">
+      {/* SMART STICKY HEADER with Intersection Observer */}
+      <div className="sticky top-16 z-30 bg-gray-50/95 backdrop-blur-sm transition-shadow shadow-sm">
+         
          {/* 1. SEARCH BAR (Always Visible) */}
-         <div className="bg-white shadow-sm border border-gray-100 p-2 rounded-xl mb-1">
-            <div className="relative group w-full">
+         <div className="bg-white border-b border-gray-100 p-2 flex gap-2 items-center">
+            <div className="relative group flex-grow">
                 <i className="fas fa-search absolute left-4 top-3 text-gray-400"></i>
-                <input placeholder="Tìm tên, sđt, địa chỉ..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2 rounded-lg bg-gray-50 border-transparent focus:bg-white focus:border-eco-200 focus:ring-2 focus:ring-eco-50 text-sm font-medium outline-none transition-all" />
+                <input placeholder="Tìm tên, sđt, địa chỉ..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2 rounded-xl bg-gray-50 border-transparent focus:bg-white focus:border-eco-200 focus:ring-2 focus:ring-eco-50 text-sm font-medium outline-none transition-all" />
             </div>
          </div>
 
-         {/* 2. FILTERS (Hide on Scroll) */}
-         <div className={`bg-white/95 backdrop-blur-md rounded-xl shadow-sm border border-gray-100 overflow-hidden transition-all duration-300 ease-in-out ${isFiltersVisible ? 'max-h-40 opacity-100' : 'max-h-0 opacity-0'}`}>
-             <div className="p-3 flex flex-col md:flex-row gap-3 items-center justify-between">
-                <div className="flex gap-2 w-full overflow-x-auto no-scrollbar">
-                    <div className="relative min-w-[120px] flex-1"><select value={filterBatch} onChange={e => setFilterBatch(e.target.value)} className="w-full pl-3 pr-8 py-2 rounded-lg bg-gray-50 border-transparent focus:bg-white text-xs font-bold text-gray-700 appearance-none cursor-pointer outline-none"><option value="ALL">Tất cả Lô</option>{batches.map(b => <option key={b} value={b}>{b}</option>)}</select><i className="fas fa-chevron-down absolute right-3 top-2.5 text-gray-400 text-xs pointer-events-none"></i></div>
-                    {users.length > 0 && (<div className="relative min-w-[110px] flex-1"><select value={filterUser} onChange={e => setFilterUser(e.target.value)} className="w-full pl-3 pr-8 py-2 rounded-lg bg-gray-50 border-transparent focus:bg-white text-xs font-medium text-gray-700 appearance-none cursor-pointer outline-none"><option value="ALL">Người xử lý</option>{users.map(u => <option key={u} value={u}>{u}</option>)}</select><i className="fas fa-user absolute right-3 top-2.5 text-gray-400 text-xs pointer-events-none"></i></div>)}
-                    <div className="relative min-w-[130px] flex-1"><select value={filterStatus} onChange={e => setFilterStatus(e.target.value as any)} className="w-full pl-3 pr-8 py-2 rounded-lg bg-gray-50 border-transparent focus:bg-white text-xs font-medium appearance-none cursor-pointer outline-none"><option value="ALL">Mọi trạng thái</option>{Object.entries(statusLabels).map(([k,v]) => <option key={k} value={k}>{v}</option>)}</select><i className="fas fa-filter absolute right-3 top-2.5 text-gray-400 text-xs pointer-events-none"></i></div>
-                </div>
-                <div className="flex gap-2 w-full md:w-auto overflow-x-auto no-scrollbar items-center justify-end">
-                    <button onClick={() => setIsCompactMode(!isCompactMode)} className={`w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg border transition-all ${isCompactMode ? 'bg-eco-100 text-eco-700 border-eco-200' : 'bg-gray-50 text-gray-400 border-gray-200'}`} title="Chế độ xem"><i className={`fas ${isCompactMode ? 'fa-list' : 'fa-th-large'}`}></i></button>
-                    <button onClick={handlePrintList} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-gray-50 text-gray-500 hover:text-blue-600 border border-gray-200 transition-all"><i className="fas fa-print"></i></button>
-                    <button onClick={copyRouteToClipboard} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-gray-50 text-gray-500 hover:text-eco-600 border border-gray-200 transition-all"><i className="fas fa-map-marked-alt"></i></button>
-                    <div className="flex p-1 bg-gray-100 rounded-lg flex-shrink-0"><button onClick={() => setSortBy('NEWEST')} className={`px-2 py-1 rounded text-[10px] font-bold transition-all ${sortBy === 'NEWEST' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500'}`}>Mới nhất</button><button onClick={() => setSortBy('ROUTE')} className={`px-2 py-1 rounded text-[10px] font-bold transition-all flex items-center gap-1 ${sortBy === 'ROUTE' ? 'bg-white text-eco-700 shadow-sm' : 'text-gray-500'}`}><i className="fas fa-route"></i> Lộ trình</button></div>
-                    <button onClick={() => setShowReport(!showReport)} className={`w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg border transition-all ${showReport ? 'bg-black text-white border-black' : 'bg-white text-gray-400 border-gray-200'}`}><i className="fas fa-chart-bar"></i></button>
-                </div>
+         {/* 2. FILTERS (Collapsible via CSS Grid Transition) */}
+         <div 
+            className={`grid transition-[grid-template-rows] duration-300 ease-out ${isHeaderVisible ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}
+         >
+             <div className="overflow-hidden">
+                 <div className="bg-white border-b border-gray-200 p-2 shadow-sm">
+                    <div className="flex flex-col md:flex-row gap-2 items-center justify-between">
+                        <div className="flex gap-2 w-full overflow-x-auto no-scrollbar">
+                            <div className="relative min-w-[120px] flex-1"><select value={filterBatch} onChange={e => setFilterBatch(e.target.value)} className="w-full pl-3 pr-8 py-2 rounded-lg bg-gray-50 border-transparent focus:bg-white text-xs font-bold text-gray-700 appearance-none cursor-pointer outline-none"><option value="ALL">Tất cả Lô</option>{batches.map(b => <option key={b} value={b}>{b}</option>)}</select><i className="fas fa-chevron-down absolute right-3 top-2.5 text-gray-400 text-xs pointer-events-none"></i></div>
+                            {users.length > 0 && (<div className="relative min-w-[110px] flex-1"><select value={filterUser} onChange={e => setFilterUser(e.target.value)} className="w-full pl-3 pr-8 py-2 rounded-lg bg-gray-50 border-transparent focus:bg-white text-xs font-medium text-gray-700 appearance-none cursor-pointer outline-none"><option value="ALL">Người xử lý</option>{users.map(u => <option key={u} value={u}>{u}</option>)}</select><i className="fas fa-user absolute right-3 top-2.5 text-gray-400 text-xs pointer-events-none"></i></div>)}
+                            <div className="relative min-w-[130px] flex-1"><select value={filterStatus} onChange={e => setFilterStatus(e.target.value as any)} className="w-full pl-3 pr-8 py-2 rounded-lg bg-gray-50 border-transparent focus:bg-white text-xs font-medium appearance-none cursor-pointer outline-none"><option value="ALL">Mọi trạng thái</option>{Object.entries(statusLabels).map(([k,v]) => <option key={k} value={k}>{v}</option>)}</select><i className="fas fa-filter absolute right-3 top-2.5 text-gray-400 text-xs pointer-events-none"></i></div>
+                        </div>
+                        <div className="flex gap-2 w-full md:w-auto overflow-x-auto no-scrollbar items-center justify-end">
+                            <button onClick={() => setIsCompactMode(!isCompactMode)} className={`w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg border transition-all ${isCompactMode ? 'bg-eco-100 text-eco-700 border-eco-200' : 'bg-gray-50 text-gray-400 border-gray-200'}`} title="Chế độ xem"><i className={`fas ${isCompactMode ? 'fa-list' : 'fa-th-large'}`}></i></button>
+                            <button onClick={handlePrintList} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-gray-50 text-gray-500 hover:text-blue-600 border border-gray-200 transition-all"><i className="fas fa-print"></i></button>
+                            <button onClick={copyRouteToClipboard} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-gray-50 text-gray-500 hover:text-eco-600 border border-gray-200 transition-all"><i className="fas fa-map-marked-alt"></i></button>
+                            <div className="flex p-1 bg-gray-100 rounded-lg flex-shrink-0"><button onClick={() => setSortBy('NEWEST')} className={`px-2 py-1 rounded text-[10px] font-bold transition-all ${sortBy === 'NEWEST' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500'}`}>Mới nhất</button><button onClick={() => setSortBy('ROUTE')} className={`px-2 py-1 rounded text-[10px] font-bold transition-all flex items-center gap-1 ${sortBy === 'ROUTE' ? 'bg-white text-eco-700 shadow-sm' : 'text-gray-500'}`}><i className="fas fa-route"></i> Lộ trình</button></div>
+                            <button onClick={() => setShowReport(!showReport)} className={`w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg border transition-all ${showReport ? 'bg-black text-white border-black' : 'bg-white text-gray-400 border-gray-200'}`}><i className="fas fa-chart-bar"></i></button>
+                        </div>
+                    </div>
+                 </div>
              </div>
          </div>
       </div>
+
+      {/* SENTINEL FOR SCROLL DETECTION */}
+      <div ref={observerTarget} className="h-px w-full opacity-0 pointer-events-none"></div>
 
       {showReport && (
           <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 animate-fade-in-down mt-2">
@@ -232,11 +240,11 @@ const TrackingDashboard: React.FC = () => {
       )}
 
       {sortBy === 'ROUTE' && !isCompactMode && (
-        <div className="flex items-center justify-center gap-3 p-3 bg-yellow-50/50 border border-yellow-100 rounded-lg text-yellow-800 text-sm"><i className="fas fa-hand-paper animate-pulse"></i><span className="font-medium">Kéo thả hoặc dùng mũi tên để sắp xếp lộ trình.</span></div>
+        <div className="flex items-center justify-center gap-3 p-3 bg-yellow-50/50 border border-yellow-100 rounded-lg text-yellow-800 text-sm mt-2"><i className="fas fa-hand-paper animate-pulse"></i><span className="font-medium">Kéo thả hoặc dùng mũi tên để sắp xếp lộ trình.</span></div>
       )}
 
-      {/* Grid layout updated to support Tablet (md:grid-cols-2) */}
-      <div className={`${isCompactMode ? 'bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex flex-col divide-y divide-gray-100' : 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4'} mt-4`}>
+      {/* Grid layout updated to support Tablet (md:grid-cols-2) - Minimized Top Margin (mt-0 or mt-1) */}
+      <div className={`${isCompactMode ? 'bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex flex-col divide-y divide-gray-100' : 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4'} mt-1`}>
         {filteredOrders.length === 0 ? (<div className="col-span-full flex flex-col items-center justify-center py-20 text-gray-300"><i className="fas fa-box-open text-6xl mb-4 opacity-50"></i><p className="text-lg font-medium">Không tìm thấy đơn hàng nào</p></div>) : (
           filteredOrders.map((order, index) => (
             <div key={order.id} draggable={sortBy === 'ROUTE'} onDragStart={(e) => handleDragStart(e, index)} onDragEnter={(e) => handleDragEnter(e, index)} onDragEnd={handleDragEnd} onDragOver={(e) => e.preventDefault()} className={`relative ${sortBy === 'ROUTE' && !isCompactMode ? 'cursor-grab active:cursor-grabbing' : ''} ${isCompactMode ? '' : 'transition-transform duration-200'}`}>

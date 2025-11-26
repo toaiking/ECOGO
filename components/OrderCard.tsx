@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { Order, OrderStatus, PaymentMethod } from '../types';
@@ -146,7 +145,7 @@ export const OrderCard: React.FC<Props> = ({
   if (isCompactMode) {
       return (
           <>
-          <div className="group px-3 py-2 hover:bg-gray-50 transition-colors cursor-pointer border-b border-gray-100 last:border-0 relative" onClick={() => onEdit(order)}>
+          <div className="group px-2 py-1.5 hover:bg-gray-50 transition-colors cursor-pointer border-b border-gray-100 last:border-0 relative" onClick={() => onEdit(order)}>
                {/* DESKTOP COMPACT */}
                <div className="hidden md:flex items-center gap-3 text-sm">
                     <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${config.bg.replace('50','500')}`}></div>
@@ -156,39 +155,39 @@ export const OrderCard: React.FC<Props> = ({
                     <div className="flex items-center gap-1 pl-2">{!isCompleted && (<button onClick={nextStatus} className="w-7 h-7 flex items-center justify-center rounded bg-gray-100 hover:bg-black hover:text-white transition-colors"><i className="fas fa-arrow-right text-xs"></i></button>)}<button onClick={(e) => { e.stopPropagation(); sendSMS(); }} className="w-7 h-7 flex items-center justify-center text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded"><i className="fas fa-comment-dots text-xs"></i></button></div>
                </div>
                
-               {/* MOBILE COMPACT - 3 LINE LAYOUT */}
-               <div className="md:hidden flex flex-col gap-1 relative">
+               {/* MOBILE COMPACT - 3 LINE LAYOUT (Tighter Buffer) */}
+               <div className="md:hidden flex flex-col gap-0.5 relative">
                     {/* Line 1: Name | Call/SMS | Price */}
                     <div className="flex justify-between items-center">
                         <div className="flex items-center gap-2 overflow-hidden max-w-[65%]">
                             <span className="font-bold text-gray-900 text-sm truncate">{order.customerName}</span>
-                            <div className="flex bg-gray-100 rounded-md h-6 items-center flex-shrink-0">
-                                <a href={`tel:${order.customerPhone}`} onClick={e => e.stopPropagation()} className="w-7 flex items-center justify-center text-gray-600 active:text-eco-600 h-full"><i className="fas fa-phone text-[10px]"></i></a>
-                                <div className="w-px h-3 bg-gray-300"></div>
-                                <button onClick={(e) => { e.stopPropagation(); sendSMS(); }} className="w-7 flex items-center justify-center text-gray-600 active:text-blue-600 h-full"><i className="fas fa-comment-dots text-[10px]"></i></button>
+                            <div className="flex bg-gray-100 rounded-md h-5 items-center flex-shrink-0">
+                                <a href={`tel:${order.customerPhone}`} onClick={e => e.stopPropagation()} className="w-6 flex items-center justify-center text-gray-600 active:text-eco-600 h-full"><i className="fas fa-phone text-[9px]"></i></a>
+                                <div className="w-px h-2.5 bg-gray-300"></div>
+                                <button onClick={(e) => { e.stopPropagation(); sendSMS(); }} className="w-6 flex items-center justify-center text-gray-600 active:text-blue-600 h-full"><i className="fas fa-comment-dots text-[9px]"></i></button>
                             </div>
                         </div>
                         <span className="font-black text-gray-900 text-sm">{new Intl.NumberFormat('vi-VN').format(order.totalPrice)}<small className="text-[9px] text-gray-400 font-normal">đ</small></span>
                     </div>
                     
-                    {/* Line 2: Address | Status */}
+                    {/* Line 2: Address | Status Badge */}
                     <div className="flex justify-between items-center">
-                        <div className="text-[11px] text-gray-500 truncate max-w-[70%] flex items-center gap-1">
-                            <i className="fas fa-map-marker-alt text-[9px] text-gray-300"></i> {order.address}
+                        <div className="text-[10px] text-gray-500 truncate max-w-[70%] flex items-center gap-1">
+                            <i className="fas fa-map-marker-alt text-[8px] text-gray-300"></i> {order.address}
                         </div>
                         <span className={`text-[9px] px-1.5 rounded font-bold uppercase whitespace-nowrap ${config.bg} ${config.color}`}>{config.label}</span>
                     </div>
 
                     {/* Line 3: Items | Payment & Action */}
-                    <div className="flex justify-between items-center pt-1 border-t border-gray-50 mt-0.5">
+                    <div className="flex justify-between items-center pt-0.5 border-t border-gray-50 mt-0.5">
                         <div className="text-[10px] text-gray-400 italic truncate pr-2 flex-grow">
                             {order.items.map(i => `${i.name} x${i.quantity}`).join(', ')}
                         </div>
-                        <div className="flex items-center gap-2 flex-shrink-0" onClick={e => e.stopPropagation()}>
+                        <div className="flex items-center gap-1.5 flex-shrink-0" onClick={e => e.stopPropagation()}>
                             <PaymentBadge />
                             {!isCompleted && (
-                                <button onClick={nextStatus} className="w-6 h-6 flex items-center justify-center bg-gray-900 text-white rounded shadow-sm active:scale-95">
-                                    <i className="fas fa-arrow-right text-[9px]"></i>
+                                <button onClick={nextStatus} className="w-5 h-5 flex items-center justify-center bg-gray-900 text-white rounded shadow-sm active:scale-95">
+                                    <i className="fas fa-arrow-right text-[8px]"></i>
                                 </button>
                             )}
                         </div>
@@ -206,12 +205,13 @@ export const OrderCard: React.FC<Props> = ({
     <div className={`group relative bg-white rounded-lg border shadow-sm transition-all duration-200 flex flex-col ${isSortMode ? 'border-dashed border-2 border-gray-300' : 'border-gray-100 hover:shadow-md'}`}>
       {isSortMode && (<div className="absolute left-0 top-0 bottom-0 w-6 bg-gray-50 flex items-center justify-center border-r border-gray-100 z-10 cursor-grab"><span className="text-xs font-bold text-gray-400">#{index !== undefined ? index + 1 : ''}</span></div>)}
       <div className={`flex-grow flex flex-col ${isSortMode ? 'pl-6' : ''}`}>
-          {/* ULTRA COMPACT HEADER */}
-          <div className="p-2.5 flex justify-between items-start gap-3 border-b border-gray-50">
+          {/* ULTRA COMPACT HEADER - Adjusted padding and leading to prevent clipping */}
+          <div className="p-3 flex justify-between items-start gap-3 border-b border-gray-50">
              {/* Left: Customer Info */}
              <div className="flex-grow min-w-0">
-                 <div className="flex items-center gap-2 mb-0.5">
-                     <h3 className="font-bold text-gray-900 text-sm truncate leading-none">{order.customerName}</h3>
+                 <div className="flex items-center gap-2 mb-1">
+                     {/* Changed leading-none to leading-snug and added pb-1 to fix clipping of descenders like g, y, p */}
+                     <h3 className="font-bold text-gray-900 text-sm truncate leading-snug pb-1">{order.customerName}</h3>
                      <span className={`text-[9px] px-1.5 rounded-sm font-bold uppercase ${config.bg} ${config.color}`}>{config.label}</span>
                  </div>
                  <div className="text-[11px] text-gray-500 leading-tight truncate">{order.address}</div>
