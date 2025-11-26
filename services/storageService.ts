@@ -1,6 +1,7 @@
 
-import { Order, OrderStatus, Product, Customer, BankConfig } from '../types';
+import { Order, OrderStatus, Product, Customer, BankConfig, Notification } from '../types';
 import { db } from '../firebaseConfig';
+import { v4 as uuidv4 } from 'uuid';
 import { 
   collection, 
   addDoc, 
@@ -13,7 +14,8 @@ import {
   orderBy,
   getDocs,
   writeBatch,
-  deleteField 
+  deleteField,
+  limit 
 } from "firebase/firestore";
 
 const ORDER_KEY = 'ecogo_orders_v3'; 
@@ -21,8 +23,8 @@ const PRODUCT_KEY = 'ecogo_products_v1';
 const CUSTOMER_KEY = 'ecogo_customers_v1';
 const USER_KEY = 'ecogo_current_user';
 const BANK_KEY = 'ecogo_bank_config';
+const NOTIF_KEY = 'ecogo_notifications_v1';
 
-// Helper to determine if we use Firebase
 const isOnline = () => !!db;
 
 export const storageService = {
@@ -40,18 +42,15 @@ export const storageService = {
   // --- Bank Configuration ---
   saveBankConfig: async (config: BankConfig): Promise<void> => {
       localStorage.setItem(BANK_KEY, JSON.stringify(config));
-      // Nếu online, có thể lưu vào collection settings (Tùy chọn, hiện tại lưu local cho đơn giản mỗi máy một setting hoặc sync sau)
       if (isOnline()) {
           await setDoc(doc(db, "settings", "bankConfig"), config);
       }
   },
 
   getBankConfig: async (): Promise<BankConfig | null> => {
-      // Ưu tiên lấy từ Local trước để nhanh
       const localData = localStorage.getItem(BANK_KEY);
       if (localData) return JSON.parse(localData);
 
-      // Nếu không có local, thử lấy online
       if (isOnline()) {
          try {
              const snap = await getDocs(collection(db, "settings"));
@@ -60,7 +59,7 @@ export const storageService = {
                  if (d.id === 'bankConfig') config = d.data() as BankConfig;
              });
              if (config) {
-                 localStorage.setItem(BANK_KEY, JSON.stringify(config)); // Cache local
+                 localStorage.setItem(BANK_KEY, JSON.stringify(config)); 
                  return config;
              }
          } catch (e) { console.error(e); }
@@ -68,7 +67,7 @@ export const storageService = {
       return null;
   },
 
-  // --- Sync Tool (New) ---
+  // --- Sync Tool ---
   syncLocalToCloud: async (): Promise<number> => {
     if (!isOnline()) throw new Error("Chưa kết nối Firebase");
     
@@ -82,11 +81,9 @@ export const storageService = {
         const customers: Customer[] = localCustomersRaw ? JSON.parse(localCustomersRaw) : [];
 
         let count = 0;
-        const batch = writeBatch(db); // Use batch for atomicity (limit 500 ops)
+        const batch = writeBatch(db); 
 
-        // 1. Sync Orders
         for (const order of orders) {
-            // Fix data structure if needed
             const cleanOrder = {
                 ...order,
                 items: Array.isArray(order.items) ? order.items : [],
@@ -97,13 +94,11 @@ export const storageService = {
             count++;
         }
 
-        // 2. Sync Products
         for (const product of products) {
             const prodRef = doc(db, "products", product.id);
             batch.set(prodRef, product);
         }
 
-        // 3. Sync Customers
         for (const customer of customers) {
              const cid = customer.id || customer.phone || customer.name;
              if (cid) {
@@ -120,6 +115,112 @@ export const storageService = {
     }
   },
 
+  // --- Notifications System ---
+  
+  addNotification: async (title: string, message: string, type: 'info' | 'success' | 'warning' | 'error', relatedOrderId?: string) => {
+      const notif: Notification = {
+          id: uuidv4(),
+          title,
+          message,
+          type,
+          isRead: false,
+          createdAt: Date.now(),
+          relatedOrderId
+      };
+
+      if (isOnline()) {
+          await addDoc(collection(db, "notifications"), notif);
+      } else {
+          const local = localStorage.getItem(NOTIF_KEY);
+          const list: Notification[] = local ? JSON.parse(local) : [];
+          list.unshift(notif);
+          if (list.length > 20) list.splice(20); 
+          localStorage.setItem(NOTIF_KEY, JSON.stringify(list));
+          window.dispatchEvent(new Event('storage_notif'));
+      }
+  },
+
+  subscribeNotifications: (callback: (notifs: Notification[]) => void) => {
+      if (isOnline()) {
+          const q = query(collection(db, "notifications"), orderBy("createdAt", "desc"), limit(20));
+          return onSnapshot(q, (snapshot) => {
+              const list: Notification[] = [];
+              snapshot.forEach(d => list.push({ ...d.data(), id: d.id } as Notification));
+              callback(list);
+          });
+      } else {
+          const load = () => {
+              try {
+                  const data = localStorage.getItem(NOTIF_KEY);
+                  callback(data ? JSON.parse(data) : []);
+              } catch { callback([]); }
+          };
+          load();
+          const handler = () => load();
+          window.addEventListener('storage_notif', handler);
+          return () => window.removeEventListener('storage_notif', handler);
+      }
+  },
+
+  markNotificationRead: async (id: string) => {
+      window.dispatchEvent(new CustomEvent('local_notif_read', { detail: id }));
+
+      if (isOnline()) {
+          await updateDoc(doc(db, "notifications", id), { isRead: true });
+      } else {
+          const local = localStorage.getItem(NOTIF_KEY);
+          if (!local) return;
+          const list: Notification[] = JSON.parse(local);
+          const idx = list.findIndex(n => n.id === id);
+          if (idx !== -1) {
+              list[idx].isRead = true;
+              localStorage.setItem(NOTIF_KEY, JSON.stringify(list));
+              window.dispatchEvent(new Event('storage_notif'));
+          }
+      }
+  },
+
+  markAllNotificationsRead: async () => {
+      window.dispatchEvent(new Event('local_notif_read_all'));
+
+      if (isOnline()) {
+          const q = query(collection(db, "notifications"), limit(20));
+          const snap = await getDocs(q);
+          const batch = writeBatch(db);
+          let count = 0;
+          snap.forEach(d => {
+              if (!d.data().isRead) {
+                  batch.update(d.ref, { isRead: true });
+                  count++;
+              }
+          });
+          if (count > 0) await batch.commit();
+      } else {
+          const local = localStorage.getItem(NOTIF_KEY);
+          if (!local) return;
+          const list: Notification[] = JSON.parse(local).map((n: Notification) => ({ ...n, isRead: true }));
+          localStorage.setItem(NOTIF_KEY, JSON.stringify(list));
+          window.dispatchEvent(new Event('storage_notif'));
+      }
+  },
+
+  clearAllNotifications: async () => {
+      window.dispatchEvent(new Event('local_notif_clear_all'));
+
+      if (isOnline()) {
+          const q = query(collection(db, "notifications"), limit(50));
+          const snap = await getDocs(q);
+          const batch = writeBatch(db);
+          snap.forEach(d => {
+              batch.delete(d.ref);
+          });
+          await batch.commit();
+      } else {
+          localStorage.setItem(NOTIF_KEY, JSON.stringify([]));
+          window.dispatchEvent(new Event('storage_notif'));
+      }
+  },
+
   // --- Orders (Real-time & Sync) ---
   
   subscribeOrders: (callback: (orders: Order[]) => void) => {
@@ -130,7 +231,6 @@ export const storageService = {
         snapshot.forEach((doc) => {
           orders.push(doc.data() as Order);
         });
-        // Sort client side 
         orders.sort((a, b) => b.createdAt - a.createdAt);
         callback(orders);
       });
@@ -138,10 +238,7 @@ export const storageService = {
       const loadLocal = () => {
         try {
           const data = localStorage.getItem(ORDER_KEY);
-          if (!data) {
-             callback([]);
-             return;
-          }
+          if (!data) { callback([]); return; }
           const orders = JSON.parse(data).map((o: any) => ({
             ...o,
             items: Array.isArray(o.items) ? o.items : [{ id: 'migrated', name: o.items || 'Hàng hóa', quantity: 1, price: o.price || 0 }],
@@ -152,7 +249,6 @@ export const storageService = {
           callback(orders);
         } catch (e) { callback([]); }
       };
-      
       loadLocal();
       const handler = () => loadLocal();
       window.addEventListener('storage', handler);
@@ -184,10 +280,7 @@ export const storageService = {
       window.dispatchEvent(new Event('storage'));
     }
     
-    // Inventory Deduct Logic
     await storageService.deductInventory(order);
-
-    // Customer Save Logic
     storageService.upsertCustomer({
       name: order.customerName,
       phone: order.customerPhone,
@@ -195,6 +288,13 @@ export const storageService = {
       id: order.customerPhone || order.customerName,
       lastOrderDate: Date.now()
     });
+
+    storageService.addNotification(
+        order.customerName, 
+        `Đã tạo đơn mới • ${order.address}`,
+        'success',
+        order.id
+    );
   },
 
   updateOrderDetails: async (updatedOrder: Order): Promise<void> => {
@@ -210,9 +310,16 @@ export const storageService = {
         window.dispatchEvent(new Event('storage'));
       }
     }
+    
+    storageService.addNotification(
+        updatedOrder.customerName, 
+        `Đã chỉnh sửa chi tiết • ${updatedOrder.address}`, 
+        'info', 
+        updatedOrder.id
+    );
   },
 
-  updateStatus: async (id: string, status: OrderStatus, proof?: string): Promise<Order | null> => {
+  updateStatus: async (id: string, status: OrderStatus, proof?: string, context?: { name: string, address: string }): Promise<Order | null> => {
     const currentUser = storageService.getCurrentUser() || 'Admin';
     const updateData: any = { 
         status, 
@@ -223,21 +330,62 @@ export const storageService = {
 
     if (isOnline()) {
       await updateDoc(doc(db, "orders", id), updateData);
-      return null;
     } else {
       const orders = storageService.getOrdersSync();
       const index = orders.findIndex(o => o.id === id);
-      if (index === -1) return null;
-      orders[index] = { ...orders[index], ...updateData };
-      localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
-      window.dispatchEvent(new Event('storage'));
-      return orders[index];
+      if (index !== -1) {
+          orders[index] = { ...orders[index], ...updateData };
+          localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
+          window.dispatchEvent(new Event('storage'));
+      }
     }
+
+    const orderName = context?.name || 'Khách hàng';
+    const address = context?.address || '';
+
+    let statusMsg = '';
+    if (status === OrderStatus.PICKED_UP) statusMsg = 'Đã lấy hàng';
+    if (status === OrderStatus.IN_TRANSIT) statusMsg = 'Đang đi giao';
+    if (status === OrderStatus.DELIVERED) statusMsg = 'Giao thành công';
+    if (status === OrderStatus.CANCELLED) statusMsg = 'Đã hủy';
+    
+    if (statusMsg) {
+        storageService.addNotification(
+            orderName, 
+            `${statusMsg} • ${address}`,
+            status === OrderStatus.CANCELLED ? 'error' : (status === OrderStatus.DELIVERED ? 'success' : 'info'),
+            id
+        );
+    }
+
+    return null;
+  },
+
+  splitOrderToNextBatch: async (id: string, currentBatchId: string): Promise<void> => {
+      const newBatchId = `${currentBatchId}S`;
+      const currentUser = storageService.getCurrentUser() || 'Admin';
+      
+      if (isOnline()) {
+          await updateDoc(doc(db, "orders", id), { 
+              batchId: newBatchId,
+              updatedAt: Date.now(),
+              lastUpdatedBy: currentUser
+          });
+      } else {
+          const orders = storageService.getOrdersSync();
+          const index = orders.findIndex(o => o.id === id);
+          if (index !== -1) {
+              orders[index].batchId = newBatchId;
+              orders[index].updatedAt = Date.now();
+              orders[index].lastUpdatedBy = currentUser;
+              localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
+              window.dispatchEvent(new Event('storage'));
+          }
+      }
   },
 
   deleteDeliveryProof: async (id: string): Promise<void> => {
       if (isOnline()) {
-          // Use deleteField to remove the field from Firestore document
           await updateDoc(doc(db, "orders", id), {
               deliveryProof: deleteField(),
               updatedAt: Date.now()
@@ -254,7 +402,8 @@ export const storageService = {
       }
   },
   
-  updatePaymentVerification: async (id: string, verified: boolean): Promise<void> => {
+  updatePaymentVerification: async (id: string, verified: boolean, context?: { name: string }): Promise<void> => {
+      const currentUser = storageService.getCurrentUser() || 'Admin';
       if (isOnline()) {
           await updateDoc(doc(db, "orders", id), { paymentVerified: verified, updatedAt: Date.now() });
       } else {
@@ -266,9 +415,18 @@ export const storageService = {
               window.dispatchEvent(new Event('storage'));
           }
       }
+      
+      const orderName = context?.name || 'Khách hàng';
+      
+      if (verified) {
+          storageService.addNotification(orderName, `Đã xác nhận thanh toán • Duyệt bởi ${currentUser}`, 'success', id);
+      }
   },
 
-  deleteOrder: async (id: string): Promise<void> => {
+  deleteOrder: async (id: string, context?: { name: string, address: string }): Promise<void> => {
+    const orderName = context?.name || 'Đơn hàng';
+    const address = context?.address || '';
+
     if (isOnline()) {
       await deleteDoc(doc(db, "orders", id));
     } else {
@@ -277,6 +435,8 @@ export const storageService = {
       localStorage.setItem(ORDER_KEY, JSON.stringify(filtered));
       window.dispatchEvent(new Event('storage'));
     }
+    
+    storageService.addNotification(orderName, `Đã xóa đơn hàng • ${address}`, 'warning', id);
   },
 
   saveOrdersList: async (orders: Order[]): Promise<void> => {
@@ -293,8 +453,7 @@ export const storageService = {
       }
   },
 
-  // --- Inventory ---
-
+  // --- Inventory (Products) & Customers ---
   deductInventory: async (order: Order) => {
     let products: Product[] = [];
     if (isOnline()) {
@@ -303,14 +462,10 @@ export const storageService = {
     } else {
         products = storageService.getProductsSync();
     }
-
     let inventoryChanged = false;
-
     order.items.forEach(item => {
       let productIndex = -1;
-      if (item.productId) {
-        productIndex = products.findIndex(p => p.id === item.productId);
-      }
+      if (item.productId) productIndex = products.findIndex(p => p.id === item.productId);
       if (productIndex === -1 && item.name) {
         const normalizedItemName = item.name.trim().toLowerCase();
         productIndex = products.findIndex(p => {
@@ -318,23 +473,17 @@ export const storageService = {
             return pName === normalizedItemName || pName.includes(normalizedItemName) || normalizedItemName.includes(pName);
         });
       }
-
       if (productIndex !== -1) {
         const product = products[productIndex];
         const weightPerUnit = product.defaultWeight > 0 ? product.defaultWeight : 1;
         const weightToDeduct = (item.quantity || 1) * weightPerUnit;
-        
         if (weightToDeduct > 0) {
           products[productIndex].stockQuantity = Math.max(0, (products[productIndex].stockQuantity || 0) - weightToDeduct);
           inventoryChanged = true;
-          
-          if (isOnline()) {
-              updateDoc(doc(db, "products", product.id), { stockQuantity: products[productIndex].stockQuantity });
-          }
+          if (isOnline()) updateDoc(doc(db, "products", product.id), { stockQuantity: products[productIndex].stockQuantity });
         }
       }
     });
-
     if (!isOnline() && inventoryChanged) {
       localStorage.setItem(PRODUCT_KEY, JSON.stringify(products));
       window.dispatchEvent(new Event('storage'));
@@ -361,10 +510,7 @@ export const storageService = {
     try {
       const data = localStorage.getItem(PRODUCT_KEY);
       const products = data ? JSON.parse(data) : [];
-      return products.map((p: any) => ({
-          ...p,
-          totalImported: p.totalImported ?? p.stockQuantity 
-      }));
+      return products.map((p: any) => ({ ...p, totalImported: p.totalImported ?? p.stockQuantity }));
     } catch { return []; }
   },
 
@@ -374,8 +520,7 @@ export const storageService = {
     } else {
         const products = storageService.getProductsSync();
         const index = products.findIndex(p => p.id === product.id);
-        if (index >= 0) products[index] = product;
-        else products.push(product);
+        if (index >= 0) products[index] = product; else products.push(product);
         localStorage.setItem(PRODUCT_KEY, JSON.stringify(products));
         window.dispatchEvent(new Event('storage'));
     }
@@ -392,8 +537,6 @@ export const storageService = {
       }
   },
 
-  // --- Customers ---
-  
   subscribeCustomers: (callback: (customers: Customer[]) => void) => {
       if (isOnline()) {
           return onSnapshot(collection(db, "customers"), (snapshot) => {
@@ -403,10 +546,7 @@ export const storageService = {
           });
       } else {
            const load = () => {
-              try {
-                  const data = localStorage.getItem(CUSTOMER_KEY);
-                  callback(data ? JSON.parse(data) : []);
-              } catch { callback([]); }
+              try { const data = localStorage.getItem(CUSTOMER_KEY); callback(data ? JSON.parse(data) : []); } catch { callback([]); }
            };
            load();
            const handler = () => load();
@@ -416,10 +556,7 @@ export const storageService = {
   },
 
   getCustomersSync: (): Customer[] => {
-    try {
-      const data = localStorage.getItem(CUSTOMER_KEY);
-      return data ? JSON.parse(data) : [];
-    } catch { return []; }
+    try { const data = localStorage.getItem(CUSTOMER_KEY); return data ? JSON.parse(data) : []; } catch { return []; }
   },
 
   upsertCustomer: async (customerData: Customer): Promise<void> => {
@@ -427,21 +564,15 @@ export const storageService = {
           await setDoc(doc(db, "customers", customerData.id), customerData, { merge: true });
       } else {
         const customers = storageService.getCustomersSync();
-        const index = customers.findIndex(c => 
-            (customerData.phone && c.phone === customerData.phone) || 
-            c.name.toLowerCase() === customerData.name.toLowerCase()
-        );
-        if (index >= 0) customers[index] = { ...customers[index], ...customerData };
-        else customers.push(customerData);
+        const index = customers.findIndex(c => (customerData.phone && c.phone === customerData.phone) || c.name.toLowerCase() === customerData.name.toLowerCase());
+        if (index >= 0) customers[index] = { ...customers[index], ...customerData }; else customers.push(customerData);
         localStorage.setItem(CUSTOMER_KEY, JSON.stringify(customers));
         window.dispatchEvent(new Event('storage'));
       }
   },
 
   deleteCustomer: async (id: string): Promise<void> => {
-      if (isOnline()) {
-          await deleteDoc(doc(db, "customers", id));
-      } else {
+      if (isOnline()) { await deleteDoc(doc(db, "customers", id)); } else {
           const customers = storageService.getCustomersSync();
           const filtered = customers.filter(c => c.id !== id);
           localStorage.setItem(CUSTOMER_KEY, JSON.stringify(filtered));
@@ -451,20 +582,15 @@ export const storageService = {
 
   importCustomersBatch: async (customers: Customer[]): Promise<number> => {
       if (customers.length === 0) return 0;
-
       if (isOnline()) {
           const batch = writeBatch(db);
-          customers.forEach(c => {
-              const ref = doc(db, "customers", c.id);
-              batch.set(ref, c, { merge: true });
-          });
+          customers.forEach(c => { const ref = doc(db, "customers", c.id); batch.set(ref, c, { merge: true }); });
           await batch.commit();
       } else {
           const existing = storageService.getCustomersSync();
           customers.forEach(c => {
             const index = existing.findIndex(ex => ex.id === c.id || (ex.phone && ex.phone === c.phone));
-            if (index >= 0) existing[index] = { ...existing[index], ...c };
-            else existing.push(c);
+            if (index >= 0) existing[index] = { ...existing[index], ...c }; else existing.push(c);
           });
           localStorage.setItem(CUSTOMER_KEY, JSON.stringify(existing));
           window.dispatchEvent(new Event('storage'));

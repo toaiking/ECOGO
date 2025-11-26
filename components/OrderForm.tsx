@@ -395,9 +395,10 @@ const OrderForm: React.FC = () => {
                             <div className="w-20">
                                 <input 
                                     type="number" 
-                                    min="1"
-                                    value={item.quantity}
-                                    onChange={(e) => handleItemChange(idx, 'quantity', Number(e.target.value))}
+                                    min="0.1"
+                                    step="any"
+                                    value={item.quantity === 0 ? '' : item.quantity}
+                                    onChange={(e) => handleItemChange(idx, 'quantity', e.target.value === '' ? 0 : Number(e.target.value))}
                                     className="w-full p-2 text-center bg-gray-50 focus:bg-white border border-transparent focus:border-eco-500 rounded-lg text-sm font-bold outline-none"
                                     placeholder="SL"
                                 />
@@ -405,8 +406,9 @@ const OrderForm: React.FC = () => {
                             <div className="flex-grow md:w-32">
                                 <input 
                                     type="number"
-                                    value={item.price}
-                                    onChange={(e) => handleItemChange(idx, 'price', Number(e.target.value))}
+                                    step="any"
+                                    value={item.price === 0 ? '' : item.price}
+                                    onChange={(e) => handleItemChange(idx, 'price', e.target.value === '' ? 0 : Number(e.target.value))}
                                     className="w-full p-2 text-right bg-gray-50 focus:bg-white border border-transparent focus:border-eco-500 rounded-lg text-sm font-bold text-gray-800 outline-none"
                                     placeholder="Giá"
                                 />

@@ -6,6 +6,8 @@ import toast from 'react-hot-toast';
 import { db } from '../firebaseConfig';
 import ConfirmModal from './ConfirmModal';
 import SettingsModal from './SettingsModal';
+import NotificationMenu from './NotificationMenu';
+import { Notification } from '../types';
 
 // Khai báo để TypeScript không báo lỗi
 declare const __APP_VERSION__: string;
@@ -18,23 +20,25 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [showConfirmSync, setShowConfirmSync] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showNotif, setShowNotif] = useState(false);
   const [installPrompt, setInstallPrompt] = useState<any>(null);
   const [isIOS, setIsIOS] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   
+  const [unreadCount, setUnreadCount] = useState(0);
+
   const mobileMenuRef = useRef<HTMLDivElement>(null);
+  const notifBtnRef = useRef<HTMLButtonElement>(null); // Ref for the bell button
   const location = useLocation();
   const isOnline = !!db;
   
-  const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.0.1';
+  const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.1.15';
 
   useEffect(() => {
-    // Check if iOS
     const userAgent = window.navigator.userAgent.toLowerCase();
     const ios = /iphone|ipad|ipod/.test(userAgent);
     setIsIOS(ios);
 
-    // Listen for install prompt
     const handleBeforeInstallPrompt = (e: any) => {
       e.preventDefault();
       setInstallPrompt(e);
@@ -44,21 +48,30 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
 
     // Close mobile menu when clicking outside
     const handleClickOutside = (event: MouseEvent) => {
+      // Only handle Mobile Menu closing here
       if (mobileMenuRef.current && !mobileMenuRef.current.contains(event.target as Node)) {
         setIsMobileMenuOpen(false);
       }
+      // REMOVED: Notification closing logic from here to prevent conflict. 
+      // NotificationMenu component now handles its own "click outside".
     };
     document.addEventListener('mousedown', handleClickOutside);
+
+    const unsubNotif = storageService.subscribeNotifications((notifs) => {
+        setUnreadCount(notifs.filter(n => !n.isRead).length);
+    });
 
     return () => {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
       document.removeEventListener('mousedown', handleClickOutside);
+      if (unsubNotif) unsubNotif();
     };
   }, []);
 
-  // Close menu when route changes
+  // Close all menus when route changes
   useEffect(() => {
       setIsMobileMenuOpen(false);
+      setShowNotif(false);
   }, [location]);
 
   const handleInstallClick = () => {
@@ -104,6 +117,11 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
     }
   };
 
+  const toggleNotifications = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      setShowNotif(!showNotif);
+  };
+
   // Styles
   const desktopLinkClass = (isActive: boolean) =>
     `flex items-center px-3 py-2 rounded-xl transition-all duration-300 ${
@@ -141,7 +159,7 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
               </div>
             </div>
             
-            {/* DESKTOP MENU (Hidden on Mobile) */}
+            {/* DESKTOP MENU */}
             <div className="hidden md:flex items-center space-x-1">
                 <NavLink to="/dashboard" className={({ isActive }) => desktopLinkClass(isActive)}>
                   <i className="fas fa-chart-pie mr-2 text-sm"></i> Tổng Quan
@@ -161,6 +179,26 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
 
                 <div className="w-px h-6 bg-eco-700 mx-2"></div>
 
+                <div className="relative">
+                    <button 
+                        ref={notifBtnRef}
+                        onClick={toggleNotifications} 
+                        className={`p-2 rounded-lg transition-colors relative ${showNotif ? 'bg-eco-900 text-white' : 'text-eco-200 hover:text-white'}`}
+                        title="Thông báo"
+                    >
+                        <i className="fas fa-bell"></i>
+                        {unreadCount > 0 && (
+                            <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-eco-900"></span>
+                        )}
+                    </button>
+                    {/* Pass ref of the button so Menu knows what to ignore when clicking outside */}
+                    <NotificationMenu 
+                        isOpen={showNotif} 
+                        onClose={() => setShowNotif(false)} 
+                        ignoreRef={notifBtnRef}
+                    />
+                </div>
+
                 {isOnline && (
                   <button onClick={handleSyncClick} className="p-2 text-eco-200 hover:text-white" title="Đồng bộ">
                       <i className={`fas fa-cloud-upload-alt ${isSyncing ? 'animate-bounce' : ''}`}></i>
@@ -176,6 +214,25 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
 
             {/* MOBILE ACTION BAR */}
             <div className="md:hidden flex items-center gap-3">
+                {/* Notification Bell (Mobile) */}
+                <div className="relative">
+                    <button 
+                        ref={notifBtnRef}
+                        onClick={toggleNotifications} 
+                        className={`p-3 rounded-xl transition-all relative ${showNotif ? 'bg-eco-700 text-white' : 'text-eco-100'}`}
+                    >
+                        <i className="fas fa-bell text-xl"></i>
+                        {unreadCount > 0 && (
+                            <span className="absolute top-2 right-2 w-3 h-3 bg-red-500 rounded-full border-2 border-eco-800"></span>
+                        )}
+                    </button>
+                    <NotificationMenu 
+                        isOpen={showNotif} 
+                        onClose={() => setShowNotif(false)} 
+                        ignoreRef={notifBtnRef}
+                    />
+                </div>
+
                 {/* Priority Actions */}
                 <NavLink to="/order" className={({ isActive }) => mobileLinkClass(isActive)}>
                     <i className="fas fa-plus-circle text-xl"></i>
@@ -184,9 +241,9 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
                     <i className="fas fa-shipping-fast text-xl"></i>
                 </NavLink>
 
-                {/* More / Menu Button */}
+                {/* Hamburger Menu */}
                 <button 
-                    onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+                    onClick={(e) => { e.stopPropagation(); setIsMobileMenuOpen(!isMobileMenuOpen); }}
                     className={`p-3 rounded-xl transition-all ${isMobileMenuOpen ? 'bg-eco-700 text-white shadow-inner' : 'text-eco-100'}`}
                 >
                     <i className="fas fa-bars text-xl"></i>
@@ -201,7 +258,6 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
                 ref={mobileMenuRef}
                 className="absolute top-16 right-2 w-64 bg-white rounded-2xl shadow-2xl z-[100] border border-gray-100 overflow-hidden animate-fade-in-down origin-top-right md:hidden"
             >
-                {/* User Info Header */}
                 <div className="bg-gray-50 p-4 border-b border-gray-100 flex items-center gap-3">
                     <div className="w-10 h-10 rounded-full bg-eco-100 flex items-center justify-center text-eco-600">
                         <i className="fas fa-user"></i>
@@ -216,37 +272,28 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
                     <NavLink to="/dashboard" className={({isActive}) => `${menuItemClass} ${isActive ? 'bg-eco-50 text-eco-700' : ''}`}>
                         <i className="fas fa-chart-pie w-6 text-center"></i> Tổng Quan
                     </NavLink>
-                    
                     <NavLink to="/inventory" className={({isActive}) => `${menuItemClass} ${isActive ? 'bg-eco-50 text-eco-700' : ''}`}>
                         <i className="fas fa-warehouse w-6 text-center"></i> Kho Hàng
                     </NavLink>
-                    
                     <NavLink to="/customers" className={({isActive}) => `${menuItemClass} ${isActive ? 'bg-eco-50 text-eco-700' : ''}`}>
                         <i className="fas fa-address-book w-6 text-center"></i> Khách Hàng
                     </NavLink>
-
                     <hr className="my-2 border-gray-100" />
-
                     {isOnline && (
                         <button onClick={handleSyncClick} className={menuItemClass}>
                             <i className={`fas fa-cloud-upload-alt w-6 text-center ${isSyncing ? 'text-blue-500' : 'text-gray-400'}`}></i> 
                             <span>Đồng bộ Cloud</span>
-                            {isSyncing && <span className="text-xs ml-auto text-blue-500 animate-pulse">Đang chạy...</span>}
                         </button>
                     )}
-
                     <button onClick={() => { setShowSettings(true); setIsMobileMenuOpen(false); }} className={menuItemClass}>
-                        <i className="fas fa-cog w-6 text-center text-gray-400"></i> Cài đặt & Ngân hàng
+                        <i className="fas fa-cog w-6 text-center text-gray-400"></i> Cài đặt
                     </button>
-
                     {(installPrompt || isIOS) && (
                         <button onClick={handleInstallClick} className={menuItemClass}>
                             <i className="fas fa-download w-6 text-center text-gray-400"></i> Cài đặt App
                         </button>
                     )}
-
                     <hr className="my-2 border-gray-100" />
-
                     <button onClick={onLogout} className={`${menuItemClass} text-red-600 hover:bg-red-50`}>
                         <i className="fas fa-sign-out-alt w-6 text-center"></i> Đăng xuất
                     </button>
@@ -258,17 +305,13 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
       <ConfirmModal 
         isOpen={showConfirmSync}
         title="Đồng bộ dữ liệu"
-        message="Dữ liệu từ máy này sẽ được đẩy lên Cloud. Nếu trùng ID, dữ liệu Cloud sẽ bị ghi đè."
+        message="Dữ liệu từ máy này sẽ được đẩy lên Cloud."
         onConfirm={confirmSync}
         onCancel={() => setShowConfirmSync(false)}
         confirmLabel="Đồng ý"
         isDanger={false}
       />
-      
-      <SettingsModal 
-        isOpen={showSettings}
-        onClose={() => setShowSettings(false)}
-      />
+      <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} />
     </>
   );
 };
