@@ -539,14 +539,20 @@ export const storageService = {
 
   subscribeCustomers: (callback: (customers: Customer[]) => void) => {
       if (isOnline()) {
-          return onSnapshot(collection(db, "customers"), (snapshot) => {
+          const q = query(collection(db, "customers"), orderBy("priorityScore", "asc"), limit(2000)); // Optimize query
+          return onSnapshot(q, (snapshot) => {
               const customers: Customer[] = [];
               snapshot.forEach(d => customers.push(d.data() as Customer));
               callback(customers);
           });
       } else {
            const load = () => {
-              try { const data = localStorage.getItem(CUSTOMER_KEY); callback(data ? JSON.parse(data) : []); } catch { callback([]); }
+              try { 
+                  const data = localStorage.getItem(CUSTOMER_KEY); 
+                  const list = data ? JSON.parse(data) : [];
+                  list.sort((a:Customer,b:Customer) => (a.priorityScore || 999) - (b.priorityScore || 999));
+                  callback(list);
+              } catch { callback([]); }
            };
            load();
            const handler = () => load();
@@ -560,12 +566,15 @@ export const storageService = {
   },
 
   upsertCustomer: async (customerData: Customer): Promise<void> => {
+      // Ensure priority score is preserved or defaulted
+      const dataToSave = { ...customerData, priorityScore: customerData.priorityScore ?? 999 };
+
       if (isOnline()) {
-          await setDoc(doc(db, "customers", customerData.id), customerData, { merge: true });
+          await setDoc(doc(db, "customers", dataToSave.id), dataToSave, { merge: true });
       } else {
         const customers = storageService.getCustomersSync();
-        const index = customers.findIndex(c => (customerData.phone && c.phone === customerData.phone) || c.name.toLowerCase() === customerData.name.toLowerCase());
-        if (index >= 0) customers[index] = { ...customers[index], ...customerData }; else customers.push(customerData);
+        const index = customers.findIndex(c => (dataToSave.phone && c.phone === dataToSave.phone) || c.name.toLowerCase() === dataToSave.name.toLowerCase());
+        if (index >= 0) customers[index] = { ...customers[index], ...dataToSave }; else customers.push(dataToSave);
         localStorage.setItem(CUSTOMER_KEY, JSON.stringify(customers));
         window.dispatchEvent(new Event('storage'));
       }
@@ -580,12 +589,34 @@ export const storageService = {
       }
   },
 
+  clearAllCustomers: async (): Promise<void> => {
+      if (isOnline()) {
+          const q = query(collection(db, "customers"), limit(500));
+          const snap = await getDocs(q);
+          const batch = writeBatch(db);
+          snap.forEach(d => batch.delete(d.ref));
+          await batch.commit();
+          // If more than 500, user needs to click again. Firestore limitation for batch.
+      } else {
+          localStorage.setItem(CUSTOMER_KEY, JSON.stringify([]));
+          window.dispatchEvent(new Event('storage'));
+      }
+  },
+
   importCustomersBatch: async (customers: Customer[]): Promise<number> => {
       if (customers.length === 0) return 0;
       if (isOnline()) {
           const batch = writeBatch(db);
-          customers.forEach(c => { const ref = doc(db, "customers", c.id); batch.set(ref, c, { merge: true }); });
+          // Process in chunks of 500 if array is large
+          let opCount = 0;
+          for (const c of customers) {
+              const ref = doc(db, "customers", c.id);
+              batch.set(ref, c, { merge: true });
+              opCount++;
+              if (opCount >= 490) break; // Safety limit per batch
+          }
           await batch.commit();
+          return opCount;
       } else {
           const existing = storageService.getCustomersSync();
           customers.forEach(c => {
@@ -594,7 +625,30 @@ export const storageService = {
           });
           localStorage.setItem(CUSTOMER_KEY, JSON.stringify(existing));
           window.dispatchEvent(new Event('storage'));
+          return customers.length;
       }
-      return customers.length;
+  },
+
+  autoSortOrders: async (orders: Order[]): Promise<void> => {
+      let customers: Customer[] = [];
+      if (isOnline()) {
+          const snap = await getDocs(collection(db, "customers"));
+          snap.forEach(d => customers.push(d.data() as Customer));
+      } else {
+          customers = storageService.getCustomersSync();
+      }
+
+      // Sort by priority score (ascending: 1 is high priority) -> then undefined
+      const sorted = [...orders].sort((a, b) => {
+          const custA = customers.find(c => c.phone === a.customerPhone);
+          const custB = customers.find(c => c.phone === b.customerPhone);
+          
+          const scoreA = custA?.priorityScore ?? 999;
+          const scoreB = custB?.priorityScore ?? 999;
+          
+          return scoreA - scoreB;
+      });
+
+      await storageService.saveOrdersList(sorted.map((o, idx) => ({ ...o, orderIndex: idx })));
   }
 };

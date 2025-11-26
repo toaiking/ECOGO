@@ -212,6 +212,11 @@ const TrackingDashboard: React.FC = () => {
       toast.success('Đã chuyển đơn sang lô sau!');
   };
 
+  const handleAutoSort = async () => {
+      await storageService.autoSortOrders(filteredOrders);
+      toast.success('Đã sắp xếp tự động theo độ ưu tiên');
+  };
+
   const saveReorderedList = async (newSortedList: Order[]) => { 
       const reindexedList = newSortedList.map((o, idx) => ({ ...o, orderIndex: idx })); 
       const newMainOrders = orders.map(o => { const found = reindexedList.find(ro => ro.id === o.id); return found ? found : o; }); 
@@ -361,6 +366,14 @@ const TrackingDashboard: React.FC = () => {
                   {productStatsList.length === 0 ? <div className="text-gray-400 text-sm italic">Chưa có dữ liệu.</div> : (<div className="overflow-x-auto"><table className="w-full text-sm text-left"><thead className="bg-gray-100 text-gray-600 uppercase text-xs"><tr><th className="px-4 py-2 rounded-l-lg">Tên sản phẩm</th><th className="px-4 py-2 text-right rounded-r-lg">Số lượng</th></tr></thead><tbody className="divide-y divide-gray-50">{productStatsList.map(([name, qty]) => (<tr key={name} className="hover:bg-gray-50"><td className="px-4 py-2 font-medium text-gray-800">{name}</td><td className="px-4 py-2 text-right font-bold text-eco-600">{qty}</td></tr>))}</tbody></table></div>)}
               </div>
           </div>
+      )}
+
+      {sortBy === 'ROUTE' && !isCompactMode && (
+        <div className="flex items-center justify-center gap-3 p-3 bg-blue-50/50 border border-blue-100 rounded-lg text-blue-800 text-sm mt-2">
+            <i className="fas fa-hand-pointer animate-pulse"></i>
+            <span className="font-medium">Chế độ sắp xếp: Kéo thả thẻ (PC) hoặc giữ tay nắm 6 chấm (Mobile)</span>
+            <button onClick={handleAutoSort} className="ml-2 px-3 py-1 bg-blue-600 text-white text-xs font-bold rounded shadow-sm hover:bg-blue-700">Auto Sort</button>
+        </div>
       )}
 
       <div className={`${isCompactMode ? 'bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex flex-col divide-y divide-gray-100' : (sortBy === 'ROUTE' ? 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4' : 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4')} mt-1`}>
