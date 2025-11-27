@@ -56,6 +56,8 @@ export interface Customer {
   phone: string;
   address: string;
   lastOrderDate: number;
+  priorityScore?: number; // 1 is highest priority, 999 is normal
+  totalOrders?: number;
 }
 
 export interface SmartParseResult {

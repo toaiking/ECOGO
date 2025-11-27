@@ -16,6 +16,8 @@ interface Props {
   onTouchStart?: (e: React.TouchEvent<HTMLDivElement>) => void;
   onTouchMove?: (e: React.TouchEvent<HTMLDivElement>) => void;
   onTouchEnd?: (e: React.TouchEvent<HTMLDivElement>) => void;
+  isNewCustomer?: boolean;
+  onSplitBatch?: (order: Order) => void;
 }
 
 const statusConfig: Record<OrderStatus, { color: string; bg: string; label: string; icon: string }> = {
@@ -55,7 +57,8 @@ const compressImage = (file: File): Promise<string> => {
 export const OrderCard: React.FC<Props> = ({ 
   order, onUpdate, onDelete, onEdit, 
   isSortMode, index, isCompactMode,
-  onTouchStart, onTouchMove, onTouchEnd
+  onTouchStart, onTouchMove, onTouchEnd,
+  isNewCustomer, onSplitBatch
 }) => {
   const [uploading, setUploading] = useState(false);
   const [showQR, setShowQR] = useState(false);
@@ -113,11 +116,9 @@ export const OrderCard: React.FC<Props> = ({
           const file = new File([blob], `delivery-${order.id}.jpg`, { type: "image/jpeg" });
           const text = `Đã giao đơn #${order.id} - ${order.customerName}`;
           
-          // Copy text first
           await navigator.clipboard.writeText(text); 
           toast("Đã copy nội dung!", { icon: '📋' });
           
-          // Then share image
           if (navigator.share) { 
               await navigator.share({ title: `Giao hàng #${order.id}`, text: text, files: [file] }); 
           } else { 
@@ -195,7 +196,7 @@ export const OrderCard: React.FC<Props> = ({
                {/* DESKTOP COMPACT */}
                <div className="hidden md:flex items-center gap-3 text-sm">
                     <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${config.bg.replace('50','500')}`}></div>
-                    <div className="w-40 font-bold text-gray-800 truncate">{order.customerName}<div className="text-[10px] text-gray-400 font-normal">{order.customerPhone}</div></div>
+                    <div className="w-40 font-bold text-gray-800 truncate">{order.customerName} {isNewCustomer && <span className="text-[9px] bg-red-500 text-white px-1 rounded ml-1">NEW</span>}<div className="text-[10px] text-gray-400 font-normal">{order.customerPhone}</div></div>
                     <div className="flex-grow text-xs text-gray-600 truncate">{order.address} - <span className="italic text-gray-400">{order.items.map(i=>i.name).join(', ')}</span></div>
                     <div className="flex items-center gap-2"><span className="font-bold text-gray-900">{new Intl.NumberFormat('vi-VN').format(order.totalPrice)}</span><PaymentBadge /></div>
                     <div className="flex items-center gap-1 pl-2">{!isCompleted && (<button onClick={nextStatus} className="w-7 h-7 flex items-center justify-center rounded bg-gray-100 hover:bg-black hover:text-white transition-colors"><i className="fas fa-arrow-right text-xs"></i></button>)}<button onClick={(e) => { e.stopPropagation(); sendSMS(); }} className="w-7 h-7 flex items-center justify-center text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded"><i className="fas fa-comment-dots text-xs"></i></button></div>
@@ -206,6 +207,7 @@ export const OrderCard: React.FC<Props> = ({
                     <div className="flex justify-between items-center">
                         <div className="flex items-center gap-2 overflow-hidden max-w-[65%]">
                             <span className="font-bold text-gray-900 text-sm truncate">{order.customerName}</span>
+                            {isNewCustomer && <span className="text-[8px] font-bold bg-red-500 text-white px-1 rounded flex-shrink-0">NEW</span>}
                             <div className="flex bg-gray-100 rounded-md h-5 items-center flex-shrink-0">
                                 <a href={`tel:${order.customerPhone}`} onClick={e => e.stopPropagation()} className="w-6 flex items-center justify-center text-gray-600 active:text-eco-600 h-full"><i className="fas fa-phone text-[9px]"></i></a>
                                 <div className="w-px h-2.5 bg-gray-300"></div>
@@ -265,6 +267,7 @@ export const OrderCard: React.FC<Props> = ({
              <div className={`flex-grow min-w-0 ${isSortMode ? 'pr-6' : ''}`}>
                  <div className="flex items-center gap-2 mb-1">
                      <h3 className="font-bold text-gray-900 text-sm truncate leading-snug pb-1">{order.customerName}</h3>
+                     {isNewCustomer && <span className="text-[8px] font-bold bg-red-500 text-white px-1.5 py-0.5 rounded-sm">NEW</span>}
                      <span className={`text-[9px] px-1.5 rounded-sm font-bold uppercase ${config.bg} ${config.color}`}>{config.label}</span>
                  </div>
                  <div className="text-[11px] text-gray-500 leading-tight truncate">{order.address}</div>
@@ -307,14 +310,19 @@ export const OrderCard: React.FC<Props> = ({
                     <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(order.address)}`} target="_blank" className="w-6 h-6 rounded bg-red-50 text-red-600 flex items-center justify-center hover:bg-red-600 hover:text-white transition-colors border border-red-100"><i className="fas fa-map-marker-alt text-[10px]"></i></a>
                     <button onClick={() => sendSMS()} className="w-6 h-6 rounded bg-green-50 text-green-600 flex items-center justify-center hover:bg-green-600 hover:text-white transition-colors border border-green-100"><i className="fas fa-comment-dots text-[10px]"></i></button>
                     
-                    {/* Click Menu (No Hover) */}
+                    {/* Click Menu */}
                     <div className="relative" ref={actionMenuRef}>
                         <button onClick={() => setShowActionMenu(!showActionMenu)} className={`w-6 h-6 rounded text-gray-400 hover:text-gray-700 flex items-center justify-center border border-transparent hover:border-gray-200 ${showActionMenu ? 'bg-gray-100 text-gray-700' : ''}`}><i className="fas fa-ellipsis-v text-[10px]"></i></button>
                         {showActionMenu && (
-                            <div className="absolute bottom-full right-0 mb-1 bg-white shadow-xl border border-gray-200 rounded-lg p-1 min-w-[110px] z-20 animate-fade-in">
+                            <div className="absolute bottom-full right-0 mb-1 bg-white shadow-xl border border-gray-200 rounded-lg p-1 min-w-[130px] z-20 animate-fade-in">
                                 <button onClick={() => { onEdit(order); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-blue-600 font-bold flex items-center gap-2 rounded"><i className="fas fa-edit"></i> Sửa đơn</button>
+                                
+                                {/* Split Batch Button */}
+                                {onSplitBatch && order.batchId && (
+                                    <button onClick={() => { onSplitBatch(order); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-orange-600 flex items-center gap-2 rounded font-bold"><i className="fas fa-history"></i> Giao sau</button>
+                                )}
+                                
                                 <button onClick={() => { handlePrint(); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-gray-600 flex items-center gap-2 rounded"><i className="fas fa-print"></i> In phiếu</button>
-                                {/* Share Proof Button */}
                                 {order.deliveryProof && <button onClick={() => { handleShareProof(); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-purple-600 flex items-center gap-2 rounded"><i className="fas fa-share-alt"></i> Gửi ảnh</button>}
                                 <div className="border-t border-gray-100 my-1"></div>
                                 {order.deliveryProof && <button onClick={() => { handleDeletePhoto(); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-red-50 text-xs text-red-500 flex items-center gap-2 rounded"><i className="fas fa-image"></i> Xóa ảnh</button>}

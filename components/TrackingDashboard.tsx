@@ -12,9 +12,12 @@ type SortOption = 'NEWEST' | 'ROUTE' | 'STATUS';
 const TrackingDashboard: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [products, setProducts] = useState<Product[]>([]); 
+  
+  // Multi-select Filters
   const [filterStatus, setFilterStatus] = useState<OrderStatus[]>([]);
-  const [filterBatch, setFilterBatch] = useState<string>('ALL');
+  const [filterBatch, setFilterBatch] = useState<string[]>([]); 
   const [filterUser, setFilterUser] = useState<string>('ALL');
+  
   const [searchTerm, setSearchTerm] = useState('');
   const [sortBy, setSortBy] = useState<SortOption>('NEWEST');
   const [isCompactMode, setIsCompactMode] = useState(false); 
@@ -36,7 +39,9 @@ const TrackingDashboard: React.FC = () => {
   
   // Dropdown Floating State
   const statusDropdownBtnRef = useRef<HTMLButtonElement>(null);
-  const [isStatusDropdownOpen, setIsStatusDropdownOpen] = useState(false);
+  const batchDropdownBtnRef = useRef<HTMLButtonElement>(null);
+  
+  const [activeDropdown, setActiveDropdown] = useState<'STATUS' | 'BATCH' | null>(null);
   const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0, width: 0 });
 
   const statusLabels: Record<OrderStatus, string> = { [OrderStatus.PENDING]: 'Chờ xử lý', [OrderStatus.PICKED_UP]: 'Đã lấy hàng', [OrderStatus.IN_TRANSIT]: 'Đang giao', [OrderStatus.DELIVERED]: 'Đã giao', [OrderStatus.CANCELLED]: 'Đã hủy' };
@@ -46,8 +51,7 @@ const TrackingDashboard: React.FC = () => {
       const observer = new IntersectionObserver(
           ([entry]) => {
               setIsHeaderVisible(entry.isIntersecting);
-              // Close dropdown on scroll to avoid detachment
-              setIsStatusDropdownOpen(false);
+              setActiveDropdown(null); // Close dropdowns on scroll
           },
           { threshold: 0, rootMargin: "-64px 0px 0px 0px" }
       );
@@ -67,8 +71,7 @@ const TrackingDashboard: React.FC = () => {
         setProducts(data);
     });
     
-    // Listener to close floating dropdown on resize/scroll
-    const handleWindowEvents = () => setIsStatusDropdownOpen(false);
+    const handleWindowEvents = () => setActiveDropdown(null);
     window.addEventListener('resize', handleWindowEvents);
     window.addEventListener('scroll', handleWindowEvents, true);
 
@@ -80,24 +83,32 @@ const TrackingDashboard: React.FC = () => {
     };
   }, []);
 
+  // Click Outside Logic
   useEffect(() => {
       const handleClickOutside = (event: MouseEvent) => {
           if (activeEditProductRow !== null && !(event.target as Element).closest('.product-dropdown-container')) {
               setActiveEditProductRow(null);
           }
-          // Logic for status dropdown click outside
-          if (isStatusDropdownOpen && statusDropdownBtnRef.current && !statusDropdownBtnRef.current.contains(event.target as Node)) {
-              // Check if clicked inside the floating dropdown (handled via class or id check if strictly needed, but simple toggle usually works)
-              const dropdown = document.getElementById('floating-status-dropdown');
-              if (dropdown && !dropdown.contains(event.target as Node)) {
-                  setIsStatusDropdownOpen(false);
+          
+          if (activeDropdown) {
+              const dropdownEl = document.getElementById('floating-dropdown-portal');
+              const statusBtn = statusDropdownBtnRef.current;
+              const batchBtn = batchDropdownBtnRef.current;
+              
+              const clickedInsideDropdown = dropdownEl && dropdownEl.contains(event.target as Node);
+              const clickedStatusBtn = statusBtn && statusBtn.contains(event.target as Node);
+              const clickedBatchBtn = batchBtn && batchBtn.contains(event.target as Node);
+
+              if (!clickedInsideDropdown && !clickedStatusBtn && !clickedBatchBtn) {
+                  setActiveDropdown(null);
               }
           }
       };
       document.addEventListener('mousedown', handleClickOutside);
       return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [activeEditProductRow, isStatusDropdownOpen]);
+  }, [activeEditProductRow, activeDropdown]);
 
+  // DATA PROCESSING
   const batches = useMemo(() => {
     const batchActivity = new Map<string, number>();
     orders.forEach(o => {
@@ -114,11 +125,22 @@ const TrackingDashboard: React.FC = () => {
       orders.forEach(o => { if (o.lastUpdatedBy) userSet.add(o.lastUpdatedBy); });
       return Array.from(userSet).sort();
   }, [orders]);
+
+  // Calculate Customer Order Counts to Identify NEW Customers
+  const customerOrderCounts = useMemo(() => {
+      const counts: Record<string, number> = {};
+      orders.forEach(o => {
+          if (o.customerPhone) {
+              counts[o.customerPhone] = (counts[o.customerPhone] || 0) + 1;
+          }
+      });
+      return counts;
+  }, [orders]);
   
   const filteredOrders = useMemo(() => {
     let result = orders.filter(o => {
       const statusMatch = filterStatus.length === 0 || filterStatus.includes(o.status);
-      const batchMatch = filterBatch === 'ALL' || o.batchId === filterBatch;
+      const batchMatch = filterBatch.length === 0 || (o.batchId && filterBatch.includes(o.batchId));
       const userMatch = filterUser === 'ALL' || o.lastUpdatedBy === filterUser;
       const searchLower = searchTerm.toLowerCase();
       const searchMatch = !searchTerm || 
@@ -170,44 +192,40 @@ const TrackingDashboard: React.FC = () => {
 
   const handleUpdate = (updatedOrder: Order) => {};
   const handleDeleteClick = (id: string) => { setDeleteId(id); setShowDeleteConfirm(true); };
-  
   const confirmDelete = async () => { 
       if (deleteId) { 
           const orderToDelete = orders.find(o => o.id === deleteId);
-          // Pass customer info to ensure correct notification
-          await storageService.deleteOrder(
-              deleteId, 
-              orderToDelete ? { name: orderToDelete.customerName, address: orderToDelete.address } : undefined
-          ); 
+          await storageService.deleteOrder(deleteId, orderToDelete ? { name: orderToDelete.customerName, address: orderToDelete.address } : undefined); 
           toast.success('Đã xóa đơn hàng'); 
           setShowDeleteConfirm(false); 
           setDeleteId(null); 
       } 
   };
-
   const handleEdit = (order: Order) => { setEditingOrder(JSON.parse(JSON.stringify(order))); setActiveEditProductRow(null); };
   const saveEdit = async (e: React.FormEvent) => { e.preventDefault(); if (editingOrder) { await storageService.updateOrderDetails(editingOrder); setEditingOrder(null); toast.success('Đã lưu thay đổi'); } };
   const updateEditItem = (index: number, field: keyof OrderItem, value: any) => { if (!editingOrder) return; const newItems = [...editingOrder.items]; newItems[index] = { ...newItems[index], [field]: value }; if (field === 'name') newItems[index].productId = undefined; const newTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0); setEditingOrder({ ...editingOrder, items: newItems, totalPrice: newTotal }); };
   const selectProductForEditItem = (index: number, product: Product) => { if (!editingOrder) return; const newItems = [...editingOrder.items]; newItems[index] = { ...newItems[index], productId: product.id, name: product.name, price: product.defaultPrice }; const newTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0); setEditingOrder({ ...editingOrder, items: newItems, totalPrice: newTotal }); setActiveEditProductRow(null); };
   const addEditItem = () => { if (!editingOrder) return; const newItems = [...editingOrder.items, { id: uuidv4(), name: '', quantity: 1, price: 0 }]; setEditingOrder({ ...editingOrder, items: newItems }); };
   const removeEditItem = (index: number) => { if (!editingOrder) return; const newItems = [...editingOrder.items]; newItems.splice(index, 1); const newTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0); setEditingOrder({ ...editingOrder, items: newItems, totalPrice: newTotal }); };
-  
+  const handleSplitBatch = async (order: Order) => {
+      await storageService.splitOrderToNextBatch(order.id, order.batchId);
+      toast.success('Đã chuyển đơn sang lô sau!');
+  };
+
+  const handleAutoSort = async () => {
+      const count = await storageService.autoSortOrders(filteredOrders);
+      setSortBy('ROUTE');
+      toast.success(`Đã sắp xếp ${filteredOrders.length} đơn. Khớp ${count} khách hàng.`);
+  };
+
   const saveReorderedList = async (newSortedList: Order[]) => { 
       const reindexedList = newSortedList.map((o, idx) => ({ ...o, orderIndex: idx })); 
-      const newMainOrders = orders.map(o => { 
-          const found = reindexedList.find(ro => ro.id === o.id); 
-          return found ? found : o; 
-      }); 
+      const newMainOrders = orders.map(o => { const found = reindexedList.find(ro => ro.id === o.id); return found ? found : o; }); 
       setOrders(newMainOrders); 
       await storageService.saveOrdersList(reindexedList); 
   };
   
-  // --- TOUCH DRAG HANDLERS ---
-  const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>, position: number) => {
-      dragItem.current = position;
-      e.currentTarget.closest('.order-row')?.classList.add('opacity-50', 'bg-yellow-50');
-  };
-
+  const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>, position: number) => { dragItem.current = position; e.currentTarget.closest('.order-row')?.classList.add('opacity-50', 'bg-yellow-50'); };
   const handleTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
       if (dragItem.current === null) return;
       const touch = e.touches[0];
@@ -225,40 +243,15 @@ const TrackingDashboard: React.FC = () => {
           }
       }
   };
-
-  const handleTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
-      dragItem.current = null;
-      const rows = document.querySelectorAll('.order-row');
-      rows.forEach(r => r.classList.remove('opacity-50', 'bg-yellow-50'));
-  };
-
-  // --- DESKTOP DRAG HANDLERS ---
-  const handleDragStart = (e: React.DragEvent<HTMLDivElement>, position: number) => { 
-      dragItem.current = position; 
-      e.currentTarget.classList.add('opacity-40', 'scale-95'); 
-      if (e.dataTransfer) e.dataTransfer.effectAllowed = "move"; 
-  };
-  const handleDragEnter = (e: React.DragEvent<HTMLDivElement>, position: number) => { 
-      dragOverItem.current = position; 
-      e.preventDefault(); 
-  };
-  const handleDragEnd = (e: React.DragEvent<HTMLDivElement>) => { 
-      e.currentTarget.classList.remove('opacity-40', 'scale-95'); 
-      if (dragItem.current !== null && dragOverItem.current !== null && sortBy === 'ROUTE') { 
-          const _orders = [...filteredOrders]; 
-          const draggedItemContent = _orders[dragItem.current]; 
-          _orders.splice(dragItem.current, 1); 
-          _orders.splice(dragOverItem.current, 0, draggedItemContent); 
-          saveReorderedList(_orders); 
-      } 
-      dragItem.current = null; 
-      dragOverItem.current = null; 
-  };
+  const handleTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => { dragItem.current = null; const rows = document.querySelectorAll('.order-row'); rows.forEach(r => r.classList.remove('opacity-50', 'bg-yellow-50')); };
+  const handleDragStart = (e: React.DragEvent<HTMLDivElement>, position: number) => { dragItem.current = position; e.currentTarget.classList.add('opacity-40', 'scale-95'); if (e.dataTransfer) e.dataTransfer.effectAllowed = "move"; };
+  const handleDragEnter = (e: React.DragEvent<HTMLDivElement>, position: number) => { dragOverItem.current = position; e.preventDefault(); };
+  const handleDragEnd = (e: React.DragEvent<HTMLDivElement>) => { e.currentTarget.classList.remove('opacity-40', 'scale-95'); if (dragItem.current !== null && dragOverItem.current !== null && sortBy === 'ROUTE') { const _orders = [...filteredOrders]; const draggedItemContent = _orders[dragItem.current]; _orders.splice(dragItem.current, 1); _orders.splice(dragOverItem.current, 0, draggedItemContent); saveReorderedList(_orders); } dragItem.current = null; dragOverItem.current = null; };
 
   const copyRouteToClipboard = () => { const addressList = filteredOrders.filter(o => o.status !== OrderStatus.CANCELLED && o.status !== OrderStatus.DELIVERED).map(o => `- ${o.address} (${o.customerName})`).join('\n'); if (!addressList) { toast('Không có đơn hàng nào cần giao'); return; } navigator.clipboard.writeText(addressList); toast.success('Đã copy danh sách địa chỉ!'); };
   const handlePrintList = () => { 
       const printWindow = window.open('', '_blank'); if (!printWindow) return;
-      const title = filterBatch === 'ALL' ? 'Danh sách đơn hàng' : `Danh sách đơn hàng - ${filterBatch}`;
+      const title = filterBatch.length === 0 ? 'Danh sách đơn hàng' : `Danh sách đơn hàng - ${filterBatch.length > 1 ? 'Nhiều lô' : filterBatch[0]}`;
       const totalAmount = filteredOrders.reduce((sum, o) => o.status !== OrderStatus.CANCELLED ? sum + o.totalPrice : sum, 0);
       const rows = filteredOrders.map((o, index) => {
           const itemsStr = o.items.map(i => `${i.name} (x${i.quantity})`).join('<br/>');
@@ -271,31 +264,30 @@ const TrackingDashboard: React.FC = () => {
   };
   const formatCurrency = (amount: number) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(amount);
   
-  const toggleStatusFilter = (status: OrderStatus) => {
-      setFilterStatus(prev => prev.includes(status) ? prev.filter(s => s !== status) : [...prev, status]);
+  const toggleFilter = (type: 'STATUS' | 'BATCH', value: any) => {
+      if (type === 'STATUS') setFilterStatus(prev => prev.includes(value) ? prev.filter(s => s !== value) : [...prev, value]);
+      if (type === 'BATCH') setFilterBatch(prev => prev.includes(value) ? prev.filter(b => b !== value) : [...prev, value]);
   };
-  const getStatusLabel = () => filterStatus.length === 0 ? 'Trạng thái' : (filterStatus.length === 1 ? statusLabels[filterStatus[0]] : `Đã chọn (${filterStatus.length})`);
+  
+  const getLabel = (type: 'STATUS' | 'BATCH') => {
+      if (type === 'STATUS') return filterStatus.length === 0 ? 'Trạng thái' : (filterStatus.length === 1 ? statusLabels[filterStatus[0]] : `Đã chọn (${filterStatus.length})`);
+      if (type === 'BATCH') return filterBatch.length === 0 ? 'Lô: Tất cả' : (filterBatch.length === 1 ? filterBatch[0] : `Lô (${filterBatch.length})`);
+      return '';
+  };
 
-  // Calculate Dropdown Position using Fixed strategy
-  const openStatusDropdown = () => {
-      if (statusDropdownBtnRef.current) {
-          const rect = statusDropdownBtnRef.current.getBoundingClientRect();
-          setDropdownPos({
-              top: rect.bottom + 4,
-              left: rect.left,
-              width: Math.max(rect.width, 160)
-          });
-          setIsStatusDropdownOpen(!isStatusDropdownOpen);
+  const openDropdown = (type: 'STATUS' | 'BATCH') => {
+      const ref = type === 'STATUS' ? statusDropdownBtnRef : batchDropdownBtnRef;
+      if (ref.current) {
+          const rect = ref.current.getBoundingClientRect();
+          setDropdownPos({ top: rect.bottom + 4, left: rect.left, width: Math.max(rect.width, 160) });
+          setActiveDropdown(activeDropdown === type ? null : type);
       }
   };
 
   return (
     <div className="animate-fade-in pb-20">
-      {/* SMART STICKY HEADER */}
       <div className="sticky top-16 z-30 bg-gray-50/95 backdrop-blur-sm transition-shadow shadow-sm">
-         {/* Mobile Header Layout (2 rows grid) */}
          <div className="bg-white border-b border-gray-200 p-2 shadow-sm">
-             {/* Row 1: Search + Actions */}
              <div className="flex gap-2 items-center mb-2">
                 <div className="relative flex-grow">
                     <i className="fas fa-search absolute left-3 top-2.5 text-gray-400 text-sm"></i>
@@ -306,41 +298,25 @@ const TrackingDashboard: React.FC = () => {
                 <button onClick={copyRouteToClipboard} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-white text-gray-500 hover:text-eco-600 border border-gray-200"><i className="fas fa-map-marked-alt"></i></button>
              </div>
 
-             {/* Row 2: Collapsible Filters */}
              <div className={`grid transition-[grid-template-rows] duration-300 ease-out ${isHeaderVisible ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
                  <div className="overflow-hidden">
                     <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
-                        {/* Batch Select */}
+                        {/* Multi-select Batch Dropdown */}
                         <div className="relative flex-1 min-w-[100px]">
-                            <select value={filterBatch} onChange={e => setFilterBatch(e.target.value)} className="w-full pl-2 pr-6 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-xs font-bold text-gray-700 appearance-none outline-none">
-                                <option value="ALL">Lô: Tất cả</option>{batches.map(b => <option key={b} value={b}>{b}</option>)}
-                            </select>
-                            <i className="fas fa-chevron-down absolute right-2 top-2 text-gray-400 text-[10px] pointer-events-none"></i>
+                            <button ref={batchDropdownBtnRef} onClick={() => openDropdown('BATCH')} className="w-full pl-2 pr-6 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-xs font-bold text-gray-700 text-left flex items-center justify-between outline-none truncate"><span className="truncate">{getLabel('BATCH')}</span><i className="fas fa-chevron-down text-gray-400 text-[10px]"></i></button>
                         </div>
                         
-                        {/* User Select */}
                         {users.length > 0 && (
                             <div className="relative flex-1 min-w-[90px]">
-                                <select value={filterUser} onChange={e => setFilterUser(e.target.value)} className="w-full pl-2 pr-6 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-xs font-medium text-gray-700 appearance-none outline-none">
-                                    <option value="ALL">User: All</option>{users.map(u => <option key={u} value={u}>{u}</option>)}
-                                </select>
-                                <i className="fas fa-user absolute right-2 top-2 text-gray-400 text-[10px] pointer-events-none"></i>
+                                <select value={filterUser} onChange={e => setFilterUser(e.target.value)} className="w-full pl-2 pr-6 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-xs font-medium text-gray-700 appearance-none outline-none"><option value="ALL">User: All</option>{users.map(u => <option key={u} value={u}>{u}</option>)}</select><i className="fas fa-user absolute right-2 top-2 text-gray-400 text-[10px] pointer-events-none"></i>
                             </div>
                         )}
                         
-                        {/* Status Dropdown Trigger */}
+                        {/* Multi-select Status Dropdown */}
                         <div className="relative flex-1 min-w-[110px]">
-                            <button 
-                                ref={statusDropdownBtnRef}
-                                onClick={openStatusDropdown}
-                                className="w-full pl-2 pr-6 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-xs font-medium text-gray-700 text-left flex items-center justify-between outline-none truncate"
-                            >
-                                <span className="truncate">{getStatusLabel()}</span>
-                                <i className="fas fa-chevron-down text-gray-400 text-[10px]"></i>
-                            </button>
+                            <button ref={statusDropdownBtnRef} onClick={() => openDropdown('STATUS')} className="w-full pl-2 pr-6 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-xs font-medium text-gray-700 text-left flex items-center justify-between outline-none truncate"><span className="truncate">{getLabel('STATUS')}</span><i className="fas fa-chevron-down text-gray-400 text-[10px]"></i></button>
                         </div>
 
-                        {/* Route Toggle */}
                         <div className="flex bg-gray-100 rounded-lg p-0.5 flex-shrink-0">
                             <button onClick={() => setSortBy('NEWEST')} className={`px-2 py-1 rounded-md text-[10px] font-bold transition-all ${sortBy === 'NEWEST' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-400'}`}>Mới</button>
                             <button onClick={() => setSortBy('ROUTE')} className={`px-2 py-1 rounded-md text-[10px] font-bold transition-all flex items-center gap-1 ${sortBy === 'ROUTE' ? 'bg-white shadow-sm text-eco-700' : 'text-gray-400'}`}><i className="fas fa-route"></i> Route</button>
@@ -351,33 +327,35 @@ const TrackingDashboard: React.FC = () => {
          </div>
       </div>
 
-      {/* FLOATING DROPDOWN PORTAL (FIXED POSITION TO ESCAPE OVERFLOW) */}
-      {isStatusDropdownOpen && (
+      {/* FLOATING DROPDOWN PORTAL */}
+      {activeDropdown && (
           <div 
-            id="floating-status-dropdown"
+            id="floating-dropdown-portal"
             className="fixed z-[9999] bg-white border border-gray-100 rounded-lg shadow-xl max-h-60 overflow-y-auto p-1 animate-fade-in"
             style={{ top: dropdownPos.top, left: dropdownPos.left, minWidth: dropdownPos.width }}
           >
-            <div onClick={() => setFilterStatus([])} className={`px-3 py-2 rounded-md text-xs font-bold cursor-pointer flex items-center gap-2 transition-colors ${filterStatus.length === 0 ? 'bg-eco-50 text-eco-700' : 'hover:bg-gray-50 text-gray-700'}`}><i className={`fas ${filterStatus.length === 0 ? 'fa-check-square' : 'fa-square text-gray-300'}`}></i>Tất cả</div>
+            <div onClick={() => activeDropdown === 'STATUS' ? setFilterStatus([]) : setFilterBatch([])} className={`px-3 py-2 rounded-md text-xs font-bold cursor-pointer flex items-center gap-2 transition-colors ${(activeDropdown === 'STATUS' ? filterStatus.length : filterBatch.length) === 0 ? 'bg-eco-50 text-eco-700' : 'hover:bg-gray-50 text-gray-700'}`}><i className={`fas ${(activeDropdown === 'STATUS' ? filterStatus.length : filterBatch.length) === 0 ? 'fa-check-square' : 'fa-square text-gray-300'}`}></i>Tất cả</div>
             <div className="border-t border-gray-50 my-1"></div>
-            {Object.entries(statusLabels).map(([key, label]) => { 
-                const status = key as OrderStatus; 
-                const isSelected = filterStatus.includes(status); 
-                return (
-                    <div key={status} onClick={() => toggleStatusFilter(status)} className={`px-3 py-2 rounded-md text-xs font-medium cursor-pointer flex items-center gap-2 transition-colors ${isSelected ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50 text-gray-700'}`}>
-                        <i className={`fas ${isSelected ? 'fa-check-square' : 'fa-square text-gray-300'}`}></i>{label}
-                    </div>
-                ); 
-            })}
+            {activeDropdown === 'STATUS' ? (
+                Object.entries(statusLabels).map(([key, label]) => { 
+                    const status = key as OrderStatus; 
+                    const isSelected = filterStatus.includes(status); 
+                    return <div key={status} onClick={() => toggleFilter('STATUS', status)} className={`px-3 py-2 rounded-md text-xs font-medium cursor-pointer flex items-center gap-2 transition-colors ${isSelected ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50 text-gray-700'}`}><i className={`fas ${isSelected ? 'fa-check-square' : 'fa-square text-gray-300'}`}></i>{label}</div>; 
+                })
+            ) : (
+                batches.map(batch => {
+                    const isSelected = filterBatch.includes(batch);
+                    return <div key={batch} onClick={() => toggleFilter('BATCH', batch)} className={`px-3 py-2 rounded-md text-xs font-medium cursor-pointer flex items-center gap-2 transition-colors ${isSelected ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50 text-gray-700'}`}><i className={`fas ${isSelected ? 'fa-check-square' : 'fa-square text-gray-300'}`}></i>{batch}</div>;
+                })
+            )}
           </div>
       )}
 
-      {/* SENTINEL */}
       <div ref={observerTarget} className="h-px w-full opacity-0 pointer-events-none"></div>
 
       {showReport && (
           <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 animate-fade-in-down mt-2">
-              <div className="flex justify-between items-end mb-6 border-b border-gray-100 pb-2"><h3 className="text-gray-900 text-lg font-bold">Thống kê</h3><div className="text-xs font-medium text-gray-500 uppercase">{filterBatch === 'ALL' ? 'Tất cả đơn hàng' : `Lô: ${filterBatch}`}</div></div>
+              <div className="flex justify-between items-end mb-6 border-b border-gray-100 pb-2"><h3 className="text-gray-900 text-lg font-bold">Thống kê</h3><div className="text-xs font-medium text-gray-500 uppercase">{filterBatch.length === 0 ? 'Tất cả đơn hàng' : `Lô: ${filterBatch.join(', ')}`}</div></div>
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
                   <div className="p-4 bg-gray-50 rounded-xl border border-gray-100"><div className="text-gray-400 text-xs font-bold uppercase mb-1">Tổng đơn hàng</div><div className="text-2xl font-black text-gray-900">{report.count}</div></div>
                   <div className="p-4 bg-gray-50 rounded-xl border border-gray-100"><div className="text-gray-400 text-xs font-bold uppercase mb-1">Tổng tiền mặt</div><div className="text-xl font-bold text-gray-800">{formatCurrency(report.totalCash)}</div><div className="text-[10px] text-green-600 font-bold mt-1">Đã thu: {formatCurrency(report.cashCollected)}</div></div>
@@ -395,6 +373,7 @@ const TrackingDashboard: React.FC = () => {
         <div className="flex items-center justify-center gap-3 p-3 bg-blue-50/50 border border-blue-100 rounded-lg text-blue-800 text-sm mt-2">
             <i className="fas fa-hand-pointer animate-pulse"></i>
             <span className="font-medium">Chế độ sắp xếp: Kéo thả thẻ (PC) hoặc giữ tay nắm 6 chấm (Mobile)</span>
+            <button onClick={handleAutoSort} className="ml-2 px-3 py-1 bg-blue-600 text-white text-xs font-bold rounded shadow-sm hover:bg-blue-700">Auto Sort</button>
         </div>
       )}
 
@@ -423,6 +402,8 @@ const TrackingDashboard: React.FC = () => {
                         onTouchStart={(e) => handleTouchStart(e, index)}
                         onTouchMove={handleTouchMove}
                         onTouchEnd={handleTouchEnd}
+                        isNewCustomer={(customerOrderCounts[order.customerPhone] || 0) === 1}
+                        onSplitBatch={handleSplitBatch}
                    />
                </div>
             </div>

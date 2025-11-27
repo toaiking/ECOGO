@@ -15,7 +15,8 @@ import {
   getDocs,
   writeBatch,
   deleteField,
-  limit 
+  limit,
+  getDoc 
 } from "firebase/firestore";
 
 const ORDER_KEY = 'ecogo_orders_v3'; 
@@ -26,6 +27,19 @@ const BANK_KEY = 'ecogo_bank_config';
 const NOTIF_KEY = 'ecogo_notifications_v1';
 
 const isOnline = () => !!db;
+
+// Helper to normalize phone for comparison (removes spaces, dots, +84 prefix -> 0)
+const normalizePhone = (phone: string) => {
+    if (!phone) return '';
+    let p = phone.replace(/[^0-9]/g, '');
+    if (p.startsWith('84')) p = '0' + p.slice(2);
+    return p;
+};
+
+const normalizeName = (name: string) => {
+    if (!name) return '';
+    return name.trim().toLowerCase();
+};
 
 export const storageService = {
   // --- Auth / User ---
@@ -70,7 +84,6 @@ export const storageService = {
   // --- Sync Tool ---
   syncLocalToCloud: async (): Promise<number> => {
     if (!isOnline()) throw new Error("Chưa kết nối Firebase");
-    
     try {
         const localOrdersRaw = localStorage.getItem(ORDER_KEY);
         const localProductsRaw = localStorage.getItem(PRODUCT_KEY);
@@ -116,7 +129,6 @@ export const storageService = {
   },
 
   // --- Notifications System ---
-  
   addNotification: async (title: string, message: string, type: 'info' | 'success' | 'warning' | 'error', relatedOrderId?: string) => {
       const notif: Notification = {
           id: uuidv4(),
@@ -164,7 +176,6 @@ export const storageService = {
 
   markNotificationRead: async (id: string) => {
       window.dispatchEvent(new CustomEvent('local_notif_read', { detail: id }));
-
       if (isOnline()) {
           await updateDoc(doc(db, "notifications", id), { isRead: true });
       } else {
@@ -182,7 +193,6 @@ export const storageService = {
 
   markAllNotificationsRead: async () => {
       window.dispatchEvent(new Event('local_notif_read_all'));
-
       if (isOnline()) {
           const q = query(collection(db, "notifications"), limit(20));
           const snap = await getDocs(q);
@@ -206,7 +216,6 @@ export const storageService = {
 
   clearAllNotifications: async () => {
       window.dispatchEvent(new Event('local_notif_clear_all'));
-
       if (isOnline()) {
           const q = query(collection(db, "notifications"), limit(50));
           const snap = await getDocs(q);
@@ -222,7 +231,6 @@ export const storageService = {
   },
 
   // --- Orders (Real-time & Sync) ---
-  
   subscribeOrders: (callback: (orders: Order[]) => void) => {
     if (isOnline()) {
       const q = query(collection(db, "orders")); 
@@ -289,7 +297,6 @@ export const storageService = {
       lastOrderDate: Date.now()
     });
 
-    // Correctly create notification with Name and Address
     storageService.addNotification(
         order.customerName, 
         `Đã tạo đơn mới • ${order.address}`,
@@ -341,7 +348,6 @@ export const storageService = {
       }
     }
 
-    // Force use provided context for correct notification content
     const orderName = context?.name || 'Khách hàng';
     const address = context?.address || '';
 
@@ -359,8 +365,30 @@ export const storageService = {
             id
         );
     }
-
     return null;
+  },
+
+  splitOrderToNextBatch: async (id: string, currentBatchId: string): Promise<void> => {
+      const newBatchId = `${currentBatchId}S`;
+      const currentUser = storageService.getCurrentUser() || 'Admin';
+      
+      if (isOnline()) {
+          await updateDoc(doc(db, "orders", id), { 
+              batchId: newBatchId,
+              updatedAt: Date.now(),
+              lastUpdatedBy: currentUser
+          });
+      } else {
+          const orders = storageService.getOrdersSync();
+          const index = orders.findIndex(o => o.id === id);
+          if (index !== -1) {
+              orders[index].batchId = newBatchId;
+              orders[index].updatedAt = Date.now();
+              orders[index].lastUpdatedBy = currentUser;
+              localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
+              window.dispatchEvent(new Event('storage'));
+          }
+      }
   },
 
   deleteDeliveryProof: async (id: string): Promise<void> => {
@@ -394,9 +422,7 @@ export const storageService = {
               window.dispatchEvent(new Event('storage'));
           }
       }
-      
       const orderName = context?.name || 'Khách hàng';
-      
       if (verified) {
           storageService.addNotification(orderName, `Đã xác nhận thanh toán • Duyệt bởi ${currentUser}`, 'success', id);
       }
@@ -418,21 +444,88 @@ export const storageService = {
     storageService.addNotification(orderName, `Đã xóa đơn hàng • ${address}`, 'warning', id);
   },
 
+  // --- CRITICAL UPDATE: Save Orders List + Update Customer Priority ---
   saveOrdersList: async (orders: Order[]): Promise<void> => {
+      // 1. Save Order Indexes
       if (isOnline()) {
-          const batch = writeBatch(db);
-          orders.forEach(o => {
-              const ref = doc(db, "orders", o.id);
-              batch.update(ref, { orderIndex: o.orderIndex });
-          });
-          await batch.commit();
+          const chunks = [];
+          for (let i = 0; i < orders.length; i += 400) {
+              chunks.push(orders.slice(i, i + 400));
+          }
+          for (const chunk of chunks) {
+              const b = writeBatch(db);
+              chunk.forEach(o => {
+                  const ref = doc(db, "orders", o.id);
+                  b.update(ref, { orderIndex: o.orderIndex });
+              });
+              await b.commit();
+          }
       } else {
           localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
           window.dispatchEvent(new Event('storage'));
       }
+
+      // 2. Auto-Learn Priority from Route Order
+      // Logic: The higher the order in the route (lower index), the higher priority (lower score)
+      // We will update the customer priorityScore to match the orderIndex + 1
+      try {
+          const customersToUpdate = new Map<string, number>();
+          orders.forEach(o => {
+              // Simple matching by Phone
+              if (o.customerPhone) {
+                  const normalizedPhone = normalizePhone(o.customerPhone);
+                  // Keep the lowest index (highest priority) if customer appears multiple times
+                  const currentBest = customersToUpdate.get(normalizedPhone);
+                  const newPriority = o.orderIndex + 1;
+                  if (currentBest === undefined || newPriority < currentBest) {
+                      customersToUpdate.set(normalizedPhone, newPriority);
+                  }
+              }
+          });
+
+          // Bulk update customers
+          if (customersToUpdate.size > 0) {
+              if (isOnline()) {
+                  const batch = writeBatch(db);
+                  let opCount = 0;
+                  
+                  // OPTIMIZATION: Direct update by ID instead of fetching all
+                  for (const [phone, score] of customersToUpdate.entries()) {
+                      const custRef = doc(db, "customers", phone);
+                      batch.set(custRef, { priorityScore: score }, { merge: true });
+                      
+                      opCount++;
+                      if (opCount >= 450) {
+                          await batch.commit();
+                          opCount = 0;
+                      }
+                  }
+                  if (opCount > 0) await batch.commit();
+              } else {
+                  // Local Storage fallback
+                  const customers = storageService.getCustomersSync();
+                  let changed = false;
+                  customers.forEach(c => {
+                      if (c.phone && customersToUpdate.has(normalizePhone(c.phone))) {
+                          const newScore = customersToUpdate.get(normalizePhone(c.phone))!;
+                          if (c.priorityScore !== newScore) {
+                              c.priorityScore = newScore;
+                              changed = true;
+                          }
+                      }
+                  });
+                  if (changed) {
+                      localStorage.setItem(CUSTOMER_KEY, JSON.stringify(customers));
+                      window.dispatchEvent(new Event('storage'));
+                  }
+              }
+          }
+      } catch (e) {
+          console.error("Failed to update customer priority from route sort", e);
+      }
   },
 
-  // --- Inventory (Products) & Customers ---
+  // --- Inventory & Customers ---
   deductInventory: async (order: Order) => {
     let products: Product[] = [];
     if (isOnline()) {
@@ -518,14 +611,21 @@ export const storageService = {
 
   subscribeCustomers: (callback: (customers: Customer[]) => void) => {
       if (isOnline()) {
-          return onSnapshot(collection(db, "customers"), (snapshot) => {
+          // Sort by priority (ascending) so 1 comes before 999
+          const q = query(collection(db, "customers"), orderBy("priorityScore", "asc"), limit(2000)); 
+          return onSnapshot(q, (snapshot) => {
               const customers: Customer[] = [];
               snapshot.forEach(d => customers.push(d.data() as Customer));
               callback(customers);
           });
       } else {
            const load = () => {
-              try { const data = localStorage.getItem(CUSTOMER_KEY); callback(data ? JSON.parse(data) : []); } catch { callback([]); }
+              try { 
+                  const data = localStorage.getItem(CUSTOMER_KEY); 
+                  const list = data ? JSON.parse(data) : [];
+                  list.sort((a:Customer,b:Customer) => (a.priorityScore || 999) - (b.priorityScore || 999));
+                  callback(list);
+              } catch { callback([]); }
            };
            load();
            const handler = () => load();
@@ -539,12 +639,23 @@ export const storageService = {
   },
 
   upsertCustomer: async (customerData: Customer): Promise<void> => {
+      // Ensure ID is phone number if available, for consistency
+      const custId = customerData.phone || customerData.id;
+      
+      // DEFAULT PRIORITY: 999 (Low priority) for new customers so they don't mess up VIP list
+      const dataToSave = { 
+          ...customerData, 
+          id: custId,
+          priorityScore: customerData.priorityScore ?? 999,
+          totalOrders: customerData.totalOrders ?? 1
+      };
+
       if (isOnline()) {
-          await setDoc(doc(db, "customers", customerData.id), customerData, { merge: true });
+          await setDoc(doc(db, "customers", custId), dataToSave, { merge: true });
       } else {
         const customers = storageService.getCustomersSync();
-        const index = customers.findIndex(c => (customerData.phone && c.phone === customerData.phone) || c.name.toLowerCase() === customerData.name.toLowerCase());
-        if (index >= 0) customers[index] = { ...customers[index], ...customerData }; else customers.push(customerData);
+        const index = customers.findIndex(c => (c.id === custId) || (dataToSave.phone && c.phone === dataToSave.phone));
+        if (index >= 0) customers[index] = { ...customers[index], ...dataToSave }; else customers.push(dataToSave);
         localStorage.setItem(CUSTOMER_KEY, JSON.stringify(customers));
         window.dispatchEvent(new Event('storage'));
       }
@@ -559,21 +670,90 @@ export const storageService = {
       }
   },
 
+  clearAllCustomers: async (): Promise<void> => {
+      if (isOnline()) {
+          const q = query(collection(db, "customers"), limit(500));
+          const snap = await getDocs(q);
+          const batch = writeBatch(db);
+          snap.forEach(d => batch.delete(d.ref));
+          await batch.commit();
+      } else {
+          localStorage.setItem(CUSTOMER_KEY, JSON.stringify([]));
+          window.dispatchEvent(new Event('storage'));
+      }
+  },
+
   importCustomersBatch: async (customers: Customer[]): Promise<number> => {
       if (customers.length === 0) return 0;
       if (isOnline()) {
           const batch = writeBatch(db);
-          customers.forEach(c => { const ref = doc(db, "customers", c.id); batch.set(ref, c, { merge: true }); });
+          let opCount = 0;
+          for (const c of customers) {
+              const id = c.phone || c.id; // Enforce Phone ID
+              const ref = doc(db, "customers", id);
+              batch.set(ref, c, { merge: true });
+              opCount++;
+              if (opCount >= 490) break; 
+          }
           await batch.commit();
+          return opCount;
       } else {
           const existing = storageService.getCustomersSync();
           customers.forEach(c => {
-            const index = existing.findIndex(ex => ex.id === c.id || (ex.phone && ex.phone === c.phone));
+            const index = existing.findIndex(ex => ex.id === (c.phone || c.id));
             if (index >= 0) existing[index] = { ...existing[index], ...c }; else existing.push(c);
           });
           localStorage.setItem(CUSTOMER_KEY, JSON.stringify(existing));
           window.dispatchEvent(new Event('storage'));
+          return customers.length;
       }
-      return customers.length;
+  },
+
+  autoSortOrders: async (orders: Order[]): Promise<number> => {
+      if (!orders || orders.length === 0) return 0;
+
+      let customers: Customer[] = [];
+      if (isOnline()) {
+          const snap = await getDocs(collection(db, "customers"));
+          snap.forEach(d => customers.push(d.data() as Customer));
+      } else {
+          customers = storageService.getCustomersSync();
+      }
+
+      // Create lookup maps for O(1) access
+      const phoneMap = new Map<string, number>();
+      const nameMap = new Map<string, number>();
+
+      customers.forEach(c => {
+          const score = c.priorityScore ?? 999;
+          if (c.phone) phoneMap.set(normalizePhone(c.phone), score);
+          if (c.name) nameMap.set(normalizeName(c.name), score);
+      });
+
+      let matchedCount = 0;
+
+      const sorted = [...orders].sort((a, b) => {
+          const phoneA = normalizePhone(a.customerPhone);
+          const nameA = normalizeName(a.customerName);
+          // Match Phone first, then Name
+          const scoreA = phoneMap.get(phoneA) ?? nameMap.get(nameA) ?? 999;
+          
+          const phoneB = normalizePhone(b.customerPhone);
+          const nameB = normalizeName(b.customerName);
+          const scoreB = phoneMap.get(phoneB) ?? nameMap.get(nameB) ?? 999;
+
+          return scoreA - scoreB;
+      });
+
+      // Count actual matches found in the list
+      const actualMatches = orders.filter(o => {
+          const p = normalizePhone(o.customerPhone);
+          const n = normalizeName(o.customerName);
+          return phoneMap.has(p) || nameMap.has(n);
+      }).length;
+
+      await storageService.saveOrdersList(sorted.map((o, idx) => ({ ...o, orderIndex: idx })));
+      
+      return actualMatches;
   }
 };

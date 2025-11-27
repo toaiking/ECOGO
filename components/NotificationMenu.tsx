@@ -52,12 +52,20 @@ const NotificationMenu: React.FC<Props> = ({ isOpen, onClose, ignoreRef }) => {
 
     useEffect(() => { if (!isOpen) setReadIds(new Set()); }, [isOpen]);
 
+    // Use onMouseDown instead of onClick for immediate response on mobile/touch
     const handleItemInteraction = (notif: Notification, e: React.MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
+        
+        // Optimistic Update
         setReadIds(prev => new Set(prev).add(notif.id));
+        
+        // Fire & Forget logic (don't await)
         if (!notif.isRead) storageService.markNotificationRead(notif.id);
-        if (notif.relatedOrderId) navigate('/tracking');
+        
+        if (notif.relatedOrderId) {
+            navigate('/tracking');
+        }
         onClose();
     };
 
@@ -71,7 +79,7 @@ const NotificationMenu: React.FC<Props> = ({ isOpen, onClose, ignoreRef }) => {
     const handleClearAll = (e: React.MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
-        // Removed window.confirm to ensure immediate execution on touch devices
+        // Direct execution, NO confirm dialog to avoid focus loss
         storageService.clearAllNotifications();
         onClose();
     };
@@ -92,23 +100,23 @@ const NotificationMenu: React.FC<Props> = ({ isOpen, onClose, ignoreRef }) => {
             <div className="fixed inset-0 z-[90] md:hidden" onMouseDown={() => onClose()}></div>
             <div 
                 ref={menuRef}
-                className="fixed top-16 right-2 left-2 md:absolute md:top-12 md:left-auto md:right-0 md:w-96 bg-white rounded-2xl shadow-2xl border border-gray-100 z-[100] overflow-hidden animate-fade-in-down max-h-[70vh] flex flex-col"
+                className="fixed top-16 right-2 left-2 md:absolute md:top-12 md:left-auto md:right-0 md:w-80 bg-white rounded-2xl shadow-2xl border border-gray-100 z-[100] overflow-hidden animate-fade-in-down max-h-[60vh] flex flex-col"
                 onMouseDown={(e) => e.stopPropagation()}
             >
-                <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50 sticky top-0 z-10">
-                    <h3 className="font-bold text-gray-800 text-base">Thông báo ({notifications.length})</h3>
+                <div className="p-3 border-b border-gray-100 flex justify-between items-center bg-gray-50 sticky top-0 z-10">
+                    <h3 className="font-bold text-gray-800 text-sm">Thông báo ({notifications.length})</h3>
                     <div className="flex gap-2">
                         {notifications.length > 0 && (
                             <>
                                 <button 
                                     onMouseDown={handleMarkAllRead} 
-                                    className="text-xs text-blue-600 hover:underline font-bold bg-blue-50 px-2 py-1 rounded-md transition-colors active:scale-95"
+                                    className="text-[10px] text-blue-600 hover:bg-blue-100 font-bold bg-blue-50 px-2 py-1 rounded transition-colors active:scale-95"
                                 >
                                     <i className="fas fa-check-double mr-1"></i>Đọc hết
                                 </button>
                                 <button 
                                     onMouseDown={handleClearAll} 
-                                    className="text-xs text-red-600 hover:underline font-bold bg-red-50 px-2 py-1 rounded-md transition-colors active:scale-95"
+                                    className="text-[10px] text-red-600 hover:bg-red-100 font-bold bg-red-50 px-2 py-1 rounded transition-colors active:scale-95"
                                 >
                                     <i className="fas fa-trash-alt mr-1"></i>Xóa
                                 </button>
@@ -119,9 +127,9 @@ const NotificationMenu: React.FC<Props> = ({ isOpen, onClose, ignoreRef }) => {
                 
                 <div className="overflow-y-auto flex-grow overscroll-contain">
                     {notifications.length === 0 ? (
-                        <div className="p-10 text-center text-gray-400 flex flex-col items-center">
-                            <i className="fas fa-bell-slash text-4xl mb-3 opacity-30 block"></i>
-                            <p className="text-sm">Không có thông báo mới</p>
+                        <div className="p-8 text-center text-gray-400 flex flex-col items-center">
+                            <i className="fas fa-bell-slash text-3xl mb-2 opacity-30 block"></i>
+                            <p className="text-xs">Không có thông báo mới</p>
                         </div>
                     ) : (
                         <div className="divide-y divide-gray-50">
@@ -131,24 +139,22 @@ const NotificationMenu: React.FC<Props> = ({ isOpen, onClose, ignoreRef }) => {
                                     <div 
                                         key={notif.id} 
                                         onMouseDown={(e) => handleItemInteraction(notif, e)}
-                                        className={`p-4 hover:bg-gray-50 cursor-pointer transition-colors flex gap-3 group relative ${!isRead ? 'bg-blue-50/60' : ''}`}
+                                        className={`p-3 hover:bg-gray-50 cursor-pointer transition-colors flex gap-3 group relative ${!isRead ? 'bg-blue-50/60' : ''}`}
                                     >
                                         {!isRead && <div className="absolute left-0 top-0 bottom-0 w-1 bg-blue-500"></div>}
-                                        <div className="mt-1 flex-shrink-0 text-lg group-hover:scale-110 transition-transform">
+                                        <div className="mt-0.5 flex-shrink-0 text-base">
                                             <i className={`fas ${getIcon(notif.type)}`}></i>
                                         </div>
                                         <div className="flex-grow min-w-0">
-                                            {/* Title is Customer Name (BOLD) */}
-                                            <div className="flex justify-between items-start gap-2 mb-1">
-                                                <h4 className={`text-sm truncate ${!isRead ? 'font-black text-gray-900' : 'font-bold text-gray-700'}`}>
+                                            <div className="flex justify-between items-start gap-1 mb-0.5">
+                                                <h4 className={`text-xs truncate ${!isRead ? 'font-black text-gray-900' : 'font-bold text-gray-700'}`}>
                                                     {notif.title}
                                                 </h4>
-                                                <span className="text-[10px] text-gray-400 whitespace-nowrap flex-shrink-0 bg-gray-100 px-1.5 py-0.5 rounded">
+                                                <span className="text-[9px] text-gray-400 whitespace-nowrap flex-shrink-0">
                                                     {formatDistanceToNow(notif.createdAt, { addSuffix: true, locale: vi })}
                                                 </span>
                                             </div>
-                                            {/* Message is Status • Address */}
-                                            <p className={`text-xs leading-relaxed break-words ${!isRead ? 'text-gray-800 font-medium' : 'text-gray-500'}`}>
+                                            <p className={`text-[11px] leading-tight break-words line-clamp-2 ${!isRead ? 'text-gray-800 font-medium' : 'text-gray-500'}`}>
                                                 {notif.message}
                                             </p>
                                         </div>
