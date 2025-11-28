@@ -18,6 +18,9 @@ const OrderForm: React.FC = () => {
   const [existingBatches, setExistingBatches] = useState<string[]>([]);
   const [showBatchSuggestions, setShowBatchSuggestions] = useState(false);
   
+  // Custom Tags
+  const [quickTags, setQuickTags] = useState<string[]>([]);
+
   const [customerInfo, setCustomerInfo] = useState({
     customerName: '',
     customerPhone: '',
@@ -27,46 +30,43 @@ const OrderForm: React.FC = () => {
 
   const [items, setItems] = useState<Partial<OrderItem>[]>([
     { id: uuidv4(), name: '', quantity: 1, price: 0 },
-    { id: uuidv4(), name: '', quantity: 1, price: 0 }
   ]);
 
   const customerWrapperRef = useRef<HTMLDivElement>(null);
   const productWrapperRef = useRef<HTMLDivElement>(null);
   const batchWrapperRef = useRef<HTMLDivElement>(null);
-
-  const quickTags = ["Giao giờ HC", "Gọi trước khi giao", "Hàng dễ vỡ", "Cho xem hàng", "Giao gấp"];
+  const nameInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     // Subscribe to Data
     const unsubProducts = storageService.subscribeProducts(setProducts);
     const unsubCustomers = storageService.subscribeCustomers(setCustomers);
     
-    // For batches, we need to fetch orders. 
-    // SMART BATCH LOGIC: Only show recent batches to avoid clutter
+    // Load Tags
+    const loadTags = () => setQuickTags(storageService.getQuickTags());
+    loadTags();
+    window.addEventListener('local_tags_updated', loadTags);
+
+    // Batch Logic
     const unsubOrders = storageService.subscribeOrders((orders) => {
         const batchActivity = new Map<string, number>();
-        
         orders.forEach(o => {
             if (o.batchId) {
                 const lastTime = batchActivity.get(o.batchId) || 0;
                 batchActivity.set(o.batchId, Math.max(lastTime, o.createdAt));
             }
         });
-
-        // Sort by most recent activity and take top 20
         const sortedBatches = Array.from(batchActivity.entries())
             .sort((a, b) => b[1] - a[1])
             .map(entry => entry[0])
-            .slice(0, 20);
+            .slice(0, 10); // Top 10 recent batches
 
         setExistingBatches(sortedBatches);
         
-        // Auto-suggest today's batch format if not set
         setBatchId(prev => {
            if (prev) return prev;
            const today = new Date();
            const dateStr = today.toISOString().slice(0, 10);
-           // Try to find a batch with today's date in it
            const todayBatch = sortedBatches.find(b => b.includes(dateStr));
            return todayBatch || `LÔ-${dateStr}`;
         });
@@ -84,8 +84,15 @@ const OrderForm: React.FC = () => {
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
+    
+    // Focus Name input on load
+    if (nameInputRef.current) {
+        nameInputRef.current.focus();
+    }
+
     return () => {
         document.removeEventListener("mousedown", handleClickOutside);
+        window.removeEventListener('local_tags_updated', loadTags);
         if (unsubProducts) unsubProducts();
         if (unsubCustomers) unsubCustomers();
         if (unsubOrders) unsubOrders();
@@ -99,6 +106,10 @@ const OrderForm: React.FC = () => {
   };
 
   const removeItemRow = (index: number) => {
+    if (items.length === 1) {
+        setItems([{ id: uuidv4(), name: '', quantity: 1, price: 0 }]); // Reset if it's the last one
+        return;
+    }
     const newItems = [...items];
     newItems.splice(index, 1);
     setItems(newItems);
@@ -107,13 +118,7 @@ const OrderForm: React.FC = () => {
   const handleItemChange = (index: number, field: keyof OrderItem, value: any) => {
     const newItems = [...items];
     newItems[index] = { ...newItems[index], [field]: value };
-    
-    // Logic auto-detect product by name typing
-    if (field === 'name') {
-       // Clear ID if name changes manually to avoid mismatch, unless we re-match it below
-       newItems[index].productId = undefined; 
-    }
-
+    if (field === 'name') newItems[index].productId = undefined; 
     setItems(newItems);
   };
 
@@ -149,12 +154,21 @@ const OrderForm: React.FC = () => {
       setShowBatchSuggestions(false);
   };
 
-  const addQuickTag = (tag: string) => {
+  const toggleQuickTag = (tag: string) => {
       setCustomerInfo(prev => {
-          if (prev.notes.includes(tag)) return prev;
-          const newNotes = prev.notes ? `${prev.notes}, ${tag}` : tag;
-          return { ...prev, notes: newNotes };
+          const parts = prev.notes ? prev.notes.split(',').map(s => s.trim()) : [];
+          if (parts.includes(tag)) {
+              return { ...prev, notes: parts.filter(p => p !== tag).join(', ') };
+          } else {
+              return { ...prev, notes: prev.notes ? `${prev.notes}, ${tag}` : tag };
+          }
       });
+  };
+
+  const resetForm = () => {
+      setCustomerInfo({ customerName: '', customerPhone: '', address: '', notes: '' });
+      setItems([{ id: uuidv4(), name: '', quantity: 1, price: 0 }]);
+      if (nameInputRef.current) nameInputRef.current.focus();
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -162,7 +176,7 @@ const OrderForm: React.FC = () => {
     const validItems = items.filter(i => i.name && i.name.trim() !== '') as OrderItem[];
 
     if (!customerInfo.customerName || !customerInfo.address || validItems.length === 0) {
-      toast.error('Thiếu thông tin bắt buộc (Tên, Địa chỉ, Hàng hóa)');
+      toast.error('Thiếu tên, địa chỉ hoặc hàng hóa');
       return;
     }
 
@@ -185,260 +199,300 @@ const OrderForm: React.FC = () => {
 
     await storageService.saveOrder(newOrder);
     
-    // Customers and Products update automatically via subscription, no need to manually fetch.
-    
-    toast.success('Tạo đơn thành công!');
-    
-    setCustomerInfo({ customerName: '', customerPhone: '', address: '', notes: '' });
-    setItems([
-        { id: uuidv4(), name: '', quantity: 1, price: 0 },
-        { id: uuidv4(), name: '', quantity: 1, price: 0 }
-    ]);
+    // Auto add customer logic is handled in storageService or separate logic if needed
+    // Here we just clear form
+    toast.success('Lên đơn thành công!');
+    resetForm();
   };
 
   const customerSuggestions = customers.filter(c => 
     c.name.toLowerCase().includes((customerInfo.customerName || '').toLowerCase()) &&
     customerInfo.customerName && customerInfo.customerName !== c.name
-  );
+  ).slice(0, 5); // Limit to 5 suggestions for speed
 
-  // Get list of currently selected product IDs to exclude from droplist
   const getSelectedProductIds = (currentIndex: number) => {
       return items
           .filter((item, idx) => idx !== currentIndex && item.productId)
           .map(item => item.productId);
   };
 
+  // Common Input Class
+  const inputClass = "w-full px-3 py-2.5 bg-gray-50 focus:bg-white border border-gray-200 focus:border-eco-500 rounded-xl outline-none transition-all text-sm font-medium placeholder-gray-400";
+  const labelClass = "block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5 ml-1";
+
   return (
-    <div className="max-w-4xl mx-auto pb-20 animate-fade-in">
-      <div className="bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden">
-        {/* Header */}
-        <div className="px-6 py-5 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
-          <h2 className="text-xl font-black text-gray-800 tracking-tight">
-            Tạo Đơn Hàng
-          </h2>
-          <div className="flex items-center gap-2 relative" ref={batchWrapperRef}>
-             <span className="text-xs font-bold text-gray-400 uppercase">Lô hàng</span>
-             <div className="relative">
+    <div className="max-w-7xl mx-auto pb-24 animate-fade-in">
+      <div className="bg-white rounded-3xl shadow-xl border border-gray-100 overflow-hidden">
+        
+        {/* HEADER BAR */}
+        <div className="px-6 py-4 bg-gradient-to-r from-gray-50 to-white border-b border-gray-100 flex flex-wrap justify-between items-center gap-4">
+          <div className="flex items-center gap-3">
+             <div className="w-10 h-10 rounded-full bg-eco-100 text-eco-600 flex items-center justify-center shadow-sm">
+                <i className="fas fa-plus-circle text-xl"></i>
+             </div>
+             <div>
+                <h2 className="text-lg font-black text-gray-800 leading-tight">Tạo Đơn Hàng</h2>
+                <p className="text-xs text-gray-500 font-medium">Nhập thông tin giao hàng</p>
+             </div>
+          </div>
+          
+          {/* BATCH SELECTOR */}
+          <div className="relative" ref={batchWrapperRef}>
+             <div className="flex items-center bg-white border border-gray-200 rounded-xl px-3 py-1.5 shadow-sm hover:border-eco-400 transition-colors cursor-pointer" onClick={() => setShowBatchSuggestions(!showBatchSuggestions)}>
+                <span className="text-[10px] font-bold text-gray-400 uppercase mr-2">Lô hàng</span>
                 <input 
                   value={batchId}
                   onChange={(e) => setBatchId(e.target.value)}
-                  onFocus={() => setShowBatchSuggestions(true)}
-                  className="bg-white border border-gray-200 rounded-lg pl-3 pr-8 py-1 text-sm font-bold text-gray-700 w-36 outline-none focus:border-eco-500 transition-colors"
-                  placeholder="Nhập hoặc chọn..."
+                  className="w-28 text-sm font-bold text-eco-700 outline-none bg-transparent"
+                  placeholder="LÔ-HÔM-NAY"
                 />
-                <button 
-                  type="button"
-                  onClick={() => setShowBatchSuggestions(!showBatchSuggestions)}
-                  className="absolute right-0 top-0 bottom-0 px-2 text-gray-400 hover:text-eco-600 transition-colors"
-                >
-                    <i className={`fas fa-chevron-down text-xs transition-transform ${showBatchSuggestions ? 'rotate-180' : ''}`}></i>
-                </button>
-
-                {/* Batch Dropdown */}
-                {showBatchSuggestions && existingBatches.length > 0 && (
-                    <div className="absolute top-full right-0 mt-1 w-48 bg-white border border-gray-100 rounded-lg shadow-xl z-50 max-h-56 overflow-y-auto">
-                        <div className="px-3 py-2 text-[10px] font-bold text-gray-400 uppercase bg-gray-50">Gần đây</div>
+                <i className={`fas fa-chevron-down text-xs text-gray-400 ml-2 transition-transform ${showBatchSuggestions ? 'rotate-180' : ''}`}></i>
+             </div>
+             
+             {showBatchSuggestions && existingBatches.length > 0 && (
+                <div className="absolute top-full right-0 mt-2 w-56 bg-white border border-gray-100 rounded-xl shadow-2xl z-50 overflow-hidden animate-fade-in">
+                    <div className="px-3 py-2 bg-gray-50 text-[10px] font-bold text-gray-500 uppercase">Gần đây</div>
+                    <div className="max-h-60 overflow-y-auto">
                         {existingBatches.map(b => (
-                            <div 
-                                key={b} 
-                                onClick={() => selectBatch(b)}
-                                className="px-3 py-2 hover:bg-eco-50 cursor-pointer text-sm font-medium text-gray-700 border-b border-gray-50 last:border-0"
-                            >
+                            <div key={b} onClick={() => selectBatch(b)} className="px-4 py-2.5 hover:bg-eco-50 cursor-pointer text-sm font-medium text-gray-700 border-b border-gray-50 last:border-0 flex items-center justify-between">
                                 {b}
+                                {batchId === b && <i className="fas fa-check text-eco-600 text-xs"></i>}
                             </div>
                         ))}
                     </div>
-                )}
-             </div>
+                </div>
+             )}
           </div>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 grid grid-cols-1 md:grid-cols-12 gap-8">
+        <form onSubmit={handleSubmit} className="flex flex-col lg:flex-row divide-y lg:divide-y-0 lg:divide-x divide-gray-100">
           
-          {/* Customer Info Column */}
-          <div className="md:col-span-5 space-y-5">
-            <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Thông tin khách hàng</h3>
+          {/* LEFT COLUMN: CUSTOMER INFO */}
+          <div className="lg:w-[40%] p-6 lg:p-8 bg-white/50 space-y-5">
+            <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2 mb-4">
+                <i className="fas fa-user-circle text-eco-500"></i> Thông tin khách hàng
+            </h3>
             
             <div className="space-y-4">
+                {/* Name */}
                 <div className="relative" ref={customerWrapperRef}>
-                <input
-                    value={customerInfo.customerName}
-                    onChange={handleNameChange}
-                    required
-                    placeholder="Họ tên khách *"
-                    className="w-full p-3 bg-gray-50 border-transparent focus:bg-white focus:border-eco-500 border rounded-xl outline-none transition-all font-medium"
-                    autoComplete="off"
-                />
-                {showCustomerSuggestions && customerSuggestions.length > 0 && (
-                    <ul className="absolute z-20 w-full bg-white border border-gray-100 rounded-xl shadow-xl max-h-48 overflow-y-auto mt-2 p-1">
-                    {customerSuggestions.map(s => (
-                        <li key={s.id} onClick={() => handleCustomerSelect(s)} className="px-3 py-2 hover:bg-gray-50 rounded-lg cursor-pointer text-sm transition-colors">
-                        <span className="font-bold text-gray-800">{s.name}</span>
-                        <div className="text-xs text-gray-500">{s.phone}</div>
-                        </li>
-                    ))}
-                    </ul>
-                )}
+                    <label className={labelClass}>Tên khách hàng <span className="text-red-500">*</span></label>
+                    <input
+                        ref={nameInputRef}
+                        value={customerInfo.customerName}
+                        onChange={handleNameChange}
+                        required
+                        className={`${inputClass} font-bold text-gray-800`}
+                        placeholder="Nhập tên khách..."
+                        autoComplete="off"
+                    />
+                    {showCustomerSuggestions && customerSuggestions.length > 0 && (
+                        <ul className="absolute z-30 w-full bg-white border border-gray-100 rounded-xl shadow-2xl mt-1 overflow-hidden animate-fade-in">
+                            {customerSuggestions.map(s => (
+                                <li key={s.id} onClick={() => handleCustomerSelect(s)} className="px-4 py-3 hover:bg-blue-50 cursor-pointer border-b border-gray-50 last:border-0 transition-colors group">
+                                    <div className="flex justify-between items-center">
+                                        <span className="font-bold text-gray-800 group-hover:text-blue-700">{s.name}</span>
+                                        <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-md group-hover:bg-white">{s.phone}</span>
+                                    </div>
+                                    <div className="text-xs text-gray-500 truncate mt-1 group-hover:text-blue-500">{s.address}</div>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
                 </div>
 
-                <input
-                value={customerInfo.customerPhone}
-                onChange={(e) => setCustomerInfo({...customerInfo, customerPhone: e.target.value})}
-                placeholder="Số điện thoại"
-                className="w-full p-3 bg-gray-50 border-transparent focus:bg-white focus:border-eco-500 border rounded-xl outline-none transition-all"
-                />
-                
-                <textarea
-                value={customerInfo.address}
-                onChange={(e) => setCustomerInfo({...customerInfo, address: e.target.value})}
-                required
-                placeholder="Địa chỉ giao hàng *"
-                rows={3}
-                className="w-full p-3 bg-gray-50 border-transparent focus:bg-white focus:border-eco-500 border rounded-xl outline-none transition-all resize-none"
-                />
-                
+                {/* Phone */}
                 <div>
+                    <label className={labelClass}>Số điện thoại</label>
+                    <div className="relative">
+                        <input
+                            value={customerInfo.customerPhone}
+                            onChange={(e) => setCustomerInfo({...customerInfo, customerPhone: e.target.value})}
+                            className={inputClass}
+                            placeholder="09..."
+                        />
+                        <i className="fas fa-phone absolute right-3 top-3 text-gray-300"></i>
+                    </div>
+                </div>
+                
+                {/* Address */}
+                <div>
+                    <label className={labelClass}>Địa chỉ giao hàng <span className="text-red-500">*</span></label>
+                    <textarea
+                        value={customerInfo.address}
+                        onChange={(e) => setCustomerInfo({...customerInfo, address: e.target.value})}
+                        required
+                        className={`${inputClass} resize-none h-24`}
+                        placeholder="Số nhà, đường, phường, quận..."
+                    />
+                </div>
+                
+                {/* Notes & Tags */}
+                <div>
+                    <label className={labelClass}>Ghi chú</label>
                     <input
                         value={customerInfo.notes}
                         onChange={(e) => setCustomerInfo({...customerInfo, notes: e.target.value})}
-                        placeholder="Ghi chú đơn hàng..."
-                        className="w-full p-3 bg-gray-50 border-transparent focus:bg-white focus:border-eco-500 border rounded-xl outline-none transition-all text-sm mb-2"
+                        className={`${inputClass} mb-3`}
+                        placeholder="Ghi chú thêm..."
                     />
-                    {/* Quick Tags */}
                     <div className="flex flex-wrap gap-2">
-                        {quickTags.map(tag => (
-                            <button
-                                key={tag}
-                                type="button"
-                                onClick={() => addQuickTag(tag)}
-                                className="px-2 py-1 bg-gray-100 hover:bg-eco-50 text-gray-600 hover:text-eco-600 rounded-lg text-xs font-medium transition-colors border border-transparent hover:border-eco-200"
-                            >
-                                {tag}
-                            </button>
-                        ))}
+                        {quickTags.map(tag => {
+                            const isActive = customerInfo.notes.includes(tag);
+                            return (
+                                <button
+                                    key={tag}
+                                    type="button"
+                                    onClick={() => toggleQuickTag(tag)}
+                                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition-all active:scale-95 ${
+                                        isActive 
+                                        ? 'bg-eco-100 text-eco-700 border-eco-200 shadow-sm' 
+                                        : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'
+                                    }`}
+                                >
+                                    {isActive && <i className="fas fa-check mr-1"></i>}
+                                    {tag}
+                                </button>
+                            );
+                        })}
                     </div>
                 </div>
             </div>
           </div>
 
-          {/* Order Items Column */}
-          <div className="md:col-span-7 flex flex-col h-full" ref={productWrapperRef}>
-             <div className="flex justify-between items-end mb-3">
-                 <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider">Chi tiết đơn hàng</h3>
-                 <button type="button" onClick={addItemRow} className="text-eco-600 text-xs font-bold hover:text-eco-700 bg-eco-50 px-2 py-1 rounded transition-colors">
-                    + Thêm dòng
-                 </button>
-             </div>
-             
-             <div className="flex-grow bg-gray-50 rounded-xl p-4 border border-gray-100 space-y-3 max-h-[400px] overflow-y-auto">
-                {items.map((item, idx) => {
-                  const selectedIds = getSelectedProductIds(idx);
-                  const availableProducts = products.filter(p => 
-                    !selectedIds.includes(p.id) && 
-                    (!item.name || p.name.toLowerCase().includes(item.name.toLowerCase()))
-                  );
+          {/* RIGHT COLUMN: ITEMS & CALCULATIONS */}
+          <div className="lg:w-[60%] flex flex-col h-full bg-gray-50/30">
+             <div className="p-6 lg:p-8 flex-grow" ref={productWrapperRef}>
+                 <div className="flex justify-between items-center mb-4">
+                     <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2">
+                        <i className="fas fa-box-open text-eco-500"></i> Chi tiết đơn hàng
+                     </h3>
+                     <button type="button" onClick={addItemRow} className="text-xs font-bold text-white bg-eco-600 hover:bg-eco-700 px-3 py-1.5 rounded-lg transition-colors shadow-sm active:scale-95">
+                        <i className="fas fa-plus mr-1"></i>Thêm dòng
+                     </button>
+                 </div>
+                 
+                 <div className="space-y-3">
+                    {items.map((item, idx) => {
+                      const selectedIds = getSelectedProductIds(idx);
+                      const availableProducts = products.filter(p => 
+                        !selectedIds.includes(p.id) && 
+                        (!item.name || p.name.toLowerCase().includes(item.name.toLowerCase()))
+                      );
 
-                  return (
-                  <div key={item.id} className={`bg-white p-3 rounded-xl shadow-sm border border-gray-100 group transition-shadow hover:shadow-md relative ${activeProductRow === idx ? 'z-20' : 'z-0'}`}>
-                     {/* Mobile: Stacked / Desktop: Flex Row */}
-                     <div className="flex flex-col md:flex-row gap-3 items-start md:items-center">
-                         
-                         {/* Product Name Input + Custom Dropdown */}
-                         <div className="flex-grow w-full relative">
-                            <div className="relative">
-                                <input 
-                                    placeholder="Tên sản phẩm..."
-                                    value={item.name}
-                                    onChange={(e) => handleItemChange(idx, 'name', e.target.value)}
-                                    onFocus={() => setActiveProductRow(idx)}
-                                    className="w-full p-2 pl-3 pr-8 bg-gray-50 focus:bg-white border border-transparent focus:border-eco-500 rounded-lg text-sm font-medium outline-none transition-all"
-                                />
-                                <button 
-                                    type="button"
-                                    onClick={() => setActiveProductRow(activeProductRow === idx ? null : idx)}
-                                    className="absolute right-0 top-0 bottom-0 px-2 text-gray-400 hover:text-eco-600"
-                                >
-                                    <i className={`fas fa-chevron-down text-xs transition-transform ${activeProductRow === idx ? 'rotate-180' : ''}`}></i>
-                                </button>
-                            </div>
+                      return (
+                      <div key={item.id} className={`bg-white p-3 rounded-2xl shadow-sm border border-gray-200 group transition-all hover:shadow-md relative ${activeProductRow === idx ? 'z-20 ring-2 ring-eco-100' : 'z-0'}`}>
+                         <div className="flex items-start gap-3">
+                             {/* Index */}
+                             <div className="w-6 h-6 rounded-full bg-gray-100 text-gray-400 text-xs font-bold flex items-center justify-center mt-2">
+                                {idx + 1}
+                             </div>
 
-                            {/* Custom Product Dropdown */}
-                            {activeProductRow === idx && (
-                                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-100 rounded-xl shadow-xl z-50 max-h-56 overflow-y-auto">
-                                    {availableProducts.length === 0 ? (
-                                         <div className="p-3 text-xs text-gray-400 text-center">
-                                            {products.length === 0 ? "Kho trống" : "Không tìm thấy hoặc đã chọn"}
-                                         </div>
-                                    ) : (
-                                        availableProducts.map(p => (
-                                            <div 
-                                                key={p.id} 
-                                                onClick={() => selectProductForItem(idx, p)}
-                                                className="px-3 py-2 hover:bg-eco-50 cursor-pointer flex justify-between items-center group/opt border-b border-gray-50 last:border-0"
-                                            >
-                                                <div>
-                                                    <div className="text-sm font-medium text-gray-800 group-hover/opt:text-eco-700">{p.name}</div>
-                                                    <div className="text-[10px] text-gray-400">Tồn: {p.stockQuantity}</div>
-                                                </div>
-                                                <div className="text-xs font-bold text-eco-600">
-                                                    {new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}
-                                                </div>
-                                            </div>
-                                        ))
+                             <div className="flex-grow grid grid-cols-12 gap-3">
+                                 {/* Product Name Input */}
+                                 <div className="col-span-12 md:col-span-6 relative">
+                                    <label className="text-[9px] font-bold text-gray-400 uppercase mb-1 block">Tên sản phẩm</label>
+                                    <input 
+                                        placeholder="Nhập tên..."
+                                        value={item.name}
+                                        onChange={(e) => handleItemChange(idx, 'name', e.target.value)}
+                                        onFocus={() => setActiveProductRow(idx)}
+                                        className="w-full p-2 bg-gray-50 focus:bg-white border border-gray-200 focus:border-eco-500 rounded-lg text-sm font-bold text-gray-800 outline-none transition-all"
+                                    />
+                                    
+                                    {/* Dropdown */}
+                                    {activeProductRow === idx && (
+                                        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-100 rounded-xl shadow-xl z-50 max-h-56 overflow-y-auto animate-fade-in">
+                                            {availableProducts.length === 0 ? (
+                                                 <div className="p-3 text-xs text-gray-400 text-center italic">
+                                                    Kho không có sản phẩm này
+                                                 </div>
+                                            ) : (
+                                                availableProducts.map(p => (
+                                                    <div 
+                                                        key={p.id} 
+                                                        onMouseDown={() => selectProductForItem(idx, p)} // Use onMouseDown to trigger before blur
+                                                        className="px-3 py-2.5 hover:bg-eco-50 cursor-pointer flex justify-between items-center border-b border-gray-50 last:border-0 group/opt"
+                                                    >
+                                                        <div>
+                                                            <div className="text-sm font-bold text-gray-800 group-hover/opt:text-eco-700">{p.name}</div>
+                                                            <div className="text-[10px] text-gray-400">Tồn kho: <span className={p.stockQuantity < 5 ? 'text-red-500 font-bold' : ''}>{p.stockQuantity}</span></div>
+                                                        </div>
+                                                        <div className="text-xs font-bold text-eco-600 bg-eco-50 px-2 py-1 rounded-md">
+                                                            {new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}
+                                                        </div>
+                                                    </div>
+                                                ))
+                                            )}
+                                        </div>
                                     )}
-                                </div>
-                            )}
+                                 </div>
+                                 
+                                 {/* Quantity */}
+                                 <div className="col-span-4 md:col-span-2">
+                                    <label className="text-[9px] font-bold text-gray-400 uppercase mb-1 block text-center">SL</label>
+                                    <input 
+                                        type="number" 
+                                        min="0.1" step="any"
+                                        value={item.quantity === 0 ? '' : item.quantity}
+                                        onChange={(e) => handleItemChange(idx, 'quantity', e.target.value === '' ? 0 : Number(e.target.value))}
+                                        className="w-full p-2 text-center bg-gray-50 focus:bg-white border border-gray-200 focus:border-eco-500 rounded-lg text-sm font-bold outline-none transition-all"
+                                    />
+                                 </div>
+
+                                 {/* Price */}
+                                 <div className="col-span-6 md:col-span-3">
+                                    <label className="text-[9px] font-bold text-gray-400 uppercase mb-1 block text-right">Đơn giá</label>
+                                    <input 
+                                        type="number" step="any"
+                                        value={item.price === 0 ? '' : item.price}
+                                        onChange={(e) => handleItemChange(idx, 'price', e.target.value === '' ? 0 : Number(e.target.value))}
+                                        className="w-full p-2 text-right bg-gray-50 focus:bg-white border border-gray-200 focus:border-eco-500 rounded-lg text-sm font-bold text-gray-800 outline-none transition-all"
+                                    />
+                                 </div>
+                                 
+                                 {/* Delete */}
+                                 <div className="col-span-2 md:col-span-1 flex items-end justify-center pb-1">
+                                    <button type="button" onClick={() => removeItemRow(idx)} className="w-8 h-8 flex items-center justify-center text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
+                                        <i className="fas fa-trash-alt"></i>
+                                    </button>
+                                 </div>
+                             </div>
                          </div>
-                         
-                         {/* Qty and Price */}
-                         <div className="flex gap-2 w-full md:w-auto">
-                            <div className="w-20">
-                                <input 
-                                    type="number" 
-                                    min="0.1"
-                                    step="any"
-                                    value={item.quantity === 0 ? '' : item.quantity}
-                                    onChange={(e) => handleItemChange(idx, 'quantity', e.target.value === '' ? 0 : Number(e.target.value))}
-                                    className="w-full p-2 text-center bg-gray-50 focus:bg-white border border-transparent focus:border-eco-500 rounded-lg text-sm font-bold outline-none"
-                                    placeholder="SL"
-                                />
-                            </div>
-                            <div className="flex-grow md:w-32">
-                                <input 
-                                    type="number"
-                                    step="any"
-                                    value={item.price === 0 ? '' : item.price}
-                                    onChange={(e) => handleItemChange(idx, 'price', e.target.value === '' ? 0 : Number(e.target.value))}
-                                    className="w-full p-2 text-right bg-gray-50 focus:bg-white border border-transparent focus:border-eco-500 rounded-lg text-sm font-bold text-gray-800 outline-none"
-                                    placeholder="Giá"
-                                />
-                            </div>
-                            {items.length > 1 && (
-                                <button type="button" onClick={() => removeItemRow(idx)} className="w-9 flex items-center justify-center text-gray-300 hover:text-red-500 transition-colors">
-                                <i className="fas fa-trash-alt"></i>
-                                </button>
-                            )}
-                         </div>
-                     </div>
-                  </div>
-                  );
-                })}
+                      </div>
+                      );
+                    })}
+                 </div>
              </div>
 
-             <div className="mt-5 pt-4 border-t border-gray-100">
-                <div className="flex justify-between items-center mb-4">
-                    <span className="text-sm font-medium text-gray-500">Tổng thanh toán</span>
-                    <span className="text-2xl font-black text-gray-900 tracking-tight">
+             {/* FOOTER TOTAL */}
+             <div className="p-6 bg-white border-t border-gray-100 rounded-br-3xl">
+                <div className="flex justify-between items-center mb-6">
+                    <div>
+                        <span className="text-xs font-bold text-gray-400 uppercase block mb-1">Tổng thanh toán</span>
+                        <div className="text-xs text-gray-400">{items.length} mặt hàng</div>
+                    </div>
+                    <span className="text-3xl font-black text-gray-900 tracking-tighter">
                         {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(totalPrice)}
                     </span>
                 </div>
 
-                <button
-                type="submit"
-                className="w-full bg-black text-white py-4 rounded-xl hover:bg-gray-800 font-bold text-lg shadow-xl shadow-gray-200 transition-all active:scale-95"
-                >
-                Hoàn Tất Đơn Hàng
-                </button>
+                <div className="flex gap-3">
+                    <button
+                        type="button"
+                        onClick={resetForm}
+                        className="px-6 py-3.5 rounded-xl text-gray-500 font-bold bg-gray-100 hover:bg-gray-200 transition-colors"
+                    >
+                        Hủy
+                    </button>
+                    <button
+                        type="submit"
+                        className="flex-grow bg-black text-white py-3.5 rounded-xl hover:bg-gray-800 font-bold text-lg shadow-xl shadow-gray-200 transition-all active:scale-95 flex items-center justify-center gap-2"
+                    >
+                        <span>Hoàn Tất Đơn Hàng</span>
+                        <i className="fas fa-arrow-right text-sm"></i>
+                    </button>
+                </div>
              </div>
           </div>
         </form>

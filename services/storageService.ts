@@ -1,4 +1,3 @@
-
 import { Order, OrderStatus, Product, Customer, BankConfig, Notification } from '../types';
 import { db } from '../firebaseConfig';
 import { v4 as uuidv4 } from 'uuid';
@@ -16,7 +15,9 @@ import {
   writeBatch,
   deleteField,
   limit,
-  getDoc 
+  getDoc,
+  where,
+  Timestamp
 } from "firebase/firestore";
 
 const ORDER_KEY = 'ecogo_orders_v3'; 
@@ -25,10 +26,78 @@ const CUSTOMER_KEY = 'ecogo_customers_v1';
 const USER_KEY = 'ecogo_current_user';
 const BANK_KEY = 'ecogo_bank_config';
 const NOTIF_KEY = 'ecogo_notifications_v1';
+const TAGS_KEY = 'ecogo_quick_tags';
+const QUOTA_KEY = 'ecogo_quota_status';
+const LOGO_KEY = 'ecogo_company_logo';
 
-const isOnline = () => !!db;
+// --- CIRCUIT BREAKER FOR QUOTA ---
+const checkQuotaStatus = () => {
+    try {
+        const stored = localStorage.getItem(QUOTA_KEY);
+        if (stored) {
+            const { date, exhausted } = JSON.parse(stored);
+            const today = new Date().toDateString();
+            if (date === today && exhausted) {
+                console.warn("⚠️ Quota limit recorded for today. Starting in Offline Mode.");
+                return true;
+            }
+            if (date !== today) {
+                localStorage.removeItem(QUOTA_KEY);
+            }
+        }
+    } catch (e) {
+        console.error(e);
+    }
+    return false;
+};
 
-// Helper to normalize phone for comparison (removes spaces, dots, +84 prefix -> 0)
+let _quotaExhausted = checkQuotaStatus();
+
+const markQuotaExhausted = () => {
+    if (!_quotaExhausted) {
+        _quotaExhausted = true;
+        const status = { date: new Date().toDateString(), exhausted: true };
+        localStorage.setItem(QUOTA_KEY, JSON.stringify(status));
+        console.warn("🔥 Firebase Quota Exceeded. Switching to Local-Only mode for the rest of the day.");
+        window.dispatchEvent(new Event('quota_exhausted'));
+    }
+};
+
+const isOnline = () => !!db && !_quotaExhausted;
+
+// --- PERFORMANCE OPTIMIZATION: IN-MEMORY CACHE ---
+let _memoryCustomers: Customer[] | null = null;
+let _memoryOrders: Order[] | null = null;
+let _memoryProducts: Product[] | null = null;
+
+// Indices for O(1) lookup
+let _phoneIndex: Map<string, Customer> | null = null;
+let _addressIndex: Map<string, Customer> | null = null;
+let _idIndex: Map<string, Customer> | null = null;
+
+// Debounce timers
+let _customerSaveTimer: any = null;
+let _orderSaveTimer: any = null;
+
+const invalidateIndices = () => {
+    _phoneIndex = null;
+    _addressIndex = null;
+    _idIndex = null;
+};
+
+// String Normalization Helper
+const normalizeString = (str: string): string => {
+    if (!str) return "";
+    return str
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/đ/g, "d").replace(/Đ/g, "D")
+        .replace(/[^a-zA-Z0-9\s]/g, " ") 
+        .replace(/\s+/g, " ") 
+        .trim()
+        .toLowerCase();
+};
+
 const normalizePhone = (phone: string) => {
     if (!phone) return '';
     let p = phone.replace(/[^0-9]/g, '');
@@ -36,724 +105,845 @@ const normalizePhone = (phone: string) => {
     return p;
 };
 
-const normalizeName = (name: string) => {
-    if (!name) return '';
-    return name.trim().toLowerCase();
+// --- CUSTOMER ID GENERATION STRATEGY ---
+const generateCustomerId = (name: string, phone: string, address: string): string => {
+    const cleanPhone = normalizePhone(phone);
+    if (cleanPhone && cleanPhone.length > 5) return cleanPhone;
+    
+    const key = normalizeString(name) + "_" + normalizeString(address);
+    let hash = 0;
+    for (let i = 0; i < key.length; i++) {
+        const char = key.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash;
+    }
+    return `NOP_${Math.abs(hash).toString(16)}`;
 };
 
+const ensureCustomersLoaded = () => {
+    if (_memoryCustomers) return _memoryCustomers;
+    try {
+        const local = localStorage.getItem(CUSTOMER_KEY);
+        _memoryCustomers = local ? JSON.parse(local) : [];
+    } catch {
+        _memoryCustomers = [];
+    }
+    return _memoryCustomers;
+};
+
+const ensureOrdersLoaded = () => {
+    if (_memoryOrders) return _memoryOrders;
+    try {
+        const local = localStorage.getItem(ORDER_KEY);
+        _memoryOrders = local ? JSON.parse(local) : [];
+    } catch {
+        _memoryOrders = [];
+    }
+    return _memoryOrders;
+};
+
+const buildIndices = () => {
+    if (_phoneIndex && _addressIndex && _idIndex) return;
+    
+    const list = ensureCustomersLoaded();
+    if (!list) return;
+
+    _phoneIndex = new Map<string, Customer>();
+    _addressIndex = new Map<string, Customer>();
+    _idIndex = new Map<string, Customer>();
+
+    for (const c of list) {
+        _idIndex.set(c.id, c);
+        if (c.phone && c.phone.length > 5) {
+            _phoneIndex.set(normalizePhone(c.phone), c);
+        }
+        if (c.address && c.address.length > 5) {
+            const normAddr = normalizeString(c.address);
+            const existing = _addressIndex.get(normAddr);
+            if (!existing || (c.priorityScore || 999) < (existing.priorityScore || 999)) {
+                _addressIndex.set(normAddr, c);
+            }
+        }
+    }
+};
+
+const findMatchingCustomer = (orderPhone: string, orderAddress: string): Customer | undefined => {
+    buildIndices(); 
+    
+    if (orderPhone) {
+        const normPhone = normalizePhone(orderPhone);
+        if (_phoneIndex?.has(normPhone)) {
+            return _phoneIndex.get(normPhone);
+        }
+    }
+
+    if (orderAddress) {
+        const normAddr = normalizeString(orderAddress);
+        if (_addressIndex?.has(normAddr)) {
+            return _addressIndex.get(normAddr);
+        }
+    }
+
+    return undefined;
+};
+
+const sanitize = <T>(obj: T): T => {
+  return JSON.parse(JSON.stringify(obj));
+};
+
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+const safeCloudOp = async (operation: () => Promise<any>) => {
+    if (!isOnline()) return;
+    try {
+        await operation();
+    } catch (error: any) {
+        if (error.code === 'resource-exhausted') {
+            markQuotaExhausted();
+        } else {
+            console.error("Cloud Op Failed:", error);
+        }
+    }
+};
+
+const DEFAULT_TAGS = ["Giao giờ HC", "Gọi trước", "Dễ vỡ", "Cho xem hàng", "Giao gấp", "Cổng sau"];
+
 export const storageService = {
-  // --- Auth / User ---
-  login: (username: string) => {
-    localStorage.setItem(USER_KEY, username);
+  login: (username: string) => { localStorage.setItem(USER_KEY, username); },
+  logout: () => { localStorage.removeItem(USER_KEY); },
+  getCurrentUser: (): string | null => { return localStorage.getItem(USER_KEY); },
+
+  // --- LOGO MANAGEMENT ---
+  getLogo: (): string | null => {
+      return localStorage.getItem(LOGO_KEY);
   },
-  logout: () => {
-    localStorage.removeItem(USER_KEY);
-  },
-  getCurrentUser: (): string | null => {
-    return localStorage.getItem(USER_KEY);
+  
+  saveLogo: (base64String: string) => {
+      try {
+          localStorage.setItem(LOGO_KEY, base64String);
+          window.dispatchEvent(new Event('logo_updated'));
+      } catch (e) {
+          console.error("Logo too large for localStorage", e);
+          throw new Error("Ảnh quá lớn, vui lòng chọn ảnh nhỏ hơn (< 4MB)");
+      }
   },
 
-  // --- Bank Configuration ---
+  removeLogo: () => {
+      localStorage.removeItem(LOGO_KEY);
+      window.dispatchEvent(new Event('logo_updated'));
+  },
+
+  // --- QUICK TAGS ---
+  getQuickTags: (): string[] => {
+      try {
+          const local = localStorage.getItem(TAGS_KEY);
+          return local ? JSON.parse(local) : DEFAULT_TAGS;
+      } catch {
+          return DEFAULT_TAGS;
+      }
+  },
+
+  saveQuickTags: async (tags: string[]) => {
+      localStorage.setItem(TAGS_KEY, JSON.stringify(tags));
+      window.dispatchEvent(new Event('local_tags_updated'));
+      await safeCloudOp(() => setDoc(doc(db, "settings", "quickTags"), { tags }));
+  },
+
+  fetchQuickTagsFromCloud: async () => {
+      if (isOnline()) {
+          try {
+              const snap = await getDoc(doc(db, "settings", "quickTags"));
+              if (snap.exists()) {
+                  const data = snap.data();
+                  if (data.tags && Array.isArray(data.tags)) {
+                      localStorage.setItem(TAGS_KEY, JSON.stringify(data.tags));
+                      window.dispatchEvent(new Event('local_tags_updated'));
+                      return data.tags;
+                  }
+              }
+          } catch (e) { console.warn("Fetch tags failed", e); }
+      }
+      return storageService.getQuickTags();
+  },
+
+  // --- BANK CONFIG ---
   saveBankConfig: async (config: BankConfig): Promise<void> => {
       localStorage.setItem(BANK_KEY, JSON.stringify(config));
-      if (isOnline()) {
-          await setDoc(doc(db, "settings", "bankConfig"), config);
-      }
+      await safeCloudOp(() => setDoc(doc(db, "settings", "bankConfig"), sanitize(config)));
   },
 
   getBankConfig: async (): Promise<BankConfig | null> => {
       const localData = localStorage.getItem(BANK_KEY);
       if (localData) return JSON.parse(localData);
-
-      if (isOnline()) {
-         try {
+      
+      let config: BankConfig | null = null;
+      await safeCloudOp(async () => {
              const snap = await getDocs(collection(db, "settings"));
-             let config: BankConfig | null = null;
-             snap.forEach(d => {
-                 if (d.id === 'bankConfig') config = d.data() as BankConfig;
-             });
-             if (config) {
-                 localStorage.setItem(BANK_KEY, JSON.stringify(config)); 
-                 return config;
-             }
-         } catch (e) { console.error(e); }
-      }
-      return null;
+             snap.forEach(d => { if (d.id === 'bankConfig') config = d.data() as BankConfig; });
+      });
+      
+      if (config) { localStorage.setItem(BANK_KEY, JSON.stringify(config)); }
+      return config;
   },
 
-  // --- Sync Tool ---
+  // --- SYNC ---
   syncLocalToCloud: async (): Promise<number> => {
-    if (!isOnline()) throw new Error("Chưa kết nối Firebase");
+    if (!isOnline()) throw new Error("Chưa kết nối Firebase hoặc Hết hạn mức");
+    
     try {
-        const localOrdersRaw = localStorage.getItem(ORDER_KEY);
-        const localProductsRaw = localStorage.getItem(PRODUCT_KEY);
-        const localCustomersRaw = localStorage.getItem(CUSTOMER_KEY);
+        const localOrders = ensureOrdersLoaded();
+        const localProducts = JSON.parse(localStorage.getItem(PRODUCT_KEY) || '[]');
+        const localCustomers = ensureCustomersLoaded();
+        const localTags = storageService.getQuickTags();
 
-        const orders: Order[] = localOrdersRaw ? JSON.parse(localOrdersRaw) : [];
-        const products: Product[] = localProductsRaw ? JSON.parse(localProductsRaw) : [];
-        const customers: Customer[] = localCustomersRaw ? JSON.parse(localCustomersRaw) : [];
+        let totalSynced = 0;
+        const CHUNK_SIZE = 300; 
 
-        let count = 0;
-        const batch = writeBatch(db); 
+        // Sync settings first
+        await safeCloudOp(() => setDoc(doc(db, "settings", "quickTags"), { tags: localTags }));
 
-        for (const order of orders) {
-            const cleanOrder = {
-                ...order,
-                items: Array.isArray(order.items) ? order.items : [],
-                updatedAt: Date.now()
-            };
-            const orderRef = doc(db, "orders", order.id);
-            batch.set(orderRef, cleanOrder);
-            count++;
-        }
+        const syncCollection = async (items: any[], colName: string) => {
+            if (!items || items.length === 0) return;
+            if (_quotaExhausted) return; 
+            
+            for (let i = 0; i < items.length; i += CHUNK_SIZE) {
+                if (_quotaExhausted) break;
 
-        for (const product of products) {
-            const prodRef = doc(db, "products", product.id);
-            batch.set(prodRef, product);
-        }
+                const chunk = items.slice(i, i + CHUNK_SIZE);
+                const batch = writeBatch(db);
+                
+                chunk.forEach(item => {
+                    if (item.id) {
+                        batch.set(doc(db, colName, item.id), sanitize(item));
+                    }
+                });
 
-        for (const customer of customers) {
-             const cid = customer.id || customer.phone || customer.name;
-             if (cid) {
-                 const custRef = doc(db, "customers", cid);
-                 batch.set(custRef, customer);
-             }
-        }
+                try {
+                    await batch.commit();
+                    totalSynced += chunk.length;
+                    await delay(500); 
+                } catch (e: any) {
+                    if (e.code === 'resource-exhausted') {
+                         markQuotaExhausted();
+                         throw new Error("Hết hạn mức Firebase. Đã dừng đồng bộ.");
+                    }
+                    throw e; 
+                }
+            }
+        };
 
-        await batch.commit();
-        return count;
-    } catch (error) {
-        console.error("Sync error:", error);
-        throw error;
+        if (localOrders) await syncCollection(localOrders, "orders");
+        await syncCollection(localProducts, "products");
+        if (localCustomers) await syncCollection(localCustomers, "customers");
+
+        return totalSynced;
+    } catch (error) { 
+        console.error("Sync error:", error); 
+        throw error; 
     }
   },
 
-  // --- Notifications System ---
-  addNotification: async (title: string, message: string, type: 'info' | 'success' | 'warning' | 'error', relatedOrderId?: string) => {
-      const notif: Notification = {
-          id: uuidv4(),
-          title,
-          message,
-          type,
-          isRead: false,
-          createdAt: Date.now(),
-          relatedOrderId
-      };
+  // --- PRODUCTS ---
+  subscribeProducts: (callback: (products: Product[]) => void) => {
+    const load = () => { 
+        try {
+            const data = localStorage.getItem(PRODUCT_KEY); 
+            _memoryProducts = data ? JSON.parse(data) : [];
+            callback(_memoryProducts || []); 
+        } catch { callback([]); }
+    };
+    load();
+
+    if (isOnline()) {
+        const q = query(collection(db, "products"));
+        return onSnapshot(q, (snapshot) => {
+            const list: Product[] = [];
+            snapshot.forEach(d => list.push(d.data() as Product));
+            _memoryProducts = list;
+            localStorage.setItem(PRODUCT_KEY, JSON.stringify(list));
+            callback(list);
+        }, (err) => {
+            if (err.code === 'resource-exhausted') {
+                markQuotaExhausted();
+            }
+        });
+    } else {
+        const handler = () => load();
+        window.addEventListener('storage_' + PRODUCT_KEY, handler);
+        return () => window.removeEventListener('storage_' + PRODUCT_KEY, handler);
+    }
+  },
+
+  saveProduct: async (product: Product) => {
+      let list = _memoryProducts || [];
+      if (list.length === 0) {
+           const local = localStorage.getItem(PRODUCT_KEY);
+           if(local) list = JSON.parse(local);
+      }
+      const idx = list.findIndex(p => p.id === product.id);
+      if (idx >= 0) list[idx] = product; else list.push(product);
+      
+      _memoryProducts = list;
+      localStorage.setItem(PRODUCT_KEY, JSON.stringify(list));
+      window.dispatchEvent(new Event('storage_' + PRODUCT_KEY));
+
+      await safeCloudOp(() => setDoc(doc(db, "products", product.id), sanitize(product)));
+  },
+
+  deleteProduct: async (id: string) => {
+      let list = _memoryProducts || [];
+      if (list.length === 0) {
+           const local = localStorage.getItem(PRODUCT_KEY);
+           if(local) list = JSON.parse(local);
+      }
+      list = list.filter(p => p.id !== id);
+      _memoryProducts = list;
+      localStorage.setItem(PRODUCT_KEY, JSON.stringify(list));
+      window.dispatchEvent(new Event('storage_' + PRODUCT_KEY));
+      await safeCloudOp(() => deleteDoc(doc(db, "products", id)));
+  },
+
+  // --- CUSTOMERS (DELTA SYNC ENGINE) ---
+  subscribeCustomers: (callback: (customers: Customer[]) => void) => {
+      const list = ensureCustomersLoaded();
+      if (list) callback(list);
 
       if (isOnline()) {
-          await addDoc(collection(db, "notifications"), notif);
+          const fetchDelta = async () => {
+              try {
+                  const maxUpdatedAt = list ? Math.max(...list.map(c => c.updatedAt || 0)) : 0;
+                  const q = query(collection(db, "customers"), where("updatedAt", ">", maxUpdatedAt));
+                  const snapshot = await getDocs(q);
+                  
+                  if (!snapshot.empty) {
+                      const currentList = ensureCustomersLoaded() || [];
+                      const customerMap = new Map<string, Customer>();
+                      currentList.forEach(c => customerMap.set(c.id, c));
+
+                      let changesCount = 0;
+                      snapshot.forEach(doc => {
+                          const data = doc.data() as Customer;
+                          const existing = customerMap.get(data.id);
+                          if (!existing || (data.updatedAt || 0) > (existing.updatedAt || 0)) {
+                              customerMap.set(data.id, data);
+                              changesCount++;
+                          }
+                      });
+
+                      const newList = Array.from(customerMap.values());
+                      _memoryCustomers = newList;
+                      invalidateIndices();
+                      
+                      callback(newList);
+                      localStorage.setItem(CUSTOMER_KEY, JSON.stringify(newList));
+                  }
+
+                  const now = Date.now();
+                  const rtQuery = query(collection(db, "customers"), where("updatedAt", ">", now));
+                  
+                  return onSnapshot(rtQuery, (snap) => {
+                      if(snap.empty) return;
+                      const current = ensureCustomersLoaded() || [];
+                      const map = new Map(current.map(c => [c.id, c]));
+                      
+                      snap.forEach(d => {
+                          const data = d.data() as Customer;
+                          map.set(data.id, data);
+                      });
+                      
+                      const updatedList = Array.from(map.values());
+                      _memoryCustomers = updatedList;
+                      invalidateIndices();
+                      callback(updatedList);
+                      
+                      if (_customerSaveTimer) clearTimeout(_customerSaveTimer);
+                      _customerSaveTimer = setTimeout(() => {
+                          localStorage.setItem(CUSTOMER_KEY, JSON.stringify(updatedList));
+                      }, 2000);
+                  }, (error) => {
+                      if (error.code === 'resource-exhausted') {
+                          markQuotaExhausted();
+                      }
+                  });
+
+              } catch (e: any) {
+                  if (e.code === 'resource-exhausted') {
+                      markQuotaExhausted();
+                  } else {
+                      console.warn("Delta sync skipped/failed:", e.message);
+                  }
+              }
+          };
+
+          fetchDelta();
       } else {
-          const local = localStorage.getItem(NOTIF_KEY);
-          const list: Notification[] = local ? JSON.parse(local) : [];
-          list.unshift(notif);
-          if (list.length > 20) list.splice(20); 
-          localStorage.setItem(NOTIF_KEY, JSON.stringify(list));
-          window.dispatchEvent(new Event('storage_notif'));
+          const handler = () => {
+              const list = ensureCustomersLoaded();
+              if (list) callback(list);
+          };
+          window.addEventListener('storage_' + CUSTOMER_KEY, handler);
+          return () => window.removeEventListener('storage_' + CUSTOMER_KEY, handler);
       }
   },
 
+  searchCustomers: async (term: string): Promise<Customer[]> => {
+      const list = ensureCustomersLoaded();
+      if (!list || !term) return [];
+      
+      const lowerTerm = term.toLowerCase().trim();
+      const results: Customer[] = [];
+      const MAX_RESULTS = 10;
+      
+      for (const c of list) {
+          if (results.length >= MAX_RESULTS) break;
+          if (c.name.toLowerCase().includes(lowerTerm) || 
+              (c.phone && c.phone.includes(lowerTerm)) || 
+              c.address.toLowerCase().includes(lowerTerm)) {
+              results.push(c);
+          }
+      }
+      return results;
+  },
+
+  upsertCustomer: async (customer: Customer) => {
+      const list = ensureCustomersLoaded() || [];
+      const idx = list.findIndex(c => c.id === customer.id);
+      
+      const customerToSave = { ...customer, updatedAt: Date.now() };
+      
+      if (idx >= 0) list[idx] = customerToSave; 
+      else list.push(customerToSave);
+      
+      _memoryCustomers = list;
+      invalidateIndices();
+
+      window.dispatchEvent(new Event('storage_' + CUSTOMER_KEY));
+      
+      if (_customerSaveTimer) clearTimeout(_customerSaveTimer);
+      _customerSaveTimer = setTimeout(() => {
+           localStorage.setItem(CUSTOMER_KEY, JSON.stringify(list));
+      }, 1000);
+
+      await safeCloudOp(() => setDoc(doc(db, "customers", customerToSave.id), sanitize(customerToSave)));
+  },
+
+  deleteCustomer: async (id: string) => {
+      let list = ensureCustomersLoaded() || [];
+      list = list.filter(c => c.id !== id);
+      _memoryCustomers = list;
+      invalidateIndices();
+      
+      window.dispatchEvent(new Event('storage_' + CUSTOMER_KEY));
+      localStorage.setItem(CUSTOMER_KEY, JSON.stringify(list));
+
+      await safeCloudOp(() => deleteDoc(doc(db, "customers", id)));
+  },
+
+  clearAllCustomers: async (skipCloud = false) => {
+      _memoryCustomers = [];
+      invalidateIndices();
+      localStorage.removeItem(CUSTOMER_KEY);
+      window.dispatchEvent(new Event('storage_' + CUSTOMER_KEY));
+      
+      if (!skipCloud && isOnline()) {
+          const deleteBatch = async () => {
+             if (_quotaExhausted) return;
+
+             const q = query(collection(db, "customers"), limit(400));
+             try {
+                const snap = await getDocs(q);
+                if (snap.empty) return;
+
+                const batch = writeBatch(db);
+                snap.forEach(d => batch.delete(d.ref));
+                await batch.commit();
+                await delay(500); 
+                await deleteBatch();
+             } catch (e: any) {
+                if (e.code === 'resource-exhausted') {
+                    markQuotaExhausted();
+                }
+             }
+          };
+
+          await safeCloudOp(async () => {
+              await deleteBatch();
+          });
+      }
+  },
+
+  importCustomersBatch: async (customers: Customer[], skipCloud = false) => {
+      const currentList = ensureCustomersLoaded() || [];
+      const map = new Map<string, Customer>();
+      
+      currentList.forEach(c => map.set(c.id, c));
+      
+      customers.forEach(c => {
+          const id = c.id || generateCustomerId(c.name, c.phone, c.address);
+          const finalCustomer = { ...c, id, updatedAt: Date.now() };
+          
+          const existing = map.get(id);
+          if (!existing) {
+              map.set(id, finalCustomer);
+          } else {
+              map.set(id, {
+                  ...finalCustomer,
+                  lastOrderDate: Math.max(existing.lastOrderDate, finalCustomer.lastOrderDate),
+                  totalOrders: existing.totalOrders
+              });
+          }
+      }); 
+      
+      const newList = Array.from(map.values());
+      _memoryCustomers = newList;
+      invalidateIndices(); 
+
+      localStorage.setItem(CUSTOMER_KEY, JSON.stringify(newList));
+      window.dispatchEvent(new Event('storage_' + CUSTOMER_KEY));
+
+      if (isOnline() && !skipCloud) {
+          const CHUNK_SIZE = 200; 
+          for (let i = 0; i < customers.length; i += CHUNK_SIZE) {
+              if (_quotaExhausted) break;
+              const chunk = customers.slice(i, i + CHUNK_SIZE);
+              const batch = writeBatch(db);
+              chunk.forEach(c => {
+                  const id = c.id || generateCustomerId(c.name, c.phone, c.address);
+                  batch.set(doc(db, "customers", id), sanitize({ ...c, id, updatedAt: Date.now() }));
+              });
+              try {
+                await batch.commit();
+                await delay(300); 
+              } catch (e: any) {
+                 if (e.code === 'resource-exhausted') {
+                     markQuotaExhausted();
+                     break; 
+                 }
+              }
+          }
+      }
+      return customers.length;
+  },
+
+  // --- ORDERS ---
+  subscribeOrders: (callback: (orders: Order[]) => void) => {
+      const list = ensureOrdersLoaded();
+      if (list) callback(list);
+
+      if (isOnline()) {
+          const q = query(collection(db, "orders"));
+          return onSnapshot(q, (snapshot) => {
+              const newList: Order[] = [];
+              snapshot.forEach(d => newList.push(d.data() as Order));
+              
+              _memoryOrders = newList;
+              callback(newList);
+
+              if (_orderSaveTimer) clearTimeout(_orderSaveTimer);
+              _orderSaveTimer = setTimeout(() => {
+                  localStorage.setItem(ORDER_KEY, JSON.stringify(newList));
+              }, 2000);
+          }, (err) => {
+              if (err.code === 'resource-exhausted') {
+                  markQuotaExhausted();
+              }
+          });
+      } else {
+          const handler = () => {
+              const list = ensureOrdersLoaded();
+              if (list) callback(list);
+          };
+          window.addEventListener('storage_' + ORDER_KEY, handler);
+          return () => window.removeEventListener('storage_' + ORDER_KEY, handler);
+      }
+  },
+
+  saveOrder: async (order: Order) => {
+      const cleanOrder = sanitize(order);
+      const list = ensureOrdersLoaded() || [];
+      list.unshift(cleanOrder);
+      
+      _memoryOrders = list;
+      window.dispatchEvent(new Event('storage_' + ORDER_KEY));
+      localStorage.setItem(ORDER_KEY, JSON.stringify(list));
+      
+      await safeCloudOp(async () => {
+          await setDoc(doc(db, "orders", order.id), cleanOrder);
+      });
+      
+      await storageService.addNotification("Đơn hàng mới", `Đơn #${order.id} của ${order.customerName} đã được tạo.`, 'info', order.id);
+  },
+
+  deleteOrder: async (id: string, details?: { name: string, address: string }) => {
+      let list = ensureOrdersLoaded() || [];
+      list = list.filter(o => o.id !== id);
+      
+      _memoryOrders = list;
+      window.dispatchEvent(new Event('storage_' + ORDER_KEY));
+      localStorage.setItem(ORDER_KEY, JSON.stringify(list));
+      
+      await safeCloudOp(() => deleteDoc(doc(db, "orders", id)));
+
+      if (details) {
+           await storageService.addNotification("Đã xóa đơn", `Đơn #${id} (${details.name}) đã bị xóa.`, 'warning');
+      }
+  },
+
+  updateOrderDetails: async (order: Order) => {
+      const updated = { 
+          ...order, 
+          updatedAt: Date.now(), 
+          lastUpdatedBy: localStorage.getItem(USER_KEY) || 'Admin' 
+      };
+
+      const list = ensureOrdersLoaded() || [];
+      const idx = list.findIndex(o => o.id === order.id);
+      if (idx >= 0) {
+           list[idx] = updated;
+           _memoryOrders = list;
+           window.dispatchEvent(new Event('storage_' + ORDER_KEY));
+           localStorage.setItem(ORDER_KEY, JSON.stringify(list));
+      }
+
+      await safeCloudOp(() => setDoc(doc(db, "orders", order.id), sanitize(updated)));
+  },
+
+  updateStatus: async (id: string, status: OrderStatus, proof?: string, details?: {name: string, address: string}) => {
+      const updateData: any = { 
+          status, 
+          updatedAt: Date.now(),
+          lastUpdatedBy: localStorage.getItem(USER_KEY) || 'Admin'
+      };
+      if (proof) updateData.deliveryProof = proof;
+
+      const list = ensureOrdersLoaded() || [];
+      const idx = list.findIndex(o => o.id === id);
+      if (idx >= 0) {
+           list[idx] = { ...list[idx], ...updateData };
+           _memoryOrders = list;
+           window.dispatchEvent(new Event('storage_' + ORDER_KEY));
+           localStorage.setItem(ORDER_KEY, JSON.stringify(list));
+      }
+
+      await safeCloudOp(() => updateDoc(doc(db, "orders", id), updateData));
+
+      if (details && (status === OrderStatus.DELIVERED || status === OrderStatus.CANCELLED)) {
+           const type = status === OrderStatus.DELIVERED ? 'success' : 'error';
+           const msg = status === OrderStatus.DELIVERED ? `Đã giao thành công đơn #${id}` : `Đã hủy đơn #${id}`;
+           await storageService.addNotification("Cập nhật trạng thái", msg, type, id);
+      }
+  },
+
+  deleteDeliveryProof: async (id: string) => {
+      const list = ensureOrdersLoaded() || [];
+      const idx = list.findIndex(o => o.id === id);
+      if (idx >= 0) {
+           delete list[idx].deliveryProof;
+           _memoryOrders = list;
+           window.dispatchEvent(new Event('storage_' + ORDER_KEY));
+           localStorage.setItem(ORDER_KEY, JSON.stringify(list));
+      }
+      await safeCloudOp(() => updateDoc(doc(db, "orders", id), { deliveryProof: deleteField() }));
+  },
+
+  updatePaymentVerification: async (id: string, verified: boolean, details?: {name: string}) => {
+      const updateData = { 
+          paymentVerified: verified,
+          updatedAt: Date.now(),
+          lastUpdatedBy: localStorage.getItem(USER_KEY) || 'Admin'
+      };
+
+      const list = ensureOrdersLoaded() || [];
+      const idx = list.findIndex(o => o.id === id);
+      if (idx >= 0) {
+           list[idx] = { ...list[idx], ...updateData };
+           _memoryOrders = list;
+           window.dispatchEvent(new Event('storage_' + ORDER_KEY));
+           localStorage.setItem(ORDER_KEY, JSON.stringify(list));
+      }
+
+      await safeCloudOp(() => updateDoc(doc(db, "orders", id), updateData));
+
+      if (verified && details) {
+          await storageService.addNotification("Xác nhận thanh toán", `Đã nhận tiền đơn #${id} (${details.name})`, 'success', id);
+      }
+  },
+
+  saveOrdersList: async (orders: Order[]) => {
+      _memoryOrders = orders;
+      localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
+      window.dispatchEvent(new Event('storage_' + ORDER_KEY));
+
+      await safeCloudOp(async () => {
+          const batch = writeBatch(db);
+          orders.forEach(o => {
+              batch.update(doc(db, "orders", o.id), { orderIndex: o.orderIndex });
+          });
+          await batch.commit();
+      });
+  },
+
+  splitOrderToNextBatch: async (id: string, currentBatch: string) => {
+      let nextBatch = currentBatch.includes('-Split') ? currentBatch : (currentBatch + "-Split");
+      const list = ensureOrdersLoaded() || [];
+      const order = list.find(o => o.id === id);
+
+      if (order) {
+           const updated = { ...order, batchId: nextBatch, updatedAt: Date.now() };
+           await storageService.updateOrderDetails(updated);
+           await storageService.addNotification("Tách lô", `Đơn #${id} đã chuyển sang lô ${nextBatch}`, 'warning', id);
+      }
+  },
+  
+  autoSortOrders: async (orders: Order[]) => {
+      buildIndices(); 
+
+      const sorted = [...orders].sort((a, b) => {
+          const customerA = findMatchingCustomer(a.customerPhone, a.address);
+          const customerB = findMatchingCustomer(b.customerPhone, b.address);
+
+          const pA = customerA?.priorityScore || 999;
+          const pB = customerB?.priorityScore || 999;
+          
+          if (pA !== pB) return pA - pB;
+          
+          const addrA = normalizeString(a.address);
+          const addrB = normalizeString(b.address);
+          const addrCompare = addrA.localeCompare(addrB);
+          
+          if (addrCompare !== 0) return addrCompare;
+
+          return (a.createdAt - b.createdAt);
+      });
+
+      const reindexed = sorted.map((o, idx) => ({ ...o, orderIndex: idx }));
+      await storageService.saveOrdersList(reindexed);
+      
+      return reindexed.length;
+  },
+
+  isNewCustomer: (phone: string, address: string): boolean => {
+      buildIndices();
+      const match = findMatchingCustomer(phone, address);
+      return !match;
+  },
+
+  // --- NOTIFICATIONS ---
+  addNotification: async (title: string, message: string, type: 'info' | 'success' | 'warning' | 'error', relatedOrderId?: string) => {
+      const notifData: any = { 
+          id: uuidv4(), 
+          title, 
+          message, 
+          type, 
+          isRead: false, 
+          createdAt: Date.now() 
+      };
+      if (relatedOrderId) notifData.relatedOrderId = relatedOrderId;
+
+      const local = localStorage.getItem(NOTIF_KEY);
+      const list: Notification[] = local ? JSON.parse(local) : [];
+      list.unshift(notifData as Notification);
+      if (list.length > 20) list.splice(20); 
+      localStorage.setItem(NOTIF_KEY, JSON.stringify(list));
+      window.dispatchEvent(new Event('storage_notif'));
+
+      await safeCloudOp(() => addDoc(collection(db, "notifications"), sanitize(notifData)));
+  },
+
   subscribeNotifications: (callback: (notifs: Notification[]) => void) => {
+      try { const data = localStorage.getItem(NOTIF_KEY); callback(data ? JSON.parse(data) : []); } catch { callback([]); }
+
       if (isOnline()) {
           const q = query(collection(db, "notifications"), orderBy("createdAt", "desc"), limit(20));
           return onSnapshot(q, (snapshot) => {
               const list: Notification[] = [];
               snapshot.forEach(d => list.push({ ...d.data(), id: d.id } as Notification));
+              localStorage.setItem(NOTIF_KEY, JSON.stringify(list));
               callback(list);
+          }, (err) => {
+              if (err.code === 'resource-exhausted') {
+                  markQuotaExhausted();
+              }
           });
       } else {
-          const load = () => {
-              try {
-                  const data = localStorage.getItem(NOTIF_KEY);
-                  callback(data ? JSON.parse(data) : []);
-              } catch { callback([]); }
-          };
-          load();
-          const handler = () => load();
+          const handler = () => { try { const data = localStorage.getItem(NOTIF_KEY); callback(data ? JSON.parse(data) : []); } catch {} };
           window.addEventListener('storage_notif', handler);
           return () => window.removeEventListener('storage_notif', handler);
       }
   },
 
   markNotificationRead: async (id: string) => {
-      window.dispatchEvent(new CustomEvent('local_notif_read', { detail: id }));
-      if (isOnline()) {
-          await updateDoc(doc(db, "notifications", id), { isRead: true });
-      } else {
-          const local = localStorage.getItem(NOTIF_KEY);
-          if (!local) return;
+      const local = localStorage.getItem(NOTIF_KEY);
+      if (local) {
           const list: Notification[] = JSON.parse(local);
           const idx = list.findIndex(n => n.id === id);
-          if (idx !== -1) {
-              list[idx].isRead = true;
-              localStorage.setItem(NOTIF_KEY, JSON.stringify(list));
-              window.dispatchEvent(new Event('storage_notif'));
+          if (idx !== -1) { 
+              list[idx].isRead = true; 
+              localStorage.setItem(NOTIF_KEY, JSON.stringify(list)); 
+              window.dispatchEvent(new Event('storage_notif')); 
           }
       }
+      window.dispatchEvent(new CustomEvent('local_notif_read', { detail: id }));
+      await safeCloudOp(() => updateDoc(doc(db, "notifications", id), { isRead: true }));
   },
 
   markAllNotificationsRead: async () => {
       window.dispatchEvent(new Event('local_notif_read_all'));
-      if (isOnline()) {
-          const q = query(collection(db, "notifications"), limit(20));
-          const snap = await getDocs(q);
-          const batch = writeBatch(db);
-          let count = 0;
-          snap.forEach(d => {
-              if (!d.data().isRead) {
-                  batch.update(d.ref, { isRead: true });
-                  count++;
-              }
-          });
-          if (count > 0) await batch.commit();
-      } else {
-          const local = localStorage.getItem(NOTIF_KEY);
-          if (!local) return;
+      const local = localStorage.getItem(NOTIF_KEY);
+      if (local) {
           const list: Notification[] = JSON.parse(local).map((n: Notification) => ({ ...n, isRead: true }));
           localStorage.setItem(NOTIF_KEY, JSON.stringify(list));
           window.dispatchEvent(new Event('storage_notif'));
       }
-  },
-
-  clearAllNotifications: async () => {
-      window.dispatchEvent(new Event('local_notif_clear_all'));
-      if (isOnline()) {
+      await safeCloudOp(async () => {
           const q = query(collection(db, "notifications"), limit(50));
           const snap = await getDocs(q);
           const batch = writeBatch(db);
-          snap.forEach(d => {
-              batch.delete(d.ref);
-          });
-          await batch.commit();
-      } else {
-          localStorage.setItem(NOTIF_KEY, JSON.stringify([]));
-          window.dispatchEvent(new Event('storage_notif'));
-      }
-  },
-
-  // --- Orders (Real-time & Sync) ---
-  subscribeOrders: (callback: (orders: Order[]) => void) => {
-    if (isOnline()) {
-      const q = query(collection(db, "orders")); 
-      return onSnapshot(q, (snapshot) => {
-        const orders: Order[] = [];
-        snapshot.forEach((doc) => {
-          orders.push(doc.data() as Order);
-        });
-        orders.sort((a, b) => b.createdAt - a.createdAt);
-        callback(orders);
+          let count = 0;
+          snap.forEach(d => { if (!d.data().isRead) { batch.update(d.ref, { isRead: true }); count++; } });
+          if (count > 0) await batch.commit();
       });
-    } else {
-      const loadLocal = () => {
-        try {
-          const data = localStorage.getItem(ORDER_KEY);
-          if (!data) { callback([]); return; }
-          const orders = JSON.parse(data).map((o: any) => ({
-            ...o,
-            items: Array.isArray(o.items) ? o.items : [{ id: 'migrated', name: o.items || 'Hàng hóa', quantity: 1, price: o.price || 0 }],
-            totalPrice: o.totalPrice || o.price || 0,
-            orderIndex: o.orderIndex !== undefined ? o.orderIndex : 0,
-            paymentVerified: o.paymentVerified || false
-          }));
-          callback(orders);
-        } catch (e) { callback([]); }
-      };
-      loadLocal();
-      const handler = () => loadLocal();
-      window.addEventListener('storage', handler);
-      return () => window.removeEventListener('storage', handler);
-    }
   },
 
-  getOrdersSync: (): Order[] => {
-     try {
-      const data = localStorage.getItem(ORDER_KEY);
-      if (!data) return [];
-      return JSON.parse(data).map((o: any) => ({
-        ...o,
-        items: Array.isArray(o.items) ? o.items : [{ id: 'migrated', name: o.items || 'Hàng hóa', quantity: 1, price: o.price || 0 }],
-        totalPrice: o.totalPrice || o.price || 0,
-        orderIndex: o.orderIndex !== undefined ? o.orderIndex : 0,
-        paymentVerified: o.paymentVerified || false
-      }));
-    } catch { return []; }
+  clearAllNotifications: async () => {
+      localStorage.removeItem(NOTIF_KEY);
+      window.dispatchEvent(new Event('storage_notif'));
+      await safeCloudOp(async () => {
+           const q = query(collection(db, "notifications"), limit(100));
+           const snap = await getDocs(q);
+           const batch = writeBatch(db);
+           snap.forEach(d => batch.delete(d.ref));
+           await batch.commit();
+      });
   },
 
-  saveOrder: async (order: Order): Promise<void> => {
-    if (isOnline()) {
-      await setDoc(doc(db, "orders", order.id), order);
-    } else {
-      const orders = storageService.getOrdersSync();
-      orders.unshift(order);
-      localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
-      window.dispatchEvent(new Event('storage'));
-    }
-    
-    await storageService.deductInventory(order);
-    storageService.upsertCustomer({
-      name: order.customerName,
-      phone: order.customerPhone,
-      address: order.address,
-      id: order.customerPhone || order.customerName,
-      lastOrderDate: Date.now()
-    });
+  // --- STRESS TEST TOOL ---
+  generatePerformanceData: async (count: number) => {
+      const startTime = performance.now();
+      const dummyCustomers: Customer[] = [];
+      const streets = ['Lê Lợi', 'Nguyễn Huệ', 'Trần Hưng Đạo', 'Cách Mạng Tháng 8', 'Điện Biên Phủ'];
+      const districts = ['Quận 1', 'Quận 3', 'Quận 5', 'Quận 10', 'Bình Thạnh'];
 
-    storageService.addNotification(
-        order.customerName, 
-        `Đã tạo đơn mới • ${order.address}`,
-        'success',
-        order.id
-    );
-  },
-
-  updateOrderDetails: async (updatedOrder: Order): Promise<void> => {
-    const finalOrder = { ...updatedOrder, updatedAt: Date.now() };
-    if (isOnline()) {
-      await updateDoc(doc(db, "orders", updatedOrder.id), finalOrder);
-    } else {
-      const orders = storageService.getOrdersSync();
-      const index = orders.findIndex(o => o.id === updatedOrder.id);
-      if (index !== -1) {
-        orders[index] = finalOrder;
-        localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
-        window.dispatchEvent(new Event('storage'));
-      }
-    }
-    
-    storageService.addNotification(
-        updatedOrder.customerName, 
-        `Đã chỉnh sửa chi tiết • ${updatedOrder.address}`, 
-        'info', 
-        updatedOrder.id
-    );
-  },
-
-  updateStatus: async (id: string, status: OrderStatus, proof?: string, context?: { name: string, address: string }): Promise<Order | null> => {
-    const currentUser = storageService.getCurrentUser() || 'Admin';
-    const updateData: any = { 
-        status, 
-        updatedAt: Date.now(),
-        lastUpdatedBy: currentUser
-    };
-    if (proof) updateData.deliveryProof = proof;
-
-    if (isOnline()) {
-      await updateDoc(doc(db, "orders", id), updateData);
-    } else {
-      const orders = storageService.getOrdersSync();
-      const index = orders.findIndex(o => o.id === id);
-      if (index !== -1) {
-          orders[index] = { ...orders[index], ...updateData };
-          localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
-          window.dispatchEvent(new Event('storage'));
-      }
-    }
-
-    const orderName = context?.name || 'Khách hàng';
-    const address = context?.address || '';
-
-    let statusMsg = '';
-    if (status === OrderStatus.PICKED_UP) statusMsg = 'Đã lấy hàng';
-    if (status === OrderStatus.IN_TRANSIT) statusMsg = 'Đang đi giao';
-    if (status === OrderStatus.DELIVERED) statusMsg = 'Giao thành công';
-    if (status === OrderStatus.CANCELLED) statusMsg = 'Đã hủy';
-    
-    if (statusMsg) {
-        storageService.addNotification(
-            orderName, 
-            `${statusMsg} • ${address}`,
-            status === OrderStatus.CANCELLED ? 'error' : (status === OrderStatus.DELIVERED ? 'success' : 'info'),
-            id
-        );
-    }
-    return null;
-  },
-
-  splitOrderToNextBatch: async (id: string, currentBatchId: string): Promise<void> => {
-      const newBatchId = `${currentBatchId}S`;
-      const currentUser = storageService.getCurrentUser() || 'Admin';
-      
-      if (isOnline()) {
-          await updateDoc(doc(db, "orders", id), { 
-              batchId: newBatchId,
-              updatedAt: Date.now(),
-              lastUpdatedBy: currentUser
-          });
-      } else {
-          const orders = storageService.getOrdersSync();
-          const index = orders.findIndex(o => o.id === id);
-          if (index !== -1) {
-              orders[index].batchId = newBatchId;
-              orders[index].updatedAt = Date.now();
-              orders[index].lastUpdatedBy = currentUser;
-              localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
-              window.dispatchEvent(new Event('storage'));
-          }
-      }
-  },
-
-  deleteDeliveryProof: async (id: string): Promise<void> => {
-      if (isOnline()) {
-          await updateDoc(doc(db, "orders", id), {
-              deliveryProof: deleteField(),
+      for (let i = 0; i < count; i++) {
+          const street = streets[Math.floor(Math.random() * streets.length)];
+          const district = districts[Math.floor(Math.random() * districts.length)];
+          dummyCustomers.push({
+              id: uuidv4(),
+              name: `Khách hàng Test ${i + 1}`,
+              phone: `09${Math.floor(Math.random() * 100000000)}`,
+              address: `Số ${i} ${street}, ${district}, TP.HCM`,
+              priorityScore: Math.floor(Math.random() * 6000),
+              lastOrderDate: Date.now(),
               updatedAt: Date.now()
           });
-      } else {
-          const orders = storageService.getOrdersSync();
-          const index = orders.findIndex(o => o.id === id);
-          if (index !== -1) {
-              delete orders[index].deliveryProof;
-              orders[index].updatedAt = Date.now();
-              localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
-              window.dispatchEvent(new Event('storage'));
-          }
-      }
-  },
-  
-  updatePaymentVerification: async (id: string, verified: boolean, context?: { name: string }): Promise<void> => {
-      const currentUser = storageService.getCurrentUser() || 'Admin';
-      if (isOnline()) {
-          await updateDoc(doc(db, "orders", id), { paymentVerified: verified, updatedAt: Date.now() });
-      } else {
-          const orders = storageService.getOrdersSync();
-          const index = orders.findIndex(o => o.id === id);
-          if (index !== -1) {
-              orders[index].paymentVerified = verified;
-              localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
-              window.dispatchEvent(new Event('storage'));
-          }
-      }
-      const orderName = context?.name || 'Khách hàng';
-      if (verified) {
-          storageService.addNotification(orderName, `Đã xác nhận thanh toán • Duyệt bởi ${currentUser}`, 'success', id);
-      }
-  },
-
-  deleteOrder: async (id: string, context?: { name: string, address: string }): Promise<void> => {
-    const orderName = context?.name || 'Đơn hàng';
-    const address = context?.address || '';
-
-    if (isOnline()) {
-      await deleteDoc(doc(db, "orders", id));
-    } else {
-      const orders = storageService.getOrdersSync();
-      const filtered = orders.filter(o => o.id !== id);
-      localStorage.setItem(ORDER_KEY, JSON.stringify(filtered));
-      window.dispatchEvent(new Event('storage'));
-    }
-    
-    storageService.addNotification(orderName, `Đã xóa đơn hàng • ${address}`, 'warning', id);
-  },
-
-  // --- CRITICAL UPDATE: Save Orders List + Update Customer Priority ---
-  saveOrdersList: async (orders: Order[]): Promise<void> => {
-      // 1. Save Order Indexes
-      if (isOnline()) {
-          const chunks = [];
-          for (let i = 0; i < orders.length; i += 400) {
-              chunks.push(orders.slice(i, i + 400));
-          }
-          for (const chunk of chunks) {
-              const b = writeBatch(db);
-              chunk.forEach(o => {
-                  const ref = doc(db, "orders", o.id);
-                  b.update(ref, { orderIndex: o.orderIndex });
-              });
-              await b.commit();
-          }
-      } else {
-          localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
-          window.dispatchEvent(new Event('storage'));
       }
 
-      // 2. Auto-Learn Priority from Route Order
-      // Logic: The higher the order in the route (lower index), the higher priority (lower score)
-      // We will update the customer priorityScore to match the orderIndex + 1
-      try {
-          const customersToUpdate = new Map<string, number>();
-          orders.forEach(o => {
-              // Simple matching by Phone
-              if (o.customerPhone) {
-                  const normalizedPhone = normalizePhone(o.customerPhone);
-                  // Keep the lowest index (highest priority) if customer appears multiple times
-                  const currentBest = customersToUpdate.get(normalizedPhone);
-                  const newPriority = o.orderIndex + 1;
-                  if (currentBest === undefined || newPriority < currentBest) {
-                      customersToUpdate.set(normalizedPhone, newPriority);
-                  }
-              }
-          });
+      await storageService.importCustomersBatch(dummyCustomers, true);
 
-          // Bulk update customers
-          if (customersToUpdate.size > 0) {
-              if (isOnline()) {
-                  const batch = writeBatch(db);
-                  let opCount = 0;
-                  
-                  // OPTIMIZATION: Direct update by ID instead of fetching all
-                  for (const [phone, score] of customersToUpdate.entries()) {
-                      const custRef = doc(db, "customers", phone);
-                      batch.set(custRef, { priorityScore: score }, { merge: true });
-                      
-                      opCount++;
-                      if (opCount >= 450) {
-                          await batch.commit();
-                          opCount = 0;
-                      }
-                  }
-                  if (opCount > 0) await batch.commit();
-              } else {
-                  // Local Storage fallback
-                  const customers = storageService.getCustomersSync();
-                  let changed = false;
-                  customers.forEach(c => {
-                      if (c.phone && customersToUpdate.has(normalizePhone(c.phone))) {
-                          const newScore = customersToUpdate.get(normalizePhone(c.phone))!;
-                          if (c.priorityScore !== newScore) {
-                              c.priorityScore = newScore;
-                              changed = true;
-                          }
-                      }
-                  });
-                  if (changed) {
-                      localStorage.setItem(CUSTOMER_KEY, JSON.stringify(customers));
-                      window.dispatchEvent(new Event('storage'));
-                  }
-              }
-          }
-      } catch (e) {
-          console.error("Failed to update customer priority from route sort", e);
-      }
-  },
-
-  // --- Inventory & Customers ---
-  deductInventory: async (order: Order) => {
-    let products: Product[] = [];
-    if (isOnline()) {
-        const snap = await getDocs(collection(db, "products"));
-        snap.forEach(d => products.push(d.data() as Product));
-    } else {
-        products = storageService.getProductsSync();
-    }
-    let inventoryChanged = false;
-    order.items.forEach(item => {
-      let productIndex = -1;
-      if (item.productId) productIndex = products.findIndex(p => p.id === item.productId);
-      if (productIndex === -1 && item.name) {
-        const normalizedItemName = item.name.trim().toLowerCase();
-        productIndex = products.findIndex(p => {
-            const pName = p.name.trim().toLowerCase();
-            return pName === normalizedItemName || pName.includes(normalizedItemName) || normalizedItemName.includes(pName);
-        });
-      }
-      if (productIndex !== -1) {
-        const product = products[productIndex];
-        const weightPerUnit = product.defaultWeight > 0 ? product.defaultWeight : 1;
-        const weightToDeduct = (item.quantity || 1) * weightPerUnit;
-        if (weightToDeduct > 0) {
-          products[productIndex].stockQuantity = Math.max(0, (products[productIndex].stockQuantity || 0) - weightToDeduct);
-          inventoryChanged = true;
-          if (isOnline()) updateDoc(doc(db, "products", product.id), { stockQuantity: products[productIndex].stockQuantity });
-        }
-      }
-    });
-    if (!isOnline() && inventoryChanged) {
-      localStorage.setItem(PRODUCT_KEY, JSON.stringify(products));
-      window.dispatchEvent(new Event('storage'));
-    }
-  },
-
-  subscribeProducts: (callback: (products: Product[]) => void) => {
-    if (isOnline()) {
-        return onSnapshot(collection(db, "products"), (snapshot) => {
-            const products: Product[] = [];
-            snapshot.forEach(d => products.push(d.data() as Product));
-            callback(products);
-        });
-    } else {
-        const load = () => callback(storageService.getProductsSync());
-        load();
-        const handler = () => load();
-        window.addEventListener('storage', handler);
-        return () => window.removeEventListener('storage', handler);
-    }
-  },
-
-  getProductsSync: (): Product[] => {
-    try {
-      const data = localStorage.getItem(PRODUCT_KEY);
-      const products = data ? JSON.parse(data) : [];
-      return products.map((p: any) => ({ ...p, totalImported: p.totalImported ?? p.stockQuantity }));
-    } catch { return []; }
-  },
-
-  saveProduct: async (product: Product): Promise<void> => {
-    if (isOnline()) {
-        await setDoc(doc(db, "products", product.id), product);
-    } else {
-        const products = storageService.getProductsSync();
-        const index = products.findIndex(p => p.id === product.id);
-        if (index >= 0) products[index] = product; else products.push(product);
-        localStorage.setItem(PRODUCT_KEY, JSON.stringify(products));
-        window.dispatchEvent(new Event('storage'));
-    }
-  },
-
-  deleteProduct: async (id: string): Promise<void> => {
-      if (isOnline()) {
-          await deleteDoc(doc(db, "products", id));
-      } else {
-          const products = storageService.getProductsSync();
-          const filtered = products.filter(p => p.id !== id);
-          localStorage.setItem(PRODUCT_KEY, JSON.stringify(filtered));
-          window.dispatchEvent(new Event('storage'));
-      }
-  },
-
-  subscribeCustomers: (callback: (customers: Customer[]) => void) => {
-      if (isOnline()) {
-          // Sort by priority (ascending) so 1 comes before 999
-          const q = query(collection(db, "customers"), orderBy("priorityScore", "asc"), limit(2000)); 
-          return onSnapshot(q, (snapshot) => {
-              const customers: Customer[] = [];
-              snapshot.forEach(d => customers.push(d.data() as Customer));
-              callback(customers);
-          });
-      } else {
-           const load = () => {
-              try { 
-                  const data = localStorage.getItem(CUSTOMER_KEY); 
-                  const list = data ? JSON.parse(data) : [];
-                  list.sort((a:Customer,b:Customer) => (a.priorityScore || 999) - (b.priorityScore || 999));
-                  callback(list);
-              } catch { callback([]); }
-           };
-           load();
-           const handler = () => load();
-           window.addEventListener('storage', handler);
-           return () => window.removeEventListener('storage', handler);
-      }
-  },
-
-  getCustomersSync: (): Customer[] => {
-    try { const data = localStorage.getItem(CUSTOMER_KEY); return data ? JSON.parse(data) : []; } catch { return []; }
-  },
-
-  upsertCustomer: async (customerData: Customer): Promise<void> => {
-      // Ensure ID is phone number if available, for consistency
-      const custId = customerData.phone || customerData.id;
-      
-      // DEFAULT PRIORITY: 999 (Low priority) for new customers so they don't mess up VIP list
-      const dataToSave = { 
-          ...customerData, 
-          id: custId,
-          priorityScore: customerData.priorityScore ?? 999,
-          totalOrders: customerData.totalOrders ?? 1
+      const endTime = performance.now();
+      return {
+          duration: Math.round(endTime - startTime),
+          count: count
       };
-
-      if (isOnline()) {
-          await setDoc(doc(db, "customers", custId), dataToSave, { merge: true });
-      } else {
-        const customers = storageService.getCustomersSync();
-        const index = customers.findIndex(c => (c.id === custId) || (dataToSave.phone && c.phone === dataToSave.phone));
-        if (index >= 0) customers[index] = { ...customers[index], ...dataToSave }; else customers.push(dataToSave);
-        localStorage.setItem(CUSTOMER_KEY, JSON.stringify(customers));
-        window.dispatchEvent(new Event('storage'));
-      }
-  },
-
-  deleteCustomer: async (id: string): Promise<void> => {
-      if (isOnline()) { await deleteDoc(doc(db, "customers", id)); } else {
-          const customers = storageService.getCustomersSync();
-          const filtered = customers.filter(c => c.id !== id);
-          localStorage.setItem(CUSTOMER_KEY, JSON.stringify(filtered));
-          window.dispatchEvent(new Event('storage'));
-      }
-  },
-
-  clearAllCustomers: async (): Promise<void> => {
-      if (isOnline()) {
-          const q = query(collection(db, "customers"), limit(500));
-          const snap = await getDocs(q);
-          const batch = writeBatch(db);
-          snap.forEach(d => batch.delete(d.ref));
-          await batch.commit();
-      } else {
-          localStorage.setItem(CUSTOMER_KEY, JSON.stringify([]));
-          window.dispatchEvent(new Event('storage'));
-      }
-  },
-
-  importCustomersBatch: async (customers: Customer[]): Promise<number> => {
-      if (customers.length === 0) return 0;
-      if (isOnline()) {
-          const batch = writeBatch(db);
-          let opCount = 0;
-          for (const c of customers) {
-              const id = c.phone || c.id; // Enforce Phone ID
-              const ref = doc(db, "customers", id);
-              batch.set(ref, c, { merge: true });
-              opCount++;
-              if (opCount >= 490) break; 
-          }
-          await batch.commit();
-          return opCount;
-      } else {
-          const existing = storageService.getCustomersSync();
-          customers.forEach(c => {
-            const index = existing.findIndex(ex => ex.id === (c.phone || c.id));
-            if (index >= 0) existing[index] = { ...existing[index], ...c }; else existing.push(c);
-          });
-          localStorage.setItem(CUSTOMER_KEY, JSON.stringify(existing));
-          window.dispatchEvent(new Event('storage'));
-          return customers.length;
-      }
-  },
-
-  autoSortOrders: async (orders: Order[]): Promise<number> => {
-      if (!orders || orders.length === 0) return 0;
-
-      let customers: Customer[] = [];
-      if (isOnline()) {
-          const snap = await getDocs(collection(db, "customers"));
-          snap.forEach(d => customers.push(d.data() as Customer));
-      } else {
-          customers = storageService.getCustomersSync();
-      }
-
-      // Create lookup maps for O(1) access
-      const phoneMap = new Map<string, number>();
-      const nameMap = new Map<string, number>();
-
-      customers.forEach(c => {
-          const score = c.priorityScore ?? 999;
-          if (c.phone) phoneMap.set(normalizePhone(c.phone), score);
-          if (c.name) nameMap.set(normalizeName(c.name), score);
-      });
-
-      let matchedCount = 0;
-
-      const sorted = [...orders].sort((a, b) => {
-          const phoneA = normalizePhone(a.customerPhone);
-          const nameA = normalizeName(a.customerName);
-          // Match Phone first, then Name
-          const scoreA = phoneMap.get(phoneA) ?? nameMap.get(nameA) ?? 999;
-          
-          const phoneB = normalizePhone(b.customerPhone);
-          const nameB = normalizeName(b.customerName);
-          const scoreB = phoneMap.get(phoneB) ?? nameMap.get(nameB) ?? 999;
-
-          return scoreA - scoreB;
-      });
-
-      // Count actual matches found in the list
-      const actualMatches = orders.filter(o => {
-          const p = normalizePhone(o.customerPhone);
-          const n = normalizeName(o.customerName);
-          return phoneMap.has(p) || nameMap.has(n);
-      }).length;
-
-      await storageService.saveOrdersList(sorted.map((o, idx) => ({ ...o, orderIndex: idx })));
-      
-      return actualMatches;
   }
 };

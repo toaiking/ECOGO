@@ -1,5 +1,4 @@
-
-const CACHE_NAME = 'ecogo-cache-v40';
+const CACHE_NAME = 'ecogo-cache-v50';
 const urlsToCache = [
   '/',
   '/index.html',
@@ -7,7 +6,7 @@ const urlsToCache = [
 ];
 
 self.addEventListener('install', (event) => {
-  self.skipWaiting(); // Force activation immediately
+  self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => {
@@ -17,23 +16,14 @@ self.addEventListener('install', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  // Network First Strategy for HTML (Navigation) to ensure updates are seen
   if (event.request.mode === 'navigate') {
     event.respondWith(
-      fetch(event.request)
-        .catch(() => {
-          return caches.match(event.request);
-        })
+      fetch(event.request).catch(() => caches.match(event.request))
     );
     return;
   }
-
-  // Stale-While-Revalidate for others
   event.respondWith(
-    caches.match(event.request)
-      .then((response) => {
-        return response || fetch(event.request);
-      })
+    caches.match(event.request).then((response) => response || fetch(event.request))
   );
 });
 
@@ -41,7 +31,6 @@ self.addEventListener('activate', (event) => {
   const cacheWhitelist = [CACHE_NAME];
   event.waitUntil(
     Promise.all([
-      // Delete old caches
       caches.keys().then((cacheNames) => {
         return Promise.all(
           cacheNames.map((cacheName) => {
@@ -51,7 +40,6 @@ self.addEventListener('activate', (event) => {
           })
         );
       }),
-      // Take control of all clients immediately
       self.clients.claim()
     ])
   );

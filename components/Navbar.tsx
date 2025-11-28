@@ -24,11 +24,12 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
   const [installPrompt, setInstallPrompt] = useState<any>(null);
   const [isIOS, setIsIOS] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [logo, setLogo] = useState<string | null>(null);
   
   const [unreadCount, setUnreadCount] = useState(0);
 
   const mobileMenuRef = useRef<HTMLDivElement>(null);
-  const notifBtnRef = useRef<HTMLButtonElement>(null); // Ref for the bell button
+  const notifBtnRef = useRef<HTMLButtonElement>(null); 
   const location = useLocation();
   const isOnline = !!db;
   
@@ -48,22 +49,25 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
 
     // Close mobile menu when clicking outside
     const handleClickOutside = (event: MouseEvent) => {
-      // Only handle Mobile Menu closing here
       if (mobileMenuRef.current && !mobileMenuRef.current.contains(event.target as Node)) {
         setIsMobileMenuOpen(false);
       }
-      // REMOVED: Notification closing logic from here to prevent conflict. 
-      // NotificationMenu component now handles its own "click outside".
     };
     document.addEventListener('mousedown', handleClickOutside);
 
     const unsubNotif = storageService.subscribeNotifications((notifs) => {
         setUnreadCount(notifs.filter(n => !n.isRead).length);
     });
+    
+    // Load Logo
+    const loadLogo = () => setLogo(storageService.getLogo());
+    loadLogo();
+    window.addEventListener('logo_updated', loadLogo);
 
     return () => {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
       document.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('logo_updated', loadLogo);
       if (unsubNotif) unsubNotif();
     };
   }, []);
@@ -147,8 +151,8 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
             
             {/* Logo Area */}
             <div className="flex items-center space-x-3">
-              <NavLink to="/dashboard" className="w-9 h-9 bg-white rounded-xl shadow-md flex items-center justify-center text-eco-700 font-bold text-xl hover:rotate-12 transition-transform">
-                <i className="fas fa-leaf"></i>
+              <NavLink to="/dashboard" className="w-9 h-9 bg-white rounded-xl shadow-md flex items-center justify-center text-eco-700 font-bold text-xl hover:rotate-12 transition-transform overflow-hidden">
+                {logo ? <img src={logo} alt="Logo" className="w-full h-full object-cover" /> : <i className="fas fa-leaf"></i>}
               </NavLink>
               <div className="flex flex-col">
                  <span className="text-white text-lg font-black leading-tight">EcoGo</span>
@@ -169,6 +173,9 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
                 </NavLink>
                 <NavLink to="/tracking" className={({ isActive }) => desktopLinkClass(isActive)}>
                   <i className="fas fa-shipping-fast mr-2 text-sm"></i> Theo Dõi
+                </NavLink>
+                <NavLink to="/audit" className={({ isActive }) => desktopLinkClass(isActive)}>
+                  <i className="fas fa-file-invoice-dollar mr-2 text-sm"></i> Đối Soát
                 </NavLink>
                 <NavLink to="/inventory" className={({ isActive }) => desktopLinkClass(isActive)}>
                   <i className="fas fa-warehouse mr-2 text-sm"></i> Kho
@@ -237,8 +244,8 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
                 <NavLink to="/order" className={({ isActive }) => mobileLinkClass(isActive)}>
                     <i className="fas fa-plus-circle text-xl"></i>
                 </NavLink>
-                <NavLink to="/tracking" className={({ isActive }) => mobileLinkClass(isActive)}>
-                    <i className="fas fa-shipping-fast text-xl"></i>
+                <NavLink to="/audit" className={({ isActive }) => mobileLinkClass(isActive)}>
+                    <i className="fas fa-file-invoice-dollar text-xl"></i>
                 </NavLink>
 
                 {/* Hamburger Menu */}
@@ -259,8 +266,8 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
                 className="absolute top-16 right-2 w-64 bg-white rounded-2xl shadow-2xl z-[100] border border-gray-100 overflow-hidden animate-fade-in-down origin-top-right md:hidden"
             >
                 <div className="bg-gray-50 p-4 border-b border-gray-100 flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-eco-100 flex items-center justify-center text-eco-600">
-                        <i className="fas fa-user"></i>
+                    <div className="w-10 h-10 rounded-full bg-eco-100 flex items-center justify-center text-eco-600 overflow-hidden">
+                        {logo ? <img src={logo} alt="Logo" className="w-full h-full object-cover" /> : <i className="fas fa-user"></i>}
                     </div>
                     <div>
                         <div className="font-bold text-gray-800">{storageService.getCurrentUser()}</div>
@@ -271,6 +278,12 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
                 <div className="p-2 space-y-1 max-h-[70vh] overflow-y-auto">
                     <NavLink to="/dashboard" className={({isActive}) => `${menuItemClass} ${isActive ? 'bg-eco-50 text-eco-700' : ''}`}>
                         <i className="fas fa-chart-pie w-6 text-center"></i> Tổng Quan
+                    </NavLink>
+                    <NavLink to="/tracking" className={({isActive}) => `${menuItemClass} ${isActive ? 'bg-eco-50 text-eco-700' : ''}`}>
+                        <i className="fas fa-shipping-fast w-6 text-center"></i> Theo Dõi Đơn
+                    </NavLink>
+                    <NavLink to="/audit" className={({isActive}) => `${menuItemClass} ${isActive ? 'bg-eco-50 text-eco-700' : ''}`}>
+                        <i className="fas fa-file-invoice-dollar w-6 text-center"></i> Đối Soát CK
                     </NavLink>
                     <NavLink to="/inventory" className={({isActive}) => `${menuItemClass} ${isActive ? 'bg-eco-50 text-eco-700' : ''}`}>
                         <i className="fas fa-warehouse w-6 text-center"></i> Kho Hàng

@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { Order, OrderStatus, PaymentMethod } from '../types';
@@ -115,19 +114,10 @@ export const OrderCard: React.FC<Props> = ({
           const blob = await base64Response.blob();
           const file = new File([blob], `delivery-${order.id}.jpg`, { type: "image/jpeg" });
           const text = `Đã giao đơn #${order.id} - ${order.customerName}`;
-          
           await navigator.clipboard.writeText(text); 
           toast("Đã copy nội dung!", { icon: '📋' });
-          
-          if (navigator.share) { 
-              await navigator.share({ title: `Giao hàng #${order.id}`, text: text, files: [file] }); 
-          } else { 
-              toast.success('Trình duyệt không hỗ trợ Share ảnh. Hãy gửi thủ công.'); 
-          }
-      } catch (e) { 
-          console.error(e);
-          toast.error("Lỗi chia sẻ"); 
-      }
+          if (navigator.share) { await navigator.share({ title: `Giao hàng #${order.id}`, text: text, files: [file] }); } else { toast.success('Trình duyệt không hỗ trợ Share ảnh. Hãy gửi thủ công.'); }
+      } catch (e) { console.error(e); toast.error("Lỗi chia sẻ"); }
   };
   const handleFinishOrder = async (method: PaymentMethod) => {
       const updated = { ...order, paymentMethod: method };
@@ -193,7 +183,6 @@ export const OrderCard: React.FC<Props> = ({
       return (
           <>
           <div className="group px-2 py-1.5 hover:bg-gray-50 transition-colors cursor-pointer border-b border-gray-100 last:border-0 relative" onClick={() => onEdit(order)}>
-               {/* DESKTOP COMPACT */}
                <div className="hidden md:flex items-center gap-3 text-sm">
                     <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${config.bg.replace('50','500')}`}></div>
                     <div className="w-40 font-bold text-gray-800 truncate">{order.customerName} {isNewCustomer && <span className="text-[9px] bg-red-500 text-white px-1 rounded ml-1">NEW</span>}<div className="text-[10px] text-gray-400 font-normal">{order.customerPhone}</div></div>
@@ -201,8 +190,6 @@ export const OrderCard: React.FC<Props> = ({
                     <div className="flex items-center gap-2"><span className="font-bold text-gray-900">{new Intl.NumberFormat('vi-VN').format(order.totalPrice)}</span><PaymentBadge /></div>
                     <div className="flex items-center gap-1 pl-2">{!isCompleted && (<button onClick={nextStatus} className="w-7 h-7 flex items-center justify-center rounded bg-gray-100 hover:bg-black hover:text-white transition-colors"><i className="fas fa-arrow-right text-xs"></i></button>)}<button onClick={(e) => { e.stopPropagation(); sendSMS(); }} className="w-7 h-7 flex items-center justify-center text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded"><i className="fas fa-comment-dots text-xs"></i></button></div>
                </div>
-               
-               {/* MOBILE COMPACT - 3 LINE LAYOUT */}
                <div className="md:hidden flex flex-col gap-0.5 relative">
                     <div className="flex justify-between items-center">
                         <div className="flex items-center gap-2 overflow-hidden max-w-[65%]">
@@ -216,26 +203,13 @@ export const OrderCard: React.FC<Props> = ({
                         </div>
                         <span className="font-black text-gray-900 text-sm">{new Intl.NumberFormat('vi-VN').format(order.totalPrice)}<small className="text-[9px] text-gray-400 font-normal">đ</small></span>
                     </div>
-                    
                     <div className="flex justify-between items-center">
-                        <div className="text-[10px] text-gray-500 truncate max-w-[70%] flex items-center gap-1">
-                            <i className="fas fa-map-marker-alt text-[8px] text-gray-300"></i> {order.address}
-                        </div>
+                        <div className="text-[10px] text-gray-500 truncate max-w-[70%] flex items-center gap-1"><i className="fas fa-map-marker-alt text-[8px] text-gray-300"></i> {order.address}</div>
                         <span className={`text-[9px] px-1.5 rounded font-bold uppercase whitespace-nowrap ${config.bg} ${config.color}`}>{config.label}</span>
                     </div>
-
                     <div className="flex justify-between items-center pt-0.5 border-t border-gray-50 mt-0.5">
-                        <div className="text-[10px] text-gray-400 italic truncate pr-2 flex-grow">
-                            {order.items.map(i => `${i.name} x${i.quantity}`).join(', ')}
-                        </div>
-                        <div className="flex items-center gap-1.5 flex-shrink-0" onClick={e => e.stopPropagation()}>
-                            <PaymentBadge />
-                            {!isCompleted && (
-                                <button onClick={nextStatus} className="w-5 h-5 flex items-center justify-center bg-gray-900 text-white rounded shadow-sm active:scale-95">
-                                    <i className="fas fa-arrow-right text-[8px]"></i>
-                                </button>
-                            )}
-                        </div>
+                        <div className="text-[10px] text-gray-400 italic truncate pr-2 flex-grow">{order.items.map(i => `${i.name} x${i.quantity}`).join(', ')}</div>
+                        <div className="flex items-center gap-1.5 flex-shrink-0" onClick={e => e.stopPropagation()}><PaymentBadge />{!isCompleted && (<button onClick={nextStatus} className="w-5 h-5 flex items-center justify-center bg-gray-900 text-white rounded shadow-sm active:scale-95"><i className="fas fa-arrow-right text-[8px]"></i></button>)}</div>
                     </div>
                </div>
           </div>
@@ -244,58 +218,20 @@ export const OrderCard: React.FC<Props> = ({
       );
   }
 
-  // ULTRA COMPACT FULL CARD
   return (
     <>
     <div className={`group relative bg-white rounded-lg border shadow-sm transition-all duration-200 flex flex-col ${isSortMode ? 'border-dashed border-2 border-gray-300' : 'border-gray-100 hover:shadow-md'}`}>
       <div className={`flex-grow flex flex-col`}>
-          {/* ULTRA COMPACT HEADER */}
           <div className="p-3 flex justify-between items-start gap-3 border-b border-gray-50 relative">
-             {/* Grip Handle for Touch Sorting */}
-             {isSortMode && (
-                 <div 
-                    className="absolute top-0 right-0 p-2 cursor-grab active:cursor-grabbing touch-none text-gray-300 hover:text-eco-600 z-10"
-                    onTouchStart={onTouchStart}
-                    onTouchMove={onTouchMove}
-                    onTouchEnd={onTouchEnd}
-                 >
-                     <i className="fas fa-grip-vertical text-lg"></i>
-                 </div>
-             )}
-
-             {/* Left: Customer Info */}
+             {isSortMode && (<div className="absolute top-0 right-0 p-2 cursor-grab active:cursor-grabbing touch-none text-gray-300 hover:text-eco-600 z-10" onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}><i className="fas fa-grip-vertical text-lg"></i></div>)}
              <div className={`flex-grow min-w-0 ${isSortMode ? 'pr-6' : ''}`}>
-                 <div className="flex items-center gap-2 mb-1">
-                     <h3 className="font-bold text-gray-900 text-sm truncate leading-snug pb-1">{order.customerName}</h3>
-                     {isNewCustomer && <span className="text-[8px] font-bold bg-red-500 text-white px-1.5 py-0.5 rounded-sm">NEW</span>}
-                     <span className={`text-[9px] px-1.5 rounded-sm font-bold uppercase ${config.bg} ${config.color}`}>{config.label}</span>
-                 </div>
+                 <div className="flex items-center gap-2 mb-1"><h3 className="font-bold text-gray-900 text-sm truncate leading-snug pb-1">{order.customerName}</h3>{isNewCustomer && <span className="text-[8px] font-bold bg-red-500 text-white px-1.5 py-0.5 rounded-sm">NEW</span>}<span className={`text-[9px] px-1.5 rounded-sm font-bold uppercase ${config.bg} ${config.color}`}>{config.label}</span></div>
                  <div className="text-[11px] text-gray-500 leading-tight truncate">{order.address}</div>
-                 <div className="flex items-center gap-3 mt-1">
-                     <a href={`tel:${order.customerPhone}`} className="text-[10px] font-bold text-gray-400 hover:text-gray-800 font-mono flex items-center gap-1"><i className="fas fa-phone"></i> {order.customerPhone}</a>
-                     {order.lastUpdatedBy && <span className="text-[9px] text-gray-300 flex items-center gap-1"><i className="fas fa-user-edit"></i> {order.lastUpdatedBy}</span>}
-                 </div>
+                 <div className="flex items-center gap-3 mt-1"><a href={`tel:${order.customerPhone}`} className="text-[10px] font-bold text-gray-400 hover:text-gray-800 font-mono flex items-center gap-1"><i className="fas fa-phone"></i> {order.customerPhone}</a>{order.lastUpdatedBy && <span className="text-[9px] text-gray-300 flex items-center gap-1"><i className="fas fa-user-edit"></i> {order.lastUpdatedBy}</span>}</div>
              </div>
-             
-             {/* Right: Price & Payment */}
-             <div className="text-right flex-shrink-0 flex flex-col items-end gap-1">
-                 <div className="text-sm font-black text-eco-700 leading-none">{new Intl.NumberFormat('vi-VN').format(order.totalPrice)}<span className="text-[9px] text-gray-400 font-normal ml-0.5">đ</span></div>
-                 <div onClick={e => e.stopPropagation()}><PaymentBadge /></div>
-             </div>
+             <div className="text-right flex-shrink-0 flex flex-col items-end gap-1"><div className="text-sm font-black text-eco-700 leading-none">{new Intl.NumberFormat('vi-VN').format(order.totalPrice)}<span className="text-[9px] text-gray-400 font-normal ml-0.5">đ</span></div><div onClick={e => e.stopPropagation()}><PaymentBadge /></div></div>
           </div>
-
-          {/* ULTRA COMPACT BODY */}
-          <div className="p-2.5 bg-gray-50/30 flex-grow text-xs space-y-1">
-              {order.notes && <div className="text-[10px] text-yellow-700 bg-yellow-50 px-1.5 py-0.5 rounded italic truncate mb-1 border border-yellow-100"><i className="fas fa-sticky-note mr-1"></i>{order.notes}</div>}
-              {order.items.map((item, idx) => (
-                  <div key={idx} className="flex justify-between items-center text-[11px] leading-tight">
-                      <span className="text-gray-700 truncate max-w-[80%]">{item.name}</span>
-                      <span className="font-bold text-gray-900">x{item.quantity}</span>
-                  </div>
-              ))}
-          </div>
-
-          {/* ULTRA COMPACT FOOTER */}
+          <div className="p-2.5 bg-gray-50/30 flex-grow text-xs space-y-1">{order.notes && <div className="text-[10px] text-yellow-700 bg-yellow-50 px-1.5 py-0.5 rounded italic truncate mb-1 border border-yellow-100"><i className="fas fa-sticky-note mr-1"></i>{order.notes}</div>}{order.items.map((item, idx) => (<div key={idx} className="flex justify-between items-center text-[11px] leading-tight"><span className="text-gray-700 truncate max-w-[80%]">{item.name}</span><span className="font-bold text-gray-900">x{item.quantity}</span></div>))}</div>
           <div className="p-2 bg-white border-t border-gray-100 flex justify-between items-center" onClick={(e) => e.stopPropagation()}>
                 <div className="flex gap-1.5">
                     {order.status === OrderStatus.PENDING && <button onClick={() => handleStatusChange(OrderStatus.PICKED_UP)} className="px-2.5 py-1 bg-gray-800 text-white text-[10px] font-bold rounded hover:bg-black transition-colors">Nhận</button>}
@@ -303,25 +239,16 @@ export const OrderCard: React.FC<Props> = ({
                     {order.status === OrderStatus.IN_TRANSIT && (<div className="flex gap-1"><button onClick={() => handleFinishOrder(PaymentMethod.CASH)} className="px-2 py-1 bg-emerald-600 text-white text-[10px] font-bold rounded hover:bg-emerald-700">TM</button><button onClick={() => handleFinishOrder(PaymentMethod.TRANSFER)} className="px-2 py-1 bg-blue-600 text-white text-[10px] font-bold rounded hover:bg-blue-700">CK</button><label className="w-6 h-6 flex items-center justify-center border border-gray-200 rounded cursor-pointer hover:bg-gray-50 text-gray-400"><input type="file" accept="image/*" capture="environment" className="hidden" onChange={handlePhotoUpload} disabled={uploading} /><i className={`fas ${uploading ? 'fa-spinner fa-spin' : 'fa-camera'}`}></i></label></div>)}
                     {isCompleted && order.deliveryProof && (<button onClick={() => setShowImageModal(true)} className="text-[10px] font-bold text-green-600 flex items-center gap-1 px-2 py-1 bg-green-50 rounded border border-green-100"><i className="fas fa-image"></i> Ảnh</button>)}
                 </div>
-                
-                {/* Action Icons Group */}
                 <div className="flex gap-1">
                     <a href={`https://zalo.me/${order.customerPhone}`} target="_blank" className="w-6 h-6 rounded bg-blue-50 text-blue-600 flex items-center justify-center hover:bg-blue-600 hover:text-white transition-colors font-bold text-[9px] border border-blue-100">Z</a>
                     <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(order.address)}`} target="_blank" className="w-6 h-6 rounded bg-red-50 text-red-600 flex items-center justify-center hover:bg-red-600 hover:text-white transition-colors border border-red-100"><i className="fas fa-map-marker-alt text-[10px]"></i></a>
                     <button onClick={() => sendSMS()} className="w-6 h-6 rounded bg-green-50 text-green-600 flex items-center justify-center hover:bg-green-600 hover:text-white transition-colors border border-green-100"><i className="fas fa-comment-dots text-[10px]"></i></button>
-                    
-                    {/* Click Menu */}
                     <div className="relative" ref={actionMenuRef}>
                         <button onClick={() => setShowActionMenu(!showActionMenu)} className={`w-6 h-6 rounded text-gray-400 hover:text-gray-700 flex items-center justify-center border border-transparent hover:border-gray-200 ${showActionMenu ? 'bg-gray-100 text-gray-700' : ''}`}><i className="fas fa-ellipsis-v text-[10px]"></i></button>
                         {showActionMenu && (
                             <div className="absolute bottom-full right-0 mb-1 bg-white shadow-xl border border-gray-200 rounded-lg p-1 min-w-[130px] z-20 animate-fade-in">
                                 <button onClick={() => { onEdit(order); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-blue-600 font-bold flex items-center gap-2 rounded"><i className="fas fa-edit"></i> Sửa đơn</button>
-                                
-                                {/* Split Batch Button */}
-                                {onSplitBatch && order.batchId && (
-                                    <button onClick={() => { onSplitBatch(order); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-orange-600 flex items-center gap-2 rounded font-bold"><i className="fas fa-history"></i> Giao sau</button>
-                                )}
-                                
+                                {onSplitBatch && order.batchId && (<button onClick={() => { onSplitBatch(order); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-orange-600 flex items-center gap-2 rounded font-bold"><i className="fas fa-history"></i> Giao sau</button>)}
                                 <button onClick={() => { handlePrint(); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-gray-600 flex items-center gap-2 rounded"><i className="fas fa-print"></i> In phiếu</button>
                                 {order.deliveryProof && <button onClick={() => { handleShareProof(); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-purple-600 flex items-center gap-2 rounded"><i className="fas fa-share-alt"></i> Gửi ảnh</button>}
                                 <div className="border-t border-gray-100 my-1"></div>

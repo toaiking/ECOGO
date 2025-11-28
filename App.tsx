@@ -7,6 +7,7 @@ import OrderForm from './components/OrderForm';
 import TrackingDashboard from './components/TrackingDashboard';
 import InventoryManager from './components/InventoryManager';
 import CustomerManager from './components/CustomerManager';
+import PaymentAudit from './components/PaymentAudit';
 import Login from './components/Login';
 import { Toaster } from 'react-hot-toast';
 import { storageService } from './services/storageService';
@@ -50,6 +51,7 @@ const App: React.FC = () => {
             <Route path="/dashboard" element={<DashboardHome />} />
             <Route path="/order" element={<OrderForm />} />
             <Route path="/tracking" element={<TrackingDashboard />} />
+            <Route path="/audit" element={<PaymentAudit />} />
             <Route path="/inventory" element={<InventoryManager />} />
             <Route path="/customers" element={<CustomerManager />} />
           </Routes>

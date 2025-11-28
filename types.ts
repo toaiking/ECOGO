@@ -58,6 +58,7 @@ export interface Customer {
   lastOrderDate: number;
   priorityScore?: number; // 1 is highest priority, 999 is normal
   totalOrders?: number;
+  updatedAt?: number; // Timestamp for Delta Sync
 }
 
 export interface SmartParseResult {
