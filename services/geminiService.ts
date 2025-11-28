@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { SmartParseResult, Order, OrderStatus, PaymentMethod } from "../types";
+import { SmartParseResult, Order, OrderStatus, PaymentMethod, Product, Customer } from "../types";
 
 const getClient = () => {
   // Hỗ trợ lấy key từ Vite (.env) hoặc process.env (Node/AI Studio)
@@ -14,15 +14,44 @@ const getClient = () => {
   return new GoogleGenAI({ apiKey });
 };
 
-export const parseOrderText = async (text: string): Promise<SmartParseResult> => {
+export const parseOrderText = async (
+  text: string, 
+  products: Product[] = [], 
+  customers: Customer[] = []
+): Promise<SmartParseResult> => {
   const ai = getClient();
   
+  // Prepare Context Data (Limit to avoid token overflow if lists are huge, 
+  // but for small business < 1000 items/customers this is fine for Flash models)
+  const productContext = products.map(p => `"${p.name}"`).join(', ');
+  const customerContext = customers.slice(0, 200).map(c => `"${c.name}" (${c.phone})`).join(', ');
+
+  const prompt = `
+    You are an intelligent order parser for a logistics app.
+    
+    CONTEXT DATA:
+    1. VALID PRODUCT NAMES IN WAREHOUSE: [${productContext}]
+    2. EXISTING CUSTOMERS: [${customerContext}]
+
+    INPUT TEXT: "${text}"
+
+    INSTRUCTIONS:
+    1. **Customer**: Match the input name/phone to the "Existing Customers" list. 
+       - If a match is found, use that exact Name and Phone. 
+       - If not found, extract the name/phone from input text as is.
+       - "Address" is the delivery location.
+    2. **Items**: Extract items and quantities. 
+       - CRITICAL: Try to match the item name EXACTLY to one in the "Valid Product Names" list. 
+       - Example: Input "2 bao gạo", Valid List "Gạo ST25" -> Return "Gạo ST25".
+       - Return a list of items.
+    3. **Payment**: Detect if "CK", "chuyển khoản" (TRANSFER) or "đã thanh toán" (PAID). Default is CASH.
+
+    OUTPUT JSON SCHEMA:
+  `;
+
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash",
-    contents: `Extract delivery order details from this Vietnamese text: "${text}". 
-    Look for total price. 
-    Detect payment method: if text contains "CK", "chuyển khoản" -> TRANSFER; "đã thanh toán" -> PAID; otherwise default to CASH/COD.
-    Address is 'địa chỉ', items is 'hàng hóa' (summary string), customerName is 'tên khách'.`,
+    contents: prompt,
     config: {
       responseMimeType: "application/json",
       responseSchema: {
@@ -31,12 +60,21 @@ export const parseOrderText = async (text: string): Promise<SmartParseResult> =>
           customerName: { type: Type.STRING },
           customerPhone: { type: Type.STRING },
           address: { type: Type.STRING },
-          itemsString: { type: Type.STRING, description: "A summary string of all items" },
-          price: { type: Type.NUMBER },
+          parsedItems: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                productName: { type: Type.STRING, description: "The matched product name from inventory" },
+                quantity: { type: Type.NUMBER }
+              }
+            }
+          },
+          itemsString: { type: Type.STRING, description: "Fallback summary string" },
           notes: { type: Type.STRING },
           paymentMethod: { type: Type.STRING, enum: ["CASH", "TRANSFER", "PAID"] }
         },
-        required: ["customerName", "address", "itemsString"],
+        required: ["customerName", "address"],
       },
     },
   });

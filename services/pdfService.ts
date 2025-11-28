@@ -1,0 +1,508 @@
+
+import jsPDF from 'jspdf';
+import QRCode from 'qrcode';
+import { Order, PaymentMethod } from '../types';
+import { storageService } from './storageService';
+
+// --- VIETQR / EMVCO HELPER ---
+const BANK_BIN_MAP: Record<string, string> = {
+    'VCB': '970436', 'VIETCOMBANK': '970436',
+    'TCB': '970407', 'TECHCOMBANK': '970407',
+    'MB': '970422', 'MBBANK': '970422',
+    'ACB': '970416',
+    'VPB': '970432', 'VPBANK': '970432',
+    'BIDV': '970418',
+    'CTG': '970415', 'VIETINBANK': '970415',
+    'STB': '970403', 'SACOMBANK': '970403',
+    'TPB': '970423', 'TPBANK': '970423',
+    'VIB': '970441',
+    'MSB': '970426',
+    'HDB': '970437', 'HDBANK': '970437',
+    'OCB': '970448',
+    'SHB': '970443',
+    'LPB': '970449', 'LIENVIETPOSTBANK': '970449',
+    'SEAB': '970440', 'SEABANK': '970440',
+    'NAB': '970428', 'NAMABANK': '970428',
+    'BAB': '970409', 'BACABANK': '970409',
+    'ABB': '970425', 'ABBANK': '970425',
+    'VCCB': '970454', 'VIETCAPITAL': '970454',
+    'SCB': '970429',
+    'EIB': '970431', 'EXIMBANK': '970431',
+    // Fallback common mappings
+    'TIMO': '961023',
+    'VIETMONEY': '970422', 
+    'CAKE': '970432',
+    'UOB': '970458',
+    'CIMB': '422589'
+};
+
+/* CRC16-CCITT (0xFFFF) Implementation for EMVCo */
+const crc16 = (data: string): string => {
+    let crc = 0xFFFF;
+    for (let i = 0; i < data.length; i++) {
+        crc ^= data.charCodeAt(i) << 8;
+        for (let j = 0; j < 8; j++) {
+            if ((crc & 0x8000) !== 0) {
+                crc = (crc << 1) ^ 0x1021;
+            } else {
+                crc = crc << 1;
+            }
+        }
+    }
+    return (crc & 0xFFFF).toString(16).toUpperCase().padStart(4, '0');
+};
+
+const formatField = (id: string, value: string): string => {
+    const len = value.length.toString().padStart(2, '0');
+    return `${id}${len}${value}`;
+};
+
+const removeAccents = (str: string): string => {
+    return str.normalize('NFD')
+              .replace(/[\u0300-\u036f]/g, '')
+              .replace(/đ/g, 'd').replace(/Đ/g, 'D')
+              .replace(/[^a-zA-Z0-9 ]/g, ''); // Only alphanumeric allowed in VietQR content
+};
+
+const generateVietQRPayload = (bankId: string, accountNo: string, amount: number, content: string): string => {
+    // 1. Setup Data
+    const bin = BANK_BIN_MAP[bankId.toUpperCase()] || BANK_BIN_MAP['MB']; // Default to MB if unknown
+    const cleanContent = removeAccents(content).substring(0, 20); // Limit length
+    
+    // 2. Build Consumer Account Information (Tag 38)
+    // GUID for VietQR: A000000727
+    const guid = formatField('00', 'A000000727');
+    // Beneficiary Organization (Tag 01) -> BIN (00) + Account (01)
+    const beneficiaryBank = formatField('00', bin) + formatField('01', accountNo);
+    const consumerInfo = formatField('01', beneficiaryBank);
+    // Service Code (Tag 02): QRIBFTTA (Quick Transfer)
+    const serviceCode = formatField('02', 'QRIBFTTA');
+    
+    const tag38Value = guid + consumerInfo + serviceCode;
+
+    // 3. Construct Full Payload
+    let payload = '';
+    payload += formatField('00', '01'); // Payload Format Indicator
+    payload += formatField('01', '12'); // Point of Initiation Method (12 = Dynamic)
+    payload += formatField('38', tag38Value); // Merchant Account Information
+    payload += formatField('53', '704'); // Transaction Currency (VND)
+    payload += formatField('54', amount.toString()); // Transaction Amount
+    payload += formatField('58', 'VN'); // Country Code
+    
+    // Additional Data Field (Tag 62) - Reference Label
+    const additionalData = formatField('08', cleanContent);
+    payload += formatField('62', additionalData);
+
+    // 4. Add CRC (Tag 63)
+    payload += '6304'; // ID 63 + Length 04
+    const crc = crc16(payload);
+    return payload + crc;
+};
+
+// --- FONT CACHING SYSTEM ---
+let _fontCache: string | null = null;
+
+const fetchFont = async (): Promise<string | null> => {
+    if (_fontCache) return _fontCache;
+
+    try {
+        // Load font from CDN (Roboto Regular)
+        const response = await fetch('https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/fonts/Roboto/Roboto-Regular.ttf');
+        if (!response.ok) throw new Error("Failed to load font");
+        
+        const blob = await response.blob();
+        
+        return new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                const base64data = reader.result as string;
+                // Remove data:application/octet-stream;base64, prefix
+                const content = base64data.split(',')[1];
+                if (content) {
+                    _fontCache = content;
+                    resolve(content);
+                } else {
+                    resolve(null);
+                }
+            };
+            reader.onerror = () => {
+                 console.warn("FileReader failed to parse font");
+                 resolve(null);
+            };
+            reader.readAsDataURL(blob);
+        });
+    } catch (e) {
+        console.warn("Could not load Vietnamese font, fallback to standard Helvetica.", e);
+        return null;
+    }
+};
+
+const generateQRCode = async (text: string): Promise<string> => {
+    try {
+        return await QRCode.toDataURL(text, { width: 300, margin: 0, errorCorrectionLevel: 'M' });
+    } catch (e) {
+        return '';
+    }
+};
+
+const drawDashedLine = (doc: jsPDF, x1: number, y1: number, x2: number, y2: number) => {
+    doc.setLineDashPattern([3, 3], 0);
+    doc.line(x1, y1, x2, y2);
+    doc.setLineDashPattern([], 0); // Reset
+};
+
+export const pdfService = {
+    // --- MODE 1: COMPACT LIST (Bảng kê chi tiết) ---
+    generateCompactList: async (orders: Order[], batchId: string) => {
+        const doc = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
+        
+        const binaryFont = await fetchFont();
+        let fontName = 'helvetica';
+        
+        if (binaryFont) {
+            const fontFileName = 'Roboto.ttf';
+            doc.addFileToVFS(fontFileName, binaryFont);
+            
+            // CRITICAL FIX: Map both normal and bold styles to the SAME font file
+            // This prevents jsPDF from falling back to Helvetica when setFont(..., 'bold') is called
+            doc.addFont(fontFileName, 'Roboto', 'normal');
+            doc.addFont(fontFileName, 'Roboto', 'bold');
+            
+            doc.setFont('Roboto');
+            fontName = 'Roboto';
+        }
+
+        const logoBase64 = storageService.getLogo();
+        let y = 15;
+
+        // Header
+        if (logoBase64) {
+            try { doc.addImage(logoBase64, 'PNG', 10, 5, 15, 15, undefined, 'FAST'); } catch(e){}
+        }
+        
+        doc.setFontSize(16);
+        doc.setFont(fontName, 'bold');
+        doc.text("DANH SÁCH ĐƠN HÀNG", 105, 12, { align: 'center' });
+        
+        doc.setFont(fontName, 'normal');
+        doc.setFontSize(10);
+        doc.text(`Lô: ${batchId} - Tổng: ${orders.length} đơn`, 105, 18, { align: 'center' });
+        doc.text(`Ngày in: ${new Date().toLocaleDateString('vi-VN')}`, 105, 23, { align: 'center' });
+
+        y = 30;
+
+        // Table Header
+        doc.setFontSize(9);
+        doc.setFillColor(230, 230, 230);
+        doc.rect(10, y, 190, 8, 'F');
+        
+        doc.setFont(fontName, 'bold');
+        doc.text("STT", 12, y + 5);
+        doc.text("Khách hàng / SĐT", 25, y + 5);
+        doc.text("Địa chỉ", 75, y + 5);
+        doc.text("Ghi chú", 140, y + 5);
+        doc.text("Thu hộ", 180, y + 5);
+        y += 8;
+
+        doc.setFont(fontName, 'normal');
+
+        let totalAmount = 0;
+        
+        // --- PREPARE ITEM SUMMARY ---
+        const itemSummary: Record<string, number> = {};
+        orders.forEach(o => {
+            totalAmount += o.totalPrice;
+            o.items.forEach(item => {
+                const name = item.name.trim();
+                if(name) {
+                    itemSummary[name] = (itemSummary[name] || 0) + item.quantity;
+                }
+            });
+        });
+        const sortedSummary = Object.entries(itemSummary).sort((a, b) => a[0].localeCompare(b[0]));
+
+        // --- RENDER ORDERS ---
+        for (let i = 0; i < orders.length; i++) {
+            const o = orders[i];
+
+            if (y > 280) {
+                doc.addPage();
+                y = 15;
+                doc.setFont(fontName, 'bold');
+                doc.text("STT", 12, y);
+                doc.text("Khách hàng", 25, y);
+                y += 5;
+                doc.setFont(fontName, 'normal');
+            }
+
+            const rowH = 10;
+            doc.setFontSize(9);
+            doc.text(`${i + 1}`, 12, y + 4);
+            
+            // Name & Phone
+            doc.setFont(fontName, 'bold');
+            doc.text(o.customerName, 25, y + 4);
+            doc.setFont(fontName, 'normal');
+            doc.setFontSize(8);
+            doc.text(o.customerPhone, 25, y + 8);
+
+            // Address & Items
+            doc.setFontSize(8);
+            const addr = doc.splitTextToSize(o.address, 60);
+            doc.text(addr[0] + (addr.length > 1 ? '...' : ''), 75, y + 4);
+            
+            doc.setTextColor(80, 80, 80);
+            const items = o.items.map(it => `${it.name} (${it.quantity})`).join(', ');
+            const itemsSplit = doc.splitTextToSize(items, 60);
+            doc.text(itemsSplit[0], 75, y + 8);
+            doc.setTextColor(0, 0, 0);
+
+            // Notes
+            if (o.notes) {
+                const notesSplit = doc.splitTextToSize(o.notes, 35);
+                doc.text(notesSplit[0] + (notesSplit.length > 1 ? '...' : ''), 140, y + 4);
+            }
+
+            // Price
+            doc.setFontSize(9);
+            doc.setFont(fontName, 'bold');
+            const price = new Intl.NumberFormat('vi-VN').format(o.totalPrice);
+            doc.text(price, 180, y + 6);
+            doc.setFont(fontName, 'normal');
+
+            // Payment Method Label
+            const note = o.paymentMethod === PaymentMethod.CASH ? 'COD' : 'Đã TT';
+            doc.setFontSize(7);
+            doc.text(note, 200, y + 6, { align: 'right' });
+
+            doc.setDrawColor(240, 240, 240);
+            doc.line(10, y + rowH, 200, y + rowH);
+            y += rowH + 2;
+        }
+
+        // Summary Total Money
+        y += 5;
+        doc.setFontSize(11);
+        doc.setFont(fontName, 'bold'); 
+        doc.text(`TỔNG CỘNG: ${new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(totalAmount)}`, 190, y, { align: 'right' });
+
+        // --- RENDER ITEM AGGREGATION SUMMARY ---
+        y += 15;
+        if (y > 250) {
+            doc.addPage();
+            y = 20;
+        }
+
+        // Header for Summary
+        doc.setFillColor(240, 240, 240);
+        doc.rect(10, y, 190, 8, 'F');
+        doc.setFontSize(11);
+        doc.setFont(fontName, 'bold');
+        doc.setTextColor(0, 0, 0);
+        doc.text("TỔNG HỢP HÀNG HÓA CẦN CHUẨN BỊ", 105, y + 5, { align: 'center' });
+        y += 12;
+
+        doc.setFontSize(10);
+        doc.setFont(fontName, 'normal');
+
+        sortedSummary.forEach(([name, qty]) => {
+            if (y > 280) {
+                doc.addPage();
+                y = 20;
+            }
+            
+            // Product Name
+            doc.text(name, 15, y);
+            
+            // Dotted Line
+            const nameWidth = doc.getTextWidth(name);
+            doc.setDrawColor(200, 200, 200);
+            doc.setLineDashPattern([1, 1], 0);
+            doc.line(15 + nameWidth + 2, y, 185, y);
+            doc.setLineDashPattern([], 0);
+
+            // Quantity
+            doc.setFont(fontName, 'bold');
+            doc.text(qty.toString(), 190, y, { align: 'right' });
+            doc.setFont(fontName, 'normal');
+
+            y += 7;
+        });
+
+        const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+        doc.save(`DanhSach_${batchId}_${dateStr}.pdf`);
+    },
+
+    // --- MODE 2: INVOICE BATCH (8 TEM/TRANG) ---
+    generateInvoiceBatch: async (orders: Order[], batchId: string) => {
+        const doc = new jsPDF({
+            orientation: 'p',
+            unit: 'mm',
+            format: 'a4',
+            putOnlyUsedFonts: true,
+            floatPrecision: 16
+        });
+
+        const binaryFont = await fetchFont();
+        let fontName = 'helvetica';
+        
+        if (binaryFont) {
+            const fontFileName = 'Roboto.ttf';
+            doc.addFileToVFS(fontFileName, binaryFont);
+            doc.addFont(fontFileName, 'Roboto', 'normal');
+            doc.addFont(fontFileName, 'Roboto', 'bold');
+            doc.setFont('Roboto');
+            fontName = 'Roboto';
+        }
+
+        const logoBase64 = storageService.getLogo();
+        const bankConfig = await storageService.getBankConfig();
+
+        const pageWidth = 210;
+        const pageHeight = 297;
+        const marginLeft = 10;
+        const marginTop = 10;
+        const gapX = 6;
+        const gapY = 6;
+        const cols = 2;
+        const rows = 4;
+        
+        const totalContentWidth = pageWidth - (marginLeft * 2);
+        const cellWidth = (totalContentWidth - gapX) / cols;
+        const totalContentHeight = pageHeight - (marginTop * 2);
+        const cellHeight = (totalContentHeight - (gapY * (rows - 1))) / rows;
+
+        for (let i = 0; i < orders.length; i++) {
+            const order = orders[i];
+            
+            if (i > 0 && i % 8 === 0) {
+                doc.addPage();
+                doc.setFont(fontName); 
+            }
+
+            const posInPage = i % 8;
+            const colIndex = posInPage % 2;
+            const rowIndex = Math.floor(posInPage / 2);
+
+            const x = marginLeft + (colIndex * (cellWidth + gapX));
+            const y = marginTop + (rowIndex * (cellHeight + gapY));
+
+            // Cutting Guides
+            doc.setDrawColor(180, 180, 180);
+            doc.setLineWidth(0.1);
+            if (colIndex === 0) {
+                const cutX = x + cellWidth + (gapX / 2);
+                drawDashedLine(doc, cutX, y, cutX, y + cellHeight);
+            }
+            if (rowIndex < rows - 1) {
+                const cutY = y + cellHeight + (gapY / 2);
+                drawDashedLine(doc, x, cutY, x + cellWidth, cutY);
+            }
+
+            // Box Outline
+            doc.setDrawColor(0, 0, 0);
+            doc.setLineWidth(0.2);
+            doc.rect(x, y, cellWidth, cellHeight);
+            
+            const p = 3;
+            const ix = x + p;
+            let iy = y + p;
+
+            // --- HEADER ---
+            if (logoBase64) {
+                try {
+                    doc.addImage(logoBase64, 'PNG', ix, iy, 12, 12, undefined, 'FAST');
+                } catch (e) {}
+            }
+            
+            doc.setFontSize(10);
+            doc.setFont(fontName, 'bold');
+            doc.text("ECOGO LOGISTICS", ix + 14, iy + 4);
+            
+            doc.setFontSize(8);
+            doc.setFont(fontName, 'normal');
+            doc.text(`Đơn: #${order.id} | ${new Date(order.createdAt).toLocaleDateString('vi-VN')}`, ix + 14, iy + 9);
+            
+            iy += 15;
+
+            // --- CUSTOMER (Bold Name) ---
+            doc.setFontSize(9);
+            doc.setFont(fontName, 'bold'); 
+            doc.text(`Người nhận: ${order.customerName}`, ix, iy);
+            
+            doc.setFont(fontName, 'normal');
+            doc.setFontSize(8);
+            doc.text(`SĐT: ${order.customerPhone}`, ix, iy + 4);
+            
+            const addr = `ĐC: ${order.address}`;
+            const splitAddr = doc.splitTextToSize(addr, cellWidth - (p * 2));
+            doc.text(splitAddr, ix, iy + 8);
+            
+            const addrHeight = splitAddr.length * 3.5;
+            iy += 8 + addrHeight;
+
+            // Notes field if exists
+            if (order.notes) {
+                doc.setFont(fontName, 'bold'); 
+                const noteStr = `Ghi chú: ${order.notes}`;
+                const splitNote = doc.splitTextToSize(noteStr, cellWidth - (p * 2));
+                doc.text(splitNote, ix, iy + 2);
+                iy += (splitNote.length * 3.5);
+                doc.setFont(fontName, 'normal'); 
+            }
+
+            iy += 1;
+            // Separator Line
+            doc.setDrawColor(220, 220, 220);
+            doc.line(ix, iy, ix + cellWidth - (p * 2), iy);
+            iy += 4;
+
+            // Items
+            const itemsStr = order.items.map(it => `${it.name} (x${it.quantity})`).join(', ');
+            const splitItems = doc.splitTextToSize(itemsStr, cellWidth - (p * 2));
+            doc.setFontSize(9);
+            doc.text(splitItems, ix, iy);
+
+            // --- FOOTER ---
+            const footerY = y + cellHeight - p;
+            
+            // Total Price (Bold)
+            doc.setFontSize(12);
+            doc.setFont(fontName, 'bold'); 
+            doc.text(`${new Intl.NumberFormat('vi-VN').format(order.totalPrice)}đ`, ix, footerY - 2);
+
+            // --- QR CODE (VietQR / EMVCo) ---
+            const qrSize = 20;
+            const qrX = x + cellWidth - p - qrSize;
+            const qrY = y + cellHeight - p - qrSize;
+
+            if (bankConfig && bankConfig.accountNo && order.paymentMethod !== PaymentMethod.PAID) {
+                // Generate VietQR / EMVCo Payload
+                const content = `DH ${order.id}`;
+                const qrString = generateVietQRPayload(bankConfig.bankId, bankConfig.accountNo, order.totalPrice, content);
+                
+                const qrBase64 = await generateQRCode(qrString);
+                if (qrBase64) {
+                    doc.addImage(qrBase64, 'PNG', qrX, qrY, qrSize, qrSize);
+                }
+                
+                doc.setFontSize(6);
+                doc.setFont(fontName, 'normal');
+                doc.text("Quét thanh toán", qrX, qrY - 1, { align: 'left' });
+            } else if (order.paymentMethod === PaymentMethod.PAID) {
+                doc.setFontSize(10);
+                doc.setFont(fontName, 'bold');
+                doc.setTextColor(0, 128, 0);
+                doc.text("ĐÃ THANH TOÁN", qrX - 5, footerY - 8);
+                doc.setTextColor(0, 0, 0);
+            } else {
+                 doc.setFontSize(8);
+                 doc.setFont(fontName, 'normal');
+                 doc.text("Thu hộ (COD)", qrX, footerY - 8);
+            }
+        }
+
+        const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+        doc.save(`HoaDon8Up_${batchId}_${dateStr}.pdf`);
+    }
+};
