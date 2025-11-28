@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { storageService } from '../services/storageService';
@@ -243,6 +242,9 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
                 {/* Priority Actions */}
                 <NavLink to="/order" className={({ isActive }) => mobileLinkClass(isActive)}>
                     <i className="fas fa-plus-circle text-xl"></i>
+                </NavLink>
+                <NavLink to="/tracking" className={({ isActive }) => mobileLinkClass(isActive)}>
+                    <i className="fas fa-shipping-fast text-xl"></i>
                 </NavLink>
                 <NavLink to="/audit" className={({ isActive }) => mobileLinkClass(isActive)}>
                     <i className="fas fa-file-invoice-dollar text-xl"></i>
