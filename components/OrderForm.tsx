@@ -1,4 +1,5 @@
 
+
 import React, { useState, useEffect, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import toast from 'react-hot-toast';
@@ -133,7 +134,13 @@ const OrderForm: React.FC = () => {
     recognition.onerror = (event: any) => {
         console.error("Speech error", event.error);
         setIsListening(false);
-        toast.error("Không nghe rõ, vui lòng thử lại.");
+        if (event.error === 'not-allowed') {
+            toast.error("Quyền truy cập Micro bị chặn. Vui lòng cho phép trong cài đặt trình duyệt.");
+        } else if (event.error === 'no-speech') {
+            toast('Không nghe thấy gì...', { icon: '🔇' });
+        } else {
+            toast.error("Lỗi giọng nói: " + event.error);
+        }
     };
 
     recognition.onresult = async (event: any) => {
@@ -147,7 +154,7 @@ const OrderForm: React.FC = () => {
 
   const processOrderText = async (text: string) => {
       setIsProcessingAI(true);
-      const loadingToast = toast.loading("AI đang tra cứu kho & khách...");
+      const loadingToast = toast.loading("AI đang phân tích...");
       
       try {
           // Pass products and customers to Gemini for context-aware parsing
@@ -161,13 +168,26 @@ const OrderForm: React.FC = () => {
               notes: result.notes || prev.notes
           }));
 
-          // Handle Items
+          // Handle Items with Fuzzy Match (Client Side Optimization)
           if (result.parsedItems && result.parsedItems.length > 0) {
               const newItems = result.parsedItems.map(pi => {
-                  // Attempt to find exact match in inventory to get Price and ID
-                  // The AI has already tried to match names, so we just check for exact string match now
-                  const matchedProduct = products.find(p => p.name.toLowerCase() === pi.productName.toLowerCase());
+                  // Fuzzy Match Logic
+                  let matchedProduct: Product | undefined;
+                  const searchName = pi.productName.toLowerCase();
                   
+                  // 1. Exact match
+                  matchedProduct = products.find(p => p.name.toLowerCase() === searchName);
+                  
+                  // 2. Contains match
+                  if (!matchedProduct) {
+                      matchedProduct = products.find(p => p.name.toLowerCase().includes(searchName));
+                  }
+
+                  // 3. Reverse Contains match (Product name inside Search name)
+                  if (!matchedProduct) {
+                      matchedProduct = products.find(p => searchName.includes(p.name.toLowerCase()));
+                  }
+
                   return {
                       id: uuidv4(),
                       name: matchedProduct ? matchedProduct.name : pi.productName,
