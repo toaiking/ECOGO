@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import toast from 'react-hot-toast';
 import { Order, OrderStatus, Product, Customer, PaymentMethod, OrderItem } from '../types';
 import { storageService } from '../services/storageService';
+import { parseOrderText } from '../services/geminiService';
 
 const OrderForm: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
@@ -20,6 +21,10 @@ const OrderForm: React.FC = () => {
   
   // Custom Tags
   const [quickTags, setQuickTags] = useState<string[]>([]);
+
+  // AI & Voice State
+  const [isListening, setIsListening] = useState(false);
+  const [isProcessingAI, setIsProcessingAI] = useState(false);
 
   const [customerInfo, setCustomerInfo] = useState({
     customerName: '',
@@ -100,6 +105,93 @@ const OrderForm: React.FC = () => {
   }, []);
 
   const totalPrice = items.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0);
+
+  // --- VOICE & AI LOGIC ---
+  const handleVoiceInput = () => {
+    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+        toast.error("Trình duyệt không hỗ trợ nhập giọng nói.");
+        return;
+    }
+
+    // @ts-ignore
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SpeechRecognition();
+
+    recognition.lang = 'vi-VN';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => {
+        setIsListening(true);
+        toast('Đang nghe... Hãy nói thông tin đơn hàng', { icon: '🎙️' });
+    };
+
+    recognition.onend = () => {
+        setIsListening(false);
+    };
+
+    recognition.onerror = (event: any) => {
+        console.error("Speech error", event.error);
+        setIsListening(false);
+        toast.error("Không nghe rõ, vui lòng thử lại.");
+    };
+
+    recognition.onresult = async (event: any) => {
+        const transcript = event.results[0][0].transcript;
+        toast.success(`Đã nhận: "${transcript}"`);
+        await processOrderText(transcript);
+    };
+
+    recognition.start();
+  };
+
+  const processOrderText = async (text: string) => {
+      setIsProcessingAI(true);
+      const loadingToast = toast.loading("AI đang phân tích đơn hàng...");
+      
+      try {
+          const result = await parseOrderText(text);
+          
+          setCustomerInfo(prev => ({
+              ...prev,
+              customerName: result.customerName || prev.customerName,
+              customerPhone: result.customerPhone || prev.customerPhone,
+              address: result.address || prev.address,
+              notes: result.notes || prev.notes
+          }));
+
+          // Parse items is tricky because AI returns a summary string usually.
+          // If the AI returns specific items structure, update items. 
+          // For now, we put the item string in the first row name if available
+          if (result.itemsString) {
+               // Simple split by comma logic for basic items, or just put all in one line
+               // Enhance: You could ask Gemini to return an array of items structure
+               setItems([{ 
+                   id: uuidv4(), 
+                   name: result.itemsString, 
+                   quantity: 1, 
+                   price: result.price || 0 
+               }]);
+          } else if (result.price && result.price > 0) {
+               // Update price of first item if detected
+               setItems(prev => {
+                   const newItems = [...prev];
+                   if(newItems.length > 0) newItems[0].price = result.price;
+                   return newItems;
+               });
+          }
+
+          toast.success("Đã điền thông tin!");
+      } catch (error) {
+          console.error(error);
+          toast.error("Không thể phân tích nội dung.");
+      } finally {
+          setIsProcessingAI(false);
+          toast.dismiss(loadingToast);
+      }
+  };
+
+  // --- END VOICE LOGIC ---
 
   const addItemRow = () => {
     setItems([...items, { id: uuidv4(), name: '', quantity: 1, price: 0 }]);
@@ -199,8 +291,6 @@ const OrderForm: React.FC = () => {
 
     await storageService.saveOrder(newOrder);
     
-    // Auto add customer logic is handled in storageService or separate logic if needed
-    // Here we just clear form
     toast.success('Lên đơn thành công!');
     resetForm();
   };
@@ -208,7 +298,7 @@ const OrderForm: React.FC = () => {
   const customerSuggestions = customers.filter(c => 
     c.name.toLowerCase().includes((customerInfo.customerName || '').toLowerCase()) &&
     customerInfo.customerName && customerInfo.customerName !== c.name
-  ).slice(0, 5); // Limit to 5 suggestions for speed
+  ).slice(0, 5);
 
   const getSelectedProductIds = (currentIndex: number) => {
       return items
@@ -216,14 +306,23 @@ const OrderForm: React.FC = () => {
           .map(item => item.productId);
   };
 
-  // Common Input Class
   const inputClass = "w-full px-3 py-2.5 bg-gray-50 focus:bg-white border border-gray-200 focus:border-eco-500 rounded-xl outline-none transition-all text-sm font-medium placeholder-gray-400";
   const labelClass = "block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5 ml-1";
 
   return (
     <div className="max-w-7xl mx-auto pb-24 animate-fade-in">
-      <div className="bg-white rounded-3xl shadow-xl border border-gray-100 overflow-hidden">
+      <div className="bg-white rounded-3xl shadow-xl border border-gray-100 overflow-hidden relative">
         
+        {/* LOADING OVERLAY */}
+        {isProcessingAI && (
+            <div className="absolute inset-0 z-50 bg-white/60 backdrop-blur-sm flex items-center justify-center">
+                <div className="flex flex-col items-center">
+                    <div className="w-12 h-12 border-4 border-eco-200 border-t-eco-600 rounded-full animate-spin"></div>
+                    <span className="mt-3 text-sm font-bold text-eco-800 animate-pulse">AI đang xử lý đơn hàng...</span>
+                </div>
+            </div>
+        )}
+
         {/* HEADER BAR */}
         <div className="px-6 py-4 bg-gradient-to-r from-gray-50 to-white border-b border-gray-100 flex flex-wrap justify-between items-center gap-4">
           <div className="flex items-center gap-3">
@@ -232,36 +331,53 @@ const OrderForm: React.FC = () => {
              </div>
              <div>
                 <h2 className="text-lg font-black text-gray-800 leading-tight">Tạo Đơn Hàng</h2>
-                <p className="text-xs text-gray-500 font-medium">Nhập thông tin giao hàng</p>
+                <p className="text-xs text-gray-500 font-medium">Nhập thông tin hoặc dùng giọng nói</p>
              </div>
           </div>
           
-          {/* BATCH SELECTOR */}
-          <div className="relative" ref={batchWrapperRef}>
-             <div className="flex items-center bg-white border border-gray-200 rounded-xl px-3 py-1.5 shadow-sm hover:border-eco-400 transition-colors cursor-pointer" onClick={() => setShowBatchSuggestions(!showBatchSuggestions)}>
-                <span className="text-[10px] font-bold text-gray-400 uppercase mr-2">Lô hàng</span>
-                <input 
-                  value={batchId}
-                  onChange={(e) => setBatchId(e.target.value)}
-                  className="w-28 text-sm font-bold text-eco-700 outline-none bg-transparent"
-                  placeholder="LÔ-HÔM-NAY"
-                />
-                <i className={`fas fa-chevron-down text-xs text-gray-400 ml-2 transition-transform ${showBatchSuggestions ? 'rotate-180' : ''}`}></i>
-             </div>
-             
-             {showBatchSuggestions && existingBatches.length > 0 && (
-                <div className="absolute top-full right-0 mt-2 w-56 bg-white border border-gray-100 rounded-xl shadow-2xl z-50 overflow-hidden animate-fade-in">
-                    <div className="px-3 py-2 bg-gray-50 text-[10px] font-bold text-gray-500 uppercase">Gần đây</div>
-                    <div className="max-h-60 overflow-y-auto">
-                        {existingBatches.map(b => (
-                            <div key={b} onClick={() => selectBatch(b)} className="px-4 py-2.5 hover:bg-eco-50 cursor-pointer text-sm font-medium text-gray-700 border-b border-gray-50 last:border-0 flex items-center justify-between">
-                                {b}
-                                {batchId === b && <i className="fas fa-check text-eco-600 text-xs"></i>}
-                            </div>
-                        ))}
+          <div className="flex items-center gap-3">
+              {/* VOICE INPUT BUTTON */}
+              <button 
+                onClick={handleVoiceInput}
+                disabled={isListening}
+                className={`flex items-center gap-2 px-4 py-1.5 rounded-xl border transition-all ${
+                    isListening 
+                    ? 'bg-red-500 text-white border-red-500 animate-pulse' 
+                    : 'bg-white text-gray-600 border-gray-200 hover:border-eco-400 hover:text-eco-600'
+                }`}
+                title="Nhập bằng giọng nói (AI)"
+              >
+                  <i className={`fas ${isListening ? 'fa-microphone-slash' : 'fa-microphone'}`}></i>
+                  <span className="text-xs font-bold hidden sm:inline">{isListening ? 'Đang nghe...' : 'Nhập Voice'}</span>
+              </button>
+
+              {/* BATCH SELECTOR */}
+              <div className="relative" ref={batchWrapperRef}>
+                 <div className="flex items-center bg-white border border-gray-200 rounded-xl px-3 py-1.5 shadow-sm hover:border-eco-400 transition-colors cursor-pointer" onClick={() => setShowBatchSuggestions(!showBatchSuggestions)}>
+                    <span className="text-[10px] font-bold text-gray-400 uppercase mr-2 hidden sm:inline">Lô hàng</span>
+                    <input 
+                      value={batchId}
+                      onChange={(e) => setBatchId(e.target.value)}
+                      className="w-24 sm:w-28 text-sm font-bold text-eco-700 outline-none bg-transparent"
+                      placeholder="LÔ-HÔM-NAY"
+                    />
+                    <i className={`fas fa-chevron-down text-xs text-gray-400 ml-2 transition-transform ${showBatchSuggestions ? 'rotate-180' : ''}`}></i>
+                 </div>
+                 
+                 {showBatchSuggestions && existingBatches.length > 0 && (
+                    <div className="absolute top-full right-0 mt-2 w-56 bg-white border border-gray-100 rounded-xl shadow-2xl z-50 overflow-hidden animate-fade-in">
+                        <div className="px-3 py-2 bg-gray-50 text-[10px] font-bold text-gray-500 uppercase">Gần đây</div>
+                        <div className="max-h-60 overflow-y-auto">
+                            {existingBatches.map(b => (
+                                <div key={b} onClick={() => selectBatch(b)} className="px-4 py-2.5 hover:bg-eco-50 cursor-pointer text-sm font-medium text-gray-700 border-b border-gray-50 last:border-0 flex items-center justify-between">
+                                    {b}
+                                    {batchId === b && <i className="fas fa-check text-eco-600 text-xs"></i>}
+                                </div>
+                            ))}
+                        </div>
                     </div>
-                </div>
-             )}
+                 )}
+              </div>
           </div>
         </div>
 
