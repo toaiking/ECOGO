@@ -1,11 +1,11 @@
 
-
 import React, { useState, useEffect, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import toast from 'react-hot-toast';
 import { Order, OrderStatus, Product, Customer, PaymentMethod, OrderItem } from '../types';
 import { storageService } from '../services/storageService';
 import { parseOrderText } from '../services/geminiService';
+import { differenceInDays } from 'date-fns';
 
 const OrderForm: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
@@ -27,7 +27,9 @@ const OrderForm: React.FC = () => {
   const [isListening, setIsListening] = useState(false);
   const [isProcessingAI, setIsProcessingAI] = useState(false);
 
+  // Added customerId to state
   const [customerInfo, setCustomerInfo] = useState({
+    customerId: '', // NEW
     customerName: '',
     customerPhone: '',
     address: '',
@@ -160,6 +162,12 @@ const OrderForm: React.FC = () => {
           // Pass products and customers to Gemini for context-aware parsing
           const result = await parseOrderText(text, products, customers);
           
+          // Auto detect returning customer logic if possible
+          if (result.customerName) {
+             const matched = customers.find(c => c.name.toLowerCase() === result.customerName.toLowerCase());
+             if (matched) handleCustomerSelect(matched);
+          }
+
           setCustomerInfo(prev => ({
               ...prev,
               customerName: result.customerName || prev.customerName,
@@ -260,16 +268,33 @@ const OrderForm: React.FC = () => {
 
   const handleCustomerSelect = (customer: Customer) => {
     setCustomerInfo({
+      customerId: customer.id, // Explicitly set ID
       customerName: customer.name,
       customerPhone: customer.phone,
       address: customer.address,
       notes: customerInfo.notes
     });
     setShowCustomerSuggestions(false);
+    
+    // RETURNING CUSTOMER CHECK
+    if (customer.lastOrderDate) {
+        const daysDiff = differenceInDays(Date.now(), customer.lastOrderDate);
+        if (daysDiff > 30) {
+            toast((t) => (
+                <div className="flex items-center gap-2">
+                    <span className="text-xl">🎉</span>
+                    <div>
+                        <div className="font-bold">Khách quay lại!</div>
+                        <div className="text-xs">Đã {daysDiff} ngày chưa đặt hàng.</div>
+                    </div>
+                </div>
+            ), { duration: 4000, style: { background: '#ecfdf5', color: '#047857' } });
+        }
+    }
   };
 
   const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setCustomerInfo(prev => ({ ...prev, customerName: e.target.value }));
+    setCustomerInfo(prev => ({ ...prev, customerName: e.target.value, customerId: '' })); // Clear ID on name change to force re-match if new
     setShowCustomerSuggestions(true);
   };
 
@@ -290,7 +315,7 @@ const OrderForm: React.FC = () => {
   };
 
   const resetForm = () => {
-      setCustomerInfo({ customerName: '', customerPhone: '', address: '', notes: '' });
+      setCustomerInfo({ customerId: '', customerName: '', customerPhone: '', address: '', notes: '' });
       setItems([{ id: uuidv4(), name: '', quantity: 1, price: 0 }]);
       if (nameInputRef.current) nameInputRef.current.focus();
   };
@@ -306,6 +331,7 @@ const OrderForm: React.FC = () => {
 
     const newOrder: Order = {
       id: uuidv4().slice(0, 8).toUpperCase(),
+      customerId: customerInfo.customerId, // Pass ID
       batchId: batchId,
       customerName: customerInfo.customerName,
       customerPhone: customerInfo.customerPhone,

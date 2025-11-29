@@ -23,6 +23,7 @@ export interface OrderItem {
 
 export interface Order {
   id: string;
+  customerId?: string; // NEW: Link directly to customer ID for 100% accuracy
   batchId: string;
   customerName: string;
   customerPhone: string;
@@ -59,6 +60,7 @@ export interface Customer {
   priorityScore?: number; // 1 is highest priority, 999 is normal
   totalOrders?: number;
   updatedAt?: number; // Timestamp for Delta Sync
+  isLegacy?: boolean; // NEW: Manually marked as "Old Customer" regardless of order count
 }
 
 export interface SmartParseResult {

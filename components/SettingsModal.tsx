@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { BankConfig } from '../types';
 import { storageService } from '../services/storageService';
@@ -125,6 +126,22 @@ const SettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
       }, 100);
   };
 
+  const handleMarkOld = async () => {
+      if (window.confirm("Bạn có chắc chắn muốn đánh dấu TẤT CẢ khách hàng hiện tại là KHÁCH CŨ không?\n\nHọ sẽ không hiện nhãn 'NEW' nữa.")) {
+          setIsRunningTest(true);
+          setTestResult('Đang cập nhật...');
+          try {
+              const count = await storageService.markAllCustomersAsOld();
+              setTestResult(`Đã cập nhật xong ${count} khách hàng.`);
+              toast.success(`Xong! ${count} khách hàng đã thành Khách Cũ.`);
+          } catch (e) {
+              setTestResult('Lỗi: ' + e);
+          } finally {
+              setIsRunningTest(false);
+          }
+      }
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -230,8 +247,15 @@ const SettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
 
             <div className="border-t border-gray-100 pt-4">
                 <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-3">Developer Zone</h4>
-                <div className="bg-yellow-50 rounded-xl p-4 border border-yellow-100">
-                    <p className="text-xs text-yellow-800 mb-3">Kiểm tra hiệu năng với dữ liệu lớn (Local Only).</p>
+                <div className="bg-yellow-50 rounded-xl p-4 border border-yellow-100 space-y-3">
+                    <button 
+                        onClick={handleMarkOld} 
+                        disabled={isRunningTest}
+                        className="w-full py-2 bg-blue-100 hover:bg-blue-200 text-blue-800 rounded-lg font-bold text-xs transition-colors"
+                    >
+                        Đánh dấu tất cả là Khách cũ
+                    </button>
+
                     <button 
                         onClick={runStressTest} 
                         disabled={isRunningTest}
