@@ -27,6 +27,12 @@ const OrderForm: React.FC = () => {
   const [isListening, setIsListening] = useState(false);
   const [isProcessingAI, setIsProcessingAI] = useState(false);
 
+  // Quick Add Product Modal State
+  const [showQuickAddProduct, setShowQuickAddProduct] = useState(false);
+  const [newProdName, setNewProdName] = useState('');
+  const [newProdPrice, setNewProdPrice] = useState(0);
+  const [newProdImportPrice, setNewProdImportPrice] = useState(0); // NEW
+
   // Added customerId to state
   const [customerInfo, setCustomerInfo] = useState({
     customerId: '', // NEW
@@ -201,7 +207,8 @@ const OrderForm: React.FC = () => {
                       name: matchedProduct ? matchedProduct.name : pi.productName,
                       quantity: pi.quantity || 1,
                       price: matchedProduct ? matchedProduct.defaultPrice : 0,
-                      productId: matchedProduct ? matchedProduct.id : undefined
+                      productId: matchedProduct ? matchedProduct.id : undefined,
+                      importPrice: matchedProduct ? matchedProduct.importPrice : undefined // Capture import price
                   };
               });
               setItems(newItems);
@@ -261,6 +268,7 @@ const OrderForm: React.FC = () => {
         productId: product.id,
         name: product.name,
         price: product.defaultPrice,
+        importPrice: product.importPrice // Copy current import price for profit calculation
       };
       setItems(newItems);
       setActiveProductRow(null);
@@ -318,6 +326,35 @@ const OrderForm: React.FC = () => {
       setCustomerInfo({ customerId: '', customerName: '', customerPhone: '', address: '', notes: '' });
       setItems([{ id: uuidv4(), name: '', quantity: 1, price: 0 }]);
       if (nameInputRef.current) nameInputRef.current.focus();
+  };
+
+  const handleQuickAddProduct = async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!newProdName) return;
+      
+      const newProduct: Product = {
+          id: uuidv4(),
+          name: newProdName,
+          defaultPrice: newProdPrice || 0,
+          importPrice: newProdImportPrice || 0, // NEW
+          defaultWeight: 1,
+          stockQuantity: 100, // Default generous stock
+          totalImported: 100,
+          lastImportDate: Date.now()
+      };
+      
+      await storageService.saveProduct(newProduct);
+      
+      // Auto select this new product for the current row
+      if (activeProductRow !== null) {
+          selectProductForItem(activeProductRow, newProduct);
+      }
+      
+      setShowQuickAddProduct(false);
+      setNewProdName('');
+      setNewProdPrice(0);
+      setNewProdImportPrice(0);
+      toast.success("Đã tạo và chọn sản phẩm mới!");
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -576,28 +613,47 @@ const OrderForm: React.FC = () => {
                                     
                                     {/* Dropdown */}
                                     {activeProductRow === idx && (
-                                        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-100 rounded-xl shadow-xl z-50 max-h-56 overflow-y-auto animate-fade-in">
-                                            {availableProducts.length === 0 ? (
-                                                 <div className="p-3 text-xs text-gray-400 text-center italic">
-                                                    Kho không có sản phẩm này
-                                                 </div>
-                                            ) : (
-                                                availableProducts.map(p => (
-                                                    <div 
-                                                        key={p.id} 
-                                                        onMouseDown={() => selectProductForItem(idx, p)} // Use onMouseDown to trigger before blur
-                                                        className="px-3 py-2.5 hover:bg-eco-50 cursor-pointer flex justify-between items-center border-b border-gray-50 last:border-0 group/opt"
-                                                    >
-                                                        <div>
-                                                            <div className="text-sm font-bold text-gray-800 group-hover/opt:text-eco-700">{p.name}</div>
-                                                            <div className="text-[10px] text-gray-400">Tồn kho: <span className={p.stockQuantity < 5 ? 'text-red-500 font-bold' : ''}>{p.stockQuantity}</span></div>
+                                        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-100 rounded-xl shadow-xl z-50 max-h-56 overflow-y-auto animate-fade-in flex flex-col">
+                                            <div className="flex-grow overflow-y-auto max-h-44">
+                                                {availableProducts.length === 0 ? (
+                                                     <div className="p-3 text-xs text-gray-400 text-center italic">
+                                                        Kho không có sản phẩm này
+                                                     </div>
+                                                ) : (
+                                                    availableProducts.map(p => (
+                                                        <div 
+                                                            key={p.id} 
+                                                            onMouseDown={() => selectProductForItem(idx, p)} // Use onMouseDown to trigger before blur
+                                                            className="px-3 py-2.5 hover:bg-eco-50 cursor-pointer flex justify-between items-center border-b border-gray-50 last:border-0 group/opt"
+                                                        >
+                                                            <div>
+                                                                <div className="text-sm font-bold text-gray-800 group-hover/opt:text-eco-700">{p.name}</div>
+                                                                <div className="text-[10px] text-gray-400">Tồn kho: <span className={p.stockQuantity < 5 ? 'text-red-500 font-bold' : ''}>{p.stockQuantity}</span></div>
+                                                            </div>
+                                                            <div className="text-right">
+                                                                <div className="text-xs font-bold text-eco-600 bg-eco-50 px-2 py-1 rounded-md">
+                                                                    {new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}
+                                                                </div>
+                                                                {p.importPrice && p.importPrice > 0 && (
+                                                                    <div className="text-[9px] text-gray-300 mt-0.5">
+                                                                        V: {new Intl.NumberFormat('vi-VN').format(p.importPrice)}
+                                                                    </div>
+                                                                )}
+                                                            </div>
                                                         </div>
-                                                        <div className="text-xs font-bold text-eco-600 bg-eco-50 px-2 py-1 rounded-md">
-                                                            {new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}
-                                                        </div>
-                                                    </div>
-                                                ))
-                                            )}
+                                                    ))
+                                                )}
+                                            </div>
+                                            {/* Quick Add Product Trigger */}
+                                            <div 
+                                                onMouseDown={() => {
+                                                    setNewProdName(item.name || '');
+                                                    setShowQuickAddProduct(true);
+                                                }}
+                                                className="p-3 bg-gray-50 border-t border-gray-100 text-center text-xs font-bold text-blue-600 hover:bg-blue-50 cursor-pointer transition-colors"
+                                            >
+                                                <i className="fas fa-plus-circle mr-1"></i> Tạo nhanh sản phẩm mới
+                                            </div>
                                         </div>
                                     )}
                                  </div>
@@ -671,6 +727,55 @@ const OrderForm: React.FC = () => {
           </div>
         </form>
       </div>
+
+      {/* QUICK ADD PRODUCT MODAL */}
+      {showQuickAddProduct && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/60 backdrop-blur-sm p-4 animate-fade-in">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6">
+                <h3 className="text-lg font-bold text-gray-800 mb-4">Thêm nhanh sản phẩm</h3>
+                <form onSubmit={handleQuickAddProduct}>
+                    <div className="space-y-4">
+                        <div>
+                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Tên sản phẩm</label>
+                            <input 
+                                value={newProdName}
+                                onChange={e => setNewProdName(e.target.value)}
+                                className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:border-eco-500 font-bold text-gray-800"
+                                placeholder="Nhập tên..."
+                                autoFocus
+                            />
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Giá bán</label>
+                                <input 
+                                    type="number"
+                                    value={newProdPrice}
+                                    onChange={e => setNewProdPrice(Number(e.target.value))}
+                                    className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:border-eco-500 font-bold"
+                                    placeholder="0"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Giá nhập (Vốn)</label>
+                                <input 
+                                    type="number"
+                                    value={newProdImportPrice}
+                                    onChange={e => setNewProdImportPrice(Number(e.target.value))}
+                                    className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:border-eco-500 font-bold text-gray-600"
+                                    placeholder="0"
+                                />
+                            </div>
+                        </div>
+                    </div>
+                    <div className="flex gap-3 mt-6">
+                        <button type="button" onClick={() => setShowQuickAddProduct(false)} className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 rounded-xl font-bold text-gray-600">Hủy</button>
+                        <button type="submit" className="flex-1 py-3 bg-eco-600 hover:bg-eco-700 text-white rounded-xl font-bold shadow-lg">Lưu & Chọn</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+      )}
     </div>
   );
 };

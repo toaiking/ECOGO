@@ -26,12 +26,17 @@ const CustomerManager: React.FC = () => {
   const [importMode, setImportMode] = useState<'TEXT' | 'JSON'>('TEXT');
   const [isLocalMode, setIsLocalMode] = useState(false); 
 
+  // Voice Search State
+  const [isListeningSearch, setIsListeningSearch] = useState(false);
+
   // VIRTUAL SCROLL CONFIGURATION
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
-  const ROW_HEIGHT = 50; 
+  
+  // Increased row height to accommodate mobile card layout (was 50)
+  const ROW_HEIGHT = 90; 
   const CONTAINER_HEIGHT = 600; 
-  const BUFFER = 10; 
+  const BUFFER = 5; 
 
   useEffect(() => { 
       const unsubscribe = storageService.subscribeCustomers(setCustomers); 
@@ -66,6 +71,33 @@ const CustomerManager: React.FC = () => {
   const endIndex = Math.min(filteredCustomers.length, Math.ceil((scrollTop + CONTAINER_HEIGHT) / ROW_HEIGHT) + BUFFER);
   const visibleCustomers = filteredCustomers.slice(startIndex, endIndex);
   const topPadding = startIndex * ROW_HEIGHT;
+
+  // --- VOICE SEARCH ---
+  const handleVoiceSearch = () => {
+    // @ts-ignore
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+        toast.error("Trình duyệt không hỗ trợ");
+        return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'vi-VN';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => setIsListeningSearch(true);
+    recognition.onend = () => setIsListeningSearch(false);
+    recognition.onerror = () => setIsListeningSearch(false);
+
+    recognition.onresult = (event: any) => {
+        const text = event.results[0][0].transcript;
+        setSearchTerm(text);
+        toast.success(`Đã tìm: "${text}"`);
+    };
+
+    recognition.start();
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -218,10 +250,10 @@ const CustomerManager: React.FC = () => {
 
   return (
     <div className="max-w-6xl mx-auto pb-20 animate-fade-in">
-      <div className="flex justify-between items-center mb-6">
+      <div className="flex justify-between items-center mb-6 px-2 sm:px-0">
           <h1 className="text-2xl font-black text-gray-800 tracking-tight">Quản Lý Khách Hàng</h1>
-          <button onClick={() => setShowDeleteAllConfirm(true)} className="bg-red-50 text-red-600 hover:bg-red-600 hover:text-white px-4 py-2 rounded-lg font-bold text-sm transition-colors border border-red-200 shadow-sm">
-              <i className="fas fa-trash-alt mr-2"></i>Xóa Tất Cả
+          <button onClick={() => setShowDeleteAllConfirm(true)} className="bg-red-50 text-red-600 hover:bg-red-600 hover:text-white px-3 py-2 rounded-xl font-bold text-xs transition-colors border border-red-200 shadow-sm flex items-center">
+              <i className="fas fa-trash-alt mr-2"></i>Xóa Hết
           </button>
       </div>
       
@@ -310,10 +342,12 @@ const CustomerManager: React.FC = () => {
         <div className="lg:col-span-8">
             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden h-[700px] flex flex-col">
                 {/* LIST HEADER */}
-                <div className="p-4 border-b border-gray-100 flex flex-col sm:flex-row gap-4 justify-between items-center bg-gray-50/80 backdrop-blur-sm z-10">
-                    <div className="flex items-center gap-3">
-                        <h3 className="font-bold text-gray-800">Danh Sách</h3>
-                        <span className="bg-eco-100 text-eco-800 text-xs font-black px-2.5 py-0.5 rounded-full">{filteredCustomers.length}</span>
+                <div className="p-4 border-b border-gray-100 flex flex-col sm:flex-row gap-4 justify-between items-center bg-gray-50/80 backdrop-blur-sm z-10 sticky top-0">
+                    <div className="flex items-center gap-3 w-full sm:w-auto justify-between">
+                        <div className="flex items-center gap-2">
+                            <h3 className="font-bold text-gray-800">Danh Sách</h3>
+                            <span className="bg-eco-100 text-eco-800 text-xs font-black px-2.5 py-0.5 rounded-full">{filteredCustomers.length}</span>
+                        </div>
                     </div>
                     <div className="relative w-full sm:w-64">
                         <i className="fas fa-search absolute left-3 top-2.5 text-gray-400 text-xs"></i>
@@ -321,13 +355,20 @@ const CustomerManager: React.FC = () => {
                             placeholder="Tìm tên, SĐT, địa chỉ..." 
                             value={searchTerm} 
                             onChange={e => setSearchTerm(e.target.value)} 
-                            className="w-full pl-8 pr-3 py-2 bg-white border border-gray-200 focus:border-eco-500 rounded-lg text-xs font-medium outline-none transition-all shadow-sm focus:shadow-md" 
+                            className="w-full pl-8 pr-10 py-2 bg-white border border-gray-200 focus:border-eco-500 rounded-xl text-xs font-medium outline-none transition-all shadow-sm focus:shadow-md" 
                         />
+                        <button 
+                            onClick={handleVoiceSearch}
+                            className={`absolute right-2 top-1.5 w-7 h-7 rounded-full flex items-center justify-center transition-colors ${isListeningSearch ? 'bg-red-500 text-white animate-pulse' : 'text-gray-400 hover:text-eco-600 hover:bg-gray-100'}`}
+                            title="Tìm bằng giọng nói"
+                        >
+                            <i className={`fas ${isListeningSearch ? 'fa-microphone-slash' : 'fa-microphone'}`}></i>
+                        </button>
                     </div>
                 </div>
                 
-                {/* TABLE HEADER (Sticky) */}
-                <div className="bg-gray-100 border-b border-gray-200 grid grid-cols-[80px_1fr_100px_1fr_40px] gap-4 px-4 py-3 text-gray-500 font-bold uppercase text-[10px] tracking-wider select-none shadow-sm z-10">
+                {/* TABLE HEADER (Sticky - Only on Desktop) */}
+                <div className="hidden sm:grid bg-gray-100 border-b border-gray-200 grid-cols-[80px_1fr_120px_1fr_40px] gap-4 px-4 py-3 text-gray-500 font-bold uppercase text-[10px] tracking-wider select-none shadow-sm z-10">
                     <div className="text-center" title="Số ưu tiên lộ trình">Ưu tiên</div>
                     <div>Khách hàng</div>
                     <div>Liên hệ</div>
@@ -337,7 +378,7 @@ const CustomerManager: React.FC = () => {
 
                 {/* VIRTUAL SCROLL BODY */}
                 <div 
-                    className="flex-grow overflow-y-auto relative scroll-smooth" 
+                    className="flex-grow overflow-y-auto relative scroll-smooth bg-gray-50/30" 
                     onScroll={handleScroll} 
                     ref={scrollContainerRef}
                     style={{ contain: 'strict' }}
@@ -352,56 +393,67 @@ const CustomerManager: React.FC = () => {
                             {visibleCustomers.map((c, index) => (
                                 <div 
                                     key={c.id} 
-                                    className="absolute left-0 right-0 grid grid-cols-[80px_1fr_100px_1fr_40px] gap-4 px-4 border-b border-gray-50 hover:bg-blue-50/50 items-center transition-colors group"
+                                    className="absolute left-0 right-0 px-4 border-b border-gray-100 hover:bg-blue-50/50 transition-colors group flex flex-col justify-center sm:grid sm:grid-cols-[80px_1fr_120px_1fr_40px] sm:gap-4 sm:items-center bg-white"
                                     style={{ top: topPadding + index * ROW_HEIGHT, height: ROW_HEIGHT }}
                                 >
-                                    {/* Priority Input */}
-                                    <div className="text-center">
-                                        <input 
-                                            type="number" 
-                                            className="w-full text-center bg-transparent border border-transparent hover:border-gray-300 focus:border-eco-500 focus:bg-white rounded px-1 py-1 font-bold text-eco-700 outline-none transition-all text-sm" 
-                                            defaultValue={c.priorityScore || 999} 
-                                            onBlur={(e) => handleInlineUpdate(c, 'priorityScore', parseInt(e.target.value))} 
-                                            onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()} 
-                                        />
+                                    {/* --- MOBILE VIEW: TOP ROW (Name + Priority) --- */}
+                                    <div className="flex justify-between items-center mb-1 sm:mb-0 sm:contents">
+                                        {/* Priority (Desktop: Col 1) */}
+                                        <div className="order-2 sm:order-1 sm:text-center">
+                                            <input 
+                                                type="number" 
+                                                className="w-12 sm:w-full text-right sm:text-center bg-gray-50 sm:bg-transparent border border-gray-200 sm:border-transparent hover:border-gray-300 focus:border-eco-500 focus:bg-white rounded px-1 py-0.5 font-bold text-eco-700 outline-none transition-all text-xs" 
+                                                defaultValue={c.priorityScore || 999} 
+                                                onBlur={(e) => handleInlineUpdate(c, 'priorityScore', parseInt(e.target.value))} 
+                                                onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()} 
+                                            />
+                                        </div>
+                                        
+                                        {/* Name (Desktop: Col 2) */}
+                                        <div className="order-1 sm:order-2 flex-grow mr-2 sm:mr-0">
+                                            <input 
+                                                className="w-full bg-transparent border-none p-0 font-bold text-gray-800 outline-none text-sm sm:text-sm truncate focus:ring-0" 
+                                                defaultValue={c.name} 
+                                                onBlur={(e) => handleInlineUpdate(c, 'name', e.target.value)} 
+                                                onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()} 
+                                            />
+                                        </div>
                                     </div>
-                                    
-                                    {/* Name Input */}
-                                    <div>
+
+                                    {/* --- MOBILE VIEW: MIDDLE ROW (Address) --- */}
+                                    <div className="mb-2 sm:mb-0 sm:order-4 sm:col-start-4">
                                         <input 
-                                            className="w-full bg-transparent border border-transparent hover:border-gray-300 focus:border-eco-500 focus:bg-white rounded px-1 py-1 font-bold text-gray-800 outline-none transition-all text-sm truncate" 
-                                            defaultValue={c.name} 
-                                            onBlur={(e) => handleInlineUpdate(c, 'name', e.target.value)} 
-                                            onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()} 
-                                        />
-                                    </div>
-                                    
-                                    {/* Phone (Read only mostly, but editable if needed) */}
-                                    <div className="truncate">
-                                        <span className={`text-[11px] font-mono px-2 py-0.5 rounded ${c.phone ? 'bg-gray-100 text-gray-600' : 'text-gray-300 italic'}`}>
-                                            {c.phone || '-'}
-                                        </span>
-                                    </div>
-                                    
-                                    {/* Address Input */}
-                                    <div>
-                                        <input 
-                                            className="w-full bg-transparent border border-transparent hover:border-gray-300 focus:border-eco-500 focus:bg-white rounded px-1 py-1 text-xs text-gray-600 outline-none transition-all truncate" 
+                                            className="w-full bg-transparent border-none p-0 text-xs text-gray-500 outline-none truncate focus:ring-0 placeholder-gray-300" 
                                             defaultValue={c.address} 
+                                            placeholder="Chưa có địa chỉ"
                                             onBlur={(e) => handleInlineUpdate(c, 'address', e.target.value)} 
                                             onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()} 
-                                            title={c.address}
                                         />
                                     </div>
+
+                                    {/* --- MOBILE VIEW: BOTTOM ROW (Phone Button) --- */}
+                                    <div className="sm:order-3 sm:col-start-3">
+                                        {c.phone ? (
+                                            <a 
+                                                href={`tel:${c.phone}`}
+                                                className="inline-flex items-center gap-2 bg-green-50 text-green-700 px-3 py-1.5 rounded-lg border border-green-100 hover:bg-green-100 transition-colors text-xs font-bold sm:bg-gray-50 sm:text-gray-600 sm:border-transparent sm:px-2 sm:py-0.5 sm:font-mono"
+                                            >
+                                                <i className="fas fa-phone-alt text-[10px] sm:hidden"></i>
+                                                {c.phone}
+                                            </a>
+                                        ) : (
+                                            <span className="text-xs text-gray-300 italic">No phone</span>
+                                        )}
+                                    </div>
                                     
-                                    {/* Delete Button */}
-                                    <div className="text-right opacity-0 group-hover:opacity-100 transition-opacity">
+                                    {/* Delete Button (Desktop: Col 5) */}
+                                    <div className="absolute top-2 right-2 sm:static sm:order-5 sm:text-right">
                                         <button 
                                             onClick={() => handleDeleteClick(c.id)} 
                                             className="w-7 h-7 rounded-full flex items-center justify-center text-gray-300 hover:bg-red-50 hover:text-red-500 transition-all" 
                                             title="Xóa"
                                         >
-                                            <i className="fas fa-times text-xs"></i>
+                                            <i className="fas fa-times text-sm"></i>
                                         </button>
                                     </div>
                                 </div>

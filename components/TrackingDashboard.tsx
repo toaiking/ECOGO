@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState, useMemo, useRef, useDeferredValue } from 'react';
 import toast from 'react-hot-toast';
 import { v4 as uuidv4 } from 'uuid';
@@ -38,6 +37,9 @@ const TrackingDashboard: React.FC = () => {
   const [activeDropdown, setActiveDropdown] = useState<'STATUS' | 'BATCH' | null>(null);
   const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0, width: 0 });
   const [isSorting, setIsSorting] = useState(false); 
+
+  // Voice Search State
+  const [isListeningSearch, setIsListeningSearch] = useState(false);
 
   // Bulk Selection State
   const [isSelectionMode, setIsSelectionMode] = useState(false);
@@ -224,6 +226,33 @@ const TrackingDashboard: React.FC = () => {
       clearSelection();
   };
 
+  // --- VOICE SEARCH ---
+  const handleVoiceSearch = () => {
+    // @ts-ignore
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+        toast.error("Trình duyệt không hỗ trợ");
+        return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'vi-VN';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => setIsListeningSearch(true);
+    recognition.onend = () => setIsListeningSearch(false);
+    recognition.onerror = () => setIsListeningSearch(false);
+
+    recognition.onresult = (event: any) => {
+        const text = event.results[0][0].transcript;
+        setSearchTerm(text);
+        toast.success(`Đã tìm: "${text}"`);
+    };
+
+    recognition.start();
+  };
+
   const handleRenameBatch = async () => {
       if (filterBatch.length !== 1) return;
       const oldName = filterBatch[0];
@@ -231,6 +260,7 @@ const TrackingDashboard: React.FC = () => {
       if (newName && newName !== oldName) {
           await storageService.renameBatch(oldName, newName);
           toast.success(`Đã đổi tên lô thành: ${newName}`);
+          // Update filter immediately so the view doesn't break
           setFilterBatch([newName]);
       }
   };
@@ -260,10 +290,10 @@ const TrackingDashboard: React.FC = () => {
               const count = await storageService.autoSortOrders(filteredOrders); 
               setSortBy('ROUTE'); 
               toast.success(`Đã sắp xếp ${count} đơn theo ưu tiên!`); 
-          } catch (e: any) {
+          } catch (e: unknown) {
               console.error(e);
               const errorMessage = e instanceof Error ? e.message : String(e);
-              toast.error("Lỗi sắp xếp: " + errorMessage);
+              toast.error(`Lỗi sắp xếp: ${errorMessage}`);
           } finally {
               setIsSorting(false);
           }
@@ -282,9 +312,36 @@ const TrackingDashboard: React.FC = () => {
       toast.success("Đã học lộ trình mới!", { icon: '🧠', duration: 2000 });
   };
   
-  const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>, position: number) => { dragItem.current = position; e.currentTarget.closest('.order-row')?.classList.add('opacity-50', 'bg-yellow-50'); };
-  const handleTouchMove = (e: React.TouchEvent<HTMLDivElement>) => { if (dragItem.current === null) return; const touch = e.touches[0]; const element = document.elementFromPoint(touch.clientX, touch.clientY); const row = element?.closest('[data-index]'); if (row) { const newIndex = parseInt(row.getAttribute('data-index') || '-1'); if (newIndex !== -1 && newIndex !== dragItem.current) { const _orders = [...visibleOrders]; const draggedItemContent = _orders[dragItem.current]; _orders.splice(dragItem.current, 1); _orders.splice(newIndex, 0, draggedItemContent); dragItem.current = newIndex; saveReorderedList(_orders); } } };
-  const handleTouchEnd = (e: React.TouchEvent<HTMLDivElement>,) => { dragItem.current = null; document.querySelectorAll('.order-row').forEach(r => r.classList.remove('opacity-50', 'bg-yellow-50')); };
+  const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>, position: number) => { 
+      if (sortBy !== 'ROUTE') return;
+      dragItem.current = position; 
+      e.currentTarget.closest('.order-row')?.classList.add('opacity-50', 'bg-yellow-50'); 
+  };
+  
+  const handleTouchMove = (e: React.TouchEvent<HTMLDivElement>) => { 
+      if (sortBy !== 'ROUTE') return;
+      if (dragItem.current === null) return; 
+      const touch = e.touches[0]; 
+      const element = document.elementFromPoint(touch.clientX, touch.clientY); 
+      const row = element?.closest('[data-index]'); 
+      if (row) { 
+          const newIndex = parseInt(row.getAttribute('data-index') || '-1'); 
+          if (newIndex !== -1 && newIndex !== dragItem.current) { 
+              const _orders = [...visibleOrders]; 
+              const draggedItemContent = _orders[dragItem.current]; 
+              _orders.splice(dragItem.current, 1); 
+              _orders.splice(newIndex, 0, draggedItemContent); 
+              dragItem.current = newIndex; 
+              saveReorderedList(_orders); 
+          } 
+      } 
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent<HTMLDivElement>,) => { 
+      dragItem.current = null; 
+      document.querySelectorAll('.order-row').forEach(r => r.classList.remove('opacity-50', 'bg-yellow-50')); 
+  };
+  
   const handleDragStart = (e: React.DragEvent<HTMLDivElement>, position: number) => { dragItem.current = position; e.currentTarget.classList.add('opacity-40', 'scale-95'); if (e.dataTransfer) e.dataTransfer.effectAllowed = "move"; };
   const handleDragEnter = (e: React.DragEvent<HTMLDivElement>, position: number) => { dragOverItem.current = position; e.preventDefault(); };
   const handleDragEnd = (e: React.DragEvent<HTMLDivElement>) => { e.currentTarget.classList.remove('opacity-40', 'scale-95'); if (dragItem.current !== null && dragOverItem.current !== null && sortBy === 'ROUTE') { const _orders = [...visibleOrders]; const draggedItemContent = _orders[dragItem.current]; _orders.splice(dragItem.current, 1); _orders.splice(dragOverItem.current, 0, draggedItemContent); saveReorderedList(_orders); } dragItem.current = null; dragOverItem.current = null; };
@@ -307,7 +364,7 @@ const TrackingDashboard: React.FC = () => {
           else { await pdfService.generateInvoiceBatch(ordersToPrint, batchName); }
           toast.success("Đã tạo file PDF!");
           if (isSelectionMode) clearSelection();
-      } catch (e: any) {
+      } catch (e: unknown) {
           console.error(e);
           const errorMessage = e instanceof Error ? e.message : String(e);
           toast.error(`Lỗi tạo PDF: ${errorMessage}`);
@@ -317,7 +374,8 @@ const TrackingDashboard: React.FC = () => {
   const prepareSplitPrint = (subset: Order[]) => { setOrdersToPrint(subset); setShowBatchSplitModal(false); setShowPrintTypeModal(true); };
 
   const handleReconcileFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
+      const files = e.target.files;
+      const file = files && files[0];
       if (!file) return;
       if (file.type !== 'application/pdf') { toast.error("Vui lòng chọn file PDF"); return; }
       setIsReconciling(true);
@@ -325,7 +383,7 @@ const TrackingDashboard: React.FC = () => {
           const result = await reconciliationService.reconcileOrders(file, orders);
           setReconcileResult(result);
           if (result.matchedOrders.length === 0) { toast('Không tìm thấy giao dịch nào khớp.', { icon: '🔍' }); } else { toast.success(`Tìm thấy ${result.matchedOrders.length} giao dịch khớp!`); }
-      } catch (error: any) {
+      } catch (error: unknown) {
           console.error(error);
           const errorMessage = error instanceof Error ? error.message : String(error);
           toast.error(`Lỗi đọc file PDF: ${errorMessage}`);
@@ -380,7 +438,8 @@ const TrackingDashboard: React.FC = () => {
               await navigator.clipboard.writeText(qrState.url);
               toast.success("Đã copy link QR");
           }
-      } catch (e) {
+      } catch (e: any) {
+          console.error(e);
           toast.error("Lỗi chia sẻ QR");
       }
   };
@@ -396,7 +455,19 @@ const TrackingDashboard: React.FC = () => {
              <div className="flex gap-2 items-center mb-2">
                 <div className="relative flex-grow">
                     <i className="fas fa-search absolute left-3 top-2.5 text-gray-400 text-sm"></i>
-                    <input placeholder="Tìm tên, sđt, địa chỉ..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full pl-9 pr-3 py-2 rounded-lg bg-gray-100 border-transparent focus:bg-white focus:ring-2 focus:ring-eco-100 text-sm font-medium outline-none transition-all" />
+                    <input 
+                        placeholder="Tìm tên, sđt, địa chỉ..." 
+                        value={searchTerm} 
+                        onChange={e => setSearchTerm(e.target.value)} 
+                        className="w-full pl-9 pr-9 py-2 rounded-lg bg-gray-100 border-transparent focus:bg-white focus:ring-2 focus:ring-eco-100 text-sm font-medium outline-none transition-all" 
+                    />
+                    <button 
+                        onClick={handleVoiceSearch}
+                        className={`absolute right-2 top-1.5 w-7 h-7 rounded-full flex items-center justify-center transition-colors ${isListeningSearch ? 'bg-red-500 text-white animate-pulse' : 'text-gray-400 hover:text-eco-600 hover:bg-gray-200'}`}
+                        title="Tìm bằng giọng nói"
+                    >
+                        <i className={`fas ${isListeningSearch ? 'fa-microphone-slash' : 'fa-microphone'}`}></i>
+                    </button>
                 </div>
                 <button onClick={() => setIsCompactMode(!isCompactMode)} className={`w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg border transition-all ${isCompactMode ? 'bg-eco-100 text-eco-700 border-eco-200' : 'bg-white text-gray-400 border-gray-200'}`}><i className={`fas ${isCompactMode ? 'fa-list' : 'fa-th-large'}`}></i></button>
                 <button onClick={handleBatchPrintClick} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-white text-gray-500 hover:text-blue-600 border border-gray-200" title="In Lô Hàng"><i className="fas fa-print"></i></button>
@@ -406,8 +477,13 @@ const TrackingDashboard: React.FC = () => {
              <div className={`grid transition-[grid-template-rows] duration-300 ease-out ${isHeaderVisible ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}><div className="overflow-hidden"><div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
                 <div className="relative flex-1 min-w-[100px] flex items-center gap-1">
                      <button ref={batchDropdownBtnRef} onClick={() => openDropdown('BATCH')} className="flex-grow pl-2 pr-6 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-xs font-bold text-gray-700 text-left flex items-center justify-between outline-none truncate"><span className="truncate">{getLabel('BATCH')}</span><i className="fas fa-chevron-down text-gray-400 text-[10px]"></i></button>
+                     {/* Show Edit Button if exactly 1 batch is selected */}
                      {filterBatch.length === 1 && (
-                         <button onClick={handleRenameBatch} className="w-7 h-7 flex-shrink-0 rounded-lg bg-white border border-gray-200 text-gray-400 hover:text-blue-600 hover:border-blue-300 flex items-center justify-center transition-colors" title="Đổi tên Lô">
+                         <button 
+                             onClick={handleRenameBatch} 
+                             className="w-7 h-7 flex-shrink-0 rounded-lg bg-white border border-gray-200 text-gray-400 hover:text-blue-600 hover:border-blue-300 flex items-center justify-center transition-colors" 
+                             title="Đổi tên Lô"
+                         >
                              <i className="fas fa-edit text-xs"></i>
                          </button>
                      )}

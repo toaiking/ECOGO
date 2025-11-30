@@ -19,6 +19,7 @@ export interface OrderItem {
   name: string;
   quantity: number;
   price: number;
+  importPrice?: number; // NEW: Cost price at the moment of sale
 }
 
 export interface Order {
@@ -44,7 +45,8 @@ export interface Order {
 export interface Product {
   id: string;
   name: string;
-  defaultPrice: number;
+  defaultPrice: number; // Selling Price
+  importPrice?: number; // NEW: Cost Price (Optional)
   defaultWeight: number; // kg per unit
   stockQuantity: number; // Current Stock
   totalImported?: number; // Total Imported History

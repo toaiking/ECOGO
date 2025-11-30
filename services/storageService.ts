@@ -421,6 +421,91 @@ export const storageService = {
       await safeCloudOp(() => deleteDoc(doc(db, "products", id)));
   },
 
+  // --- NEW: SYNC PRODUCT UPDATES TO PENDING ORDERS ---
+  syncProductToPendingOrders: async (product: Product) => {
+      const orders = ensureOrdersLoaded() || [];
+      const pendingStatuses = [OrderStatus.PENDING, OrderStatus.PICKED_UP, OrderStatus.IN_TRANSIT];
+      
+      const ordersToUpdate: Order[] = [];
+
+      for (const order of orders) {
+          // Skip completed orders
+          if (!pendingStatuses.includes(order.status)) continue;
+
+          let hasChanges = false;
+          
+          // Check items in order
+          const newItems = order.items.map(item => {
+              if (item.productId === product.id) {
+                  // Only update if something actually changed
+                  if (item.name !== product.name || 
+                      item.price !== product.defaultPrice || 
+                      item.importPrice !== product.importPrice) {
+                      
+                      hasChanges = true;
+                      return {
+                          ...item,
+                          name: product.name,
+                          price: product.defaultPrice,
+                          importPrice: product.importPrice
+                      };
+                  }
+              }
+              return item;
+          });
+
+          if (hasChanges) {
+              const newTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0);
+              const updatedOrder = { 
+                  ...order, 
+                  items: newItems, 
+                  totalPrice: newTotal,
+                  lastUpdatedBy: 'System (Sync)' 
+              };
+              ordersToUpdate.push(updatedOrder);
+          }
+      }
+
+      if (ordersToUpdate.length > 0) {
+          // Batch Update Memory
+          const currentOrders = ensureOrdersLoaded() || [];
+          ordersToUpdate.forEach(updatedOrder => {
+              const idx = currentOrders.findIndex(o => o.id === updatedOrder.id);
+              if (idx >= 0) currentOrders[idx] = updatedOrder;
+          });
+          
+          _memoryOrders = currentOrders;
+          localStorage.setItem(ORDER_KEY, JSON.stringify(currentOrders));
+          window.dispatchEvent(new Event('storage_' + ORDER_KEY));
+
+          // Batch Update Cloud
+          if (isOnline()) {
+              const CHUNK = 300;
+              for (let i = 0; i < ordersToUpdate.length; i += CHUNK) {
+                  const chunk = ordersToUpdate.slice(i, i + CHUNK);
+                  const batch = writeBatch(db);
+                  
+                  chunk.forEach(o => {
+                      const ref = doc(db, "orders", o.id);
+                      batch.update(ref, { 
+                          items: o.items, 
+                          totalPrice: o.totalPrice,
+                          lastUpdatedBy: 'System (Product Sync)' 
+                      });
+                  });
+                  
+                  try {
+                      await batch.commit();
+                  } catch (e) {
+                      console.error("Failed to sync product to pending orders", e);
+                  }
+              }
+          }
+          return ordersToUpdate.length;
+      }
+      return 0;
+  },
+
   // --- CUSTOMERS (DELTA SYNC ENGINE) ---
   subscribeCustomers: (callback: (customers: Customer[]) => void) => {
       const list = ensureCustomersLoaded();
@@ -723,6 +808,46 @@ export const storageService = {
           window.addEventListener('storage_' + ORDER_KEY, handler);
           return () => window.removeEventListener('storage_' + ORDER_KEY, handler);
       }
+  },
+
+  // NEW: Fetch Long Term Stats (12 Months) - One time fetch
+  fetchLongTermStats: async (): Promise<Order[]> => {
+      // 1. Get Local Data First
+      let allOrders = ensureOrdersLoaded() || [];
+      
+      if (isOnline()) {
+          try {
+              // Fetch last 12 months delivered/completed orders
+              const oneYearAgo = Date.now() - (365 * 24 * 60 * 60 * 1000);
+              
+              // FIX: Query only by createdAt to avoid needing a Composite Index (createdAt + status).
+              // We filter status client-side.
+              const q = query(
+                  collection(db, "orders"), 
+                  where("createdAt", ">", oneYearAgo)
+              );
+              
+              const snapshot = await getDocs(q);
+              const cloudOrders: Order[] = [];
+              snapshot.forEach(d => {
+                  const data = d.data() as Order;
+                  if (data.status === 'DELIVERED') {
+                      cloudOrders.push(data);
+                  }
+              });
+              
+              // Merge: Create a Map of ID -> Order
+              const mergedMap = new Map<string, Order>();
+              allOrders.forEach(o => mergedMap.set(o.id, o));
+              cloudOrders.forEach(o => mergedMap.set(o.id, o));
+              
+              return Array.from(mergedMap.values());
+          } catch (e) {
+              console.error("Failed to fetch long term stats", e);
+              return allOrders; // Fallback to local
+          }
+      }
+      return allOrders;
   },
 
   saveOrder: async (order: Order) => {
@@ -1071,13 +1196,15 @@ export const storageService = {
 
   // --- BATCH MANAGEMENT ---
   renameBatch: async (oldBatchId: string, newBatchId: string) => {
-      // 1. Local update
-      let list = _memoryOrders || [];
+      // 1. Local update (Memory Orders)
+      let list = ensureOrdersLoaded() || [];
       const toUpdate = list.filter(o => o.batchId === oldBatchId);
+      
       if (toUpdate.length === 0) return;
       
       toUpdate.forEach(o => o.batchId = newBatchId);
       
+      // Update memory reference & Save to LocalStorage immediately for UI reactivity
       _memoryOrders = list;
       localStorage.setItem(ORDER_KEY, JSON.stringify(list));
       window.dispatchEvent(new Event('storage_' + ORDER_KEY));

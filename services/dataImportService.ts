@@ -160,6 +160,7 @@ export const dataImportService = {
                     id: uuidv4(),
                     name: item.name, // Giữ nguyên case chữ hoa/thường cho đẹp
                     defaultPrice: 0, // Chưa biết giá
+                    importPrice: 0, // Default cost price
                     defaultWeight: 1,
                     stockQuantity: 50, // Mặc định kho
                     totalImported: 50,
@@ -175,7 +176,8 @@ export const dataImportService = {
                 productId: prod.id,
                 name: prod.name,
                 quantity: item.quantity,
-                price: 0 // Giá từng món không có trong file, set 0, chỉ có tổng đơn
+                price: 0, // Giá từng món không có trong file, set 0, chỉ có tổng đơn
+                importPrice: prod.importPrice
             });
         }
 
