@@ -1,14 +1,25 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
-import { SmartParseResult, Order, OrderStatus, PaymentMethod, Product, Customer } from "../types";
+import { SmartParseResult, Order, OrderStatus, PaymentMethod, Product, Customer, RawPDFImportData } from "../types";
 
 const getClient = () => {
-  // Hỗ trợ lấy key từ Vite (.env) hoặc process.env (Node/AI Studio)
-  // @ts-ignore
-  const apiKey = import.meta.env.VITE_API_KEY || process.env.API_KEY;
+  let apiKey: string | undefined;
+
+  try {
+    // @ts-ignore
+    if (typeof import.meta !== 'undefined' && import.meta.env) {
+      // @ts-ignore
+      apiKey = import.meta.env.VITE_API_KEY;
+    }
+  } catch (e) {
+    // Ignore error if import.meta is not defined
+  }
+
+  if (!apiKey) {
+    apiKey = process.env.API_KEY;
+  }
   
   if (!apiKey) {
-    console.error("Missing API Key. Please set VITE_API_KEY in .env file");
+    console.error("Missing API Key. Please set VITE_API_KEY in .env file or API_KEY in environment");
     throw new Error("API Key is missing");
   }
   return new GoogleGenAI({ apiKey });
@@ -114,4 +125,62 @@ export const generateDeliveryMessage = async (order: Order): Promise<string> => 
 
   // Template tin nhắn ngắn gọn, đầy đủ
   return `Chào ${order.customerName}, đơn ${itemsList} ${statusText}. ${paymentText}. Cảm ơn!`;
+};
+
+// NEW: Extract structured data from raw PDF text content
+export const structureImportData = async (rawText: string): Promise<RawPDFImportData[]> => {
+  const ai = getClient();
+  
+  const prompt = `
+    You are a data extraction assistant. 
+    I will provide raw text extracted from a PDF/Excel file containing a list of orders.
+    
+    Your task is to identify the table rows and extract them into a structured JSON array.
+    
+    INPUT TEXT:
+    ${rawText.substring(0, 30000)} 
+    (Text truncated if too long)
+
+    EXTRACTION RULES:
+    1. Look for rows that contain: Price (Money), Customer Name, Address, Phone (optional), Items/Quantity.
+    2. 'unit_price': Convert to number. If text is "120", it means 120.
+    3. 'customer_name': The name of the person.
+    4. 'address': The delivery address.
+    5. 'phone': Phone number (if available).
+    6. 'items_raw': The string describing items (e.g., "gạo 2 cá 1").
+    
+    Ignore header rows, footer rows, or summary lines.
+  `;
+
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: prompt,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.ARRAY,
+        items: {
+            type: Type.OBJECT,
+            properties: {
+                unit_price: { type: Type.NUMBER },
+                customer_name: { type: Type.STRING },
+                address: { type: Type.STRING },
+                phone: { type: Type.STRING, nullable: true },
+                items_raw: { type: Type.STRING }
+            },
+            required: ["unit_price", "customer_name", "address", "items_raw"]
+        }
+      },
+    },
+  });
+
+  if (response.text) {
+    try {
+        return JSON.parse(response.text) as RawPDFImportData[];
+    } catch (e) {
+        console.error("Failed to parse AI response as JSON", e);
+        throw new Error("AI trả về định dạng không hợp lệ.");
+    }
+  }
+  return [];
 };

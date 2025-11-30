@@ -152,7 +152,7 @@ const drawDashedLine = (doc: jsPDF, x1: number, y1: number, x2: number, y2: numb
 };
 
 export const pdfService = {
-    // --- MODE 1: COMPACT LIST (Bảng kê chi tiết) ---
+    // --- MODE 1: COMPACT LIST (2 COLUMNS - ~50 orders/page) ---
     generateCompactList: async (orders: Order[], batchId: string) => {
         const doc = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
         
@@ -162,171 +162,175 @@ export const pdfService = {
         if (binaryFont) {
             const fontFileName = 'Roboto.ttf';
             doc.addFileToVFS(fontFileName, binaryFont);
-            
-            // CRITICAL FIX: Map both normal and bold styles to the SAME font file
-            // This prevents jsPDF from falling back to Helvetica when setFont(..., 'bold') is called
             doc.addFont(fontFileName, 'Roboto', 'normal');
             doc.addFont(fontFileName, 'Roboto', 'bold');
-            
             doc.setFont('Roboto');
             fontName = 'Roboto';
         }
 
         const logoBase64 = storageService.getLogo();
-        let y = 15;
-
-        // Header
-        if (logoBase64) {
-            try { doc.addImage(logoBase64, 'PNG', 10, 5, 15, 15, undefined, 'FAST'); } catch(e){}
-        }
         
-        doc.setFontSize(16);
-        doc.setFont(fontName, 'bold');
-        doc.text("DANH SÁCH ĐƠN HÀNG", 105, 12, { align: 'center' });
+        // --- PAGE CONFIG ---
+        const pageH = 297;
+        const pageW = 210;
+        const margin = 5;
+        const headerH = 25;
+        const footerH = 10;
         
-        doc.setFont(fontName, 'normal');
-        doc.setFontSize(10);
-        doc.text(`Lô: ${batchId} - Tổng: ${orders.length} đơn`, 105, 18, { align: 'center' });
-        doc.text(`Ngày in: ${new Date().toLocaleDateString('vi-VN')}`, 105, 23, { align: 'center' });
-
-        y = 30;
-
-        // Table Header
-        doc.setFontSize(9);
-        doc.setFillColor(230, 230, 230);
-        doc.rect(10, y, 190, 8, 'F');
+        // Column Config
+        const colGap = 5;
+        const colW = (pageW - (margin * 2) - colGap) / 2; // ~97.5mm
         
-        doc.setFont(fontName, 'bold');
-        doc.text("STT", 12, y + 5);
-        doc.text("Khách hàng / SĐT", 25, y + 5);
-        doc.text("Địa chỉ", 75, y + 5);
-        doc.text("Ghi chú", 140, y + 5);
-        doc.text("Thu hộ", 180, y + 5);
-        y += 8;
-
-        doc.setFont(fontName, 'normal');
+        // Content Config
+        const startY = headerH;
+        const contentH = pageH - headerH - footerH;
+        const rowH = 11; // 10mm height per order
+        const rowsPerCol = Math.floor(contentH / rowH); // ~26 rows
+        const ordersPerPage = rowsPerCol * 2; // ~52 orders
 
         let totalAmount = 0;
-        
-        // --- PREPARE ITEM SUMMARY ---
         const itemSummary: Record<string, number> = {};
+
+        // Prepare Summary Data
         orders.forEach(o => {
             totalAmount += o.totalPrice;
             o.items.forEach(item => {
                 const name = item.name.trim();
-                if(name) {
-                    itemSummary[name] = (itemSummary[name] || 0) + item.quantity;
-                }
+                if(name) itemSummary[name] = (itemSummary[name] || 0) + item.quantity;
             });
         });
-        const sortedSummary = Object.entries(itemSummary).sort((a, b) => a[0].localeCompare(b[0]));
 
-        // --- RENDER ORDERS ---
+        // HELPER: Draw Header on New Page
+        const drawHeader = (pageNo: number) => {
+            if (logoBase64) {
+                try { doc.addImage(logoBase64, 'PNG', margin, 5, 12, 12, undefined, 'FAST'); } catch(e){}
+            }
+            doc.setFontSize(14);
+            doc.setFont(fontName, 'bold');
+            doc.text("DANH SÁCH GIAO HÀNG", pageW / 2, 10, { align: 'center' });
+            
+            doc.setFontSize(9);
+            doc.setFont(fontName, 'normal');
+            doc.text(`Lô: ${batchId} | ${new Date().toLocaleDateString('vi-VN')} | Trang ${pageNo}`, pageW / 2, 16, { align: 'center' });
+            
+            // Draw Column Headers
+            doc.setFontSize(8);
+            doc.setFont(fontName, 'bold');
+            doc.setFillColor(230, 230, 230);
+            
+            // Col 1 Header
+            doc.rect(margin, 20, colW, 5, 'F');
+            doc.text("#", margin + 2, 23.5);
+            doc.text("Khách / ĐC / Hàng", margin + 8, 23.5);
+            doc.text("Thu hộ", margin + colW - 2, 23.5, { align: 'right' });
+
+            // Col 2 Header
+            const col2X = margin + colW + colGap;
+            doc.rect(col2X, 20, colW, 5, 'F');
+            doc.text("#", col2X + 2, 23.5);
+            doc.text("Khách / ĐC / Hàng", col2X + 8, 23.5);
+            doc.text("Thu hộ", col2X + colW - 2, 23.5, { align: 'right' });
+        };
+
+        let pageIndex = 1;
+        drawHeader(pageIndex);
+
+        // --- RENDER LOOP ---
         for (let i = 0; i < orders.length; i++) {
             const o = orders[i];
-
-            if (y > 280) {
+            
+            // Calculate Position
+            const indexInPage = i % ordersPerPage;
+            if (i > 0 && indexInPage === 0) {
                 doc.addPage();
-                y = 15;
-                doc.setFont(fontName, 'bold');
-                doc.text("STT", 12, y);
-                doc.text("Khách hàng", 25, y);
-                y += 5;
-                doc.setFont(fontName, 'normal');
+                pageIndex++;
+                drawHeader(pageIndex);
             }
 
-            const rowH = 10;
-            doc.setFontSize(9);
-            doc.text(`${i + 1}`, 12, y + 4);
+            const colIndex = indexInPage < rowsPerCol ? 0 : 1;
+            const rowIndex = indexInPage % rowsPerCol;
             
-            // Name & Phone
+            const x = margin + (colIndex * (colW + colGap));
+            const y = startY + (rowIndex * rowH);
+
+            // Draw Row Content
+            // 1. Index
+            doc.setFontSize(8);
             doc.setFont(fontName, 'bold');
-            doc.text(o.customerName, 25, y + 4);
-            doc.setFont(fontName, 'normal');
-            doc.setFontSize(8);
-            doc.text(o.customerPhone, 25, y + 8);
-
-            // Address & Items
-            doc.setFontSize(8);
-            const addr = doc.splitTextToSize(o.address, 60);
-            doc.text(addr[0] + (addr.length > 1 ? '...' : ''), 75, y + 4);
+            doc.text(`${i + 1}`, x + 2, y + 4);
             
-            doc.setTextColor(80, 80, 80);
-            const items = o.items.map(it => `${it.name} (${it.quantity})`).join(', ');
-            const itemsSplit = doc.splitTextToSize(items, 60);
-            doc.text(itemsSplit[0], 75, y + 8);
-            doc.setTextColor(0, 0, 0);
+            // 2. Customer Name (Bold)
+            doc.setFontSize(8);
+            doc.text(o.customerName, x + 8, y + 4);
+            
+            // Phone (Small next to name)
+            doc.setFont(fontName, 'normal');
+            doc.setFontSize(7);
+            doc.text(` - ${o.customerPhone}`, x + 8 + doc.getTextWidth(o.customerName), y + 4);
 
-            // Notes
-            if (o.notes) {
-                const notesSplit = doc.splitTextToSize(o.notes, 35);
-                doc.text(notesSplit[0] + (notesSplit.length > 1 ? '...' : ''), 140, y + 4);
+            // 3. Address (Truncated line 1)
+            const addrWidth = colW - 35; // Space for address
+            const addr = o.address.length > 35 ? o.address.substring(0, 32) + "..." : o.address;
+            doc.text(addr, x + 8, y + 7);
+
+            // 4. Items (Line 2)
+            doc.setFontSize(7);
+            const items = o.items.map(it => `${it.name}(${it.quantity})`).join(', ');
+            let itemStr = items;
+            if (doc.getTextWidth(items) > addrWidth) {
+                 // Simple truncate for compact view
+                 // Can be improved with splitTextToSize but might exceed row height
+                 itemStr = items.substring(0, 50) + "...";
             }
+            doc.text(itemStr, x + 8, y + 10);
 
-            // Price
+            // 5. Money
             doc.setFontSize(9);
             doc.setFont(fontName, 'bold');
             const price = new Intl.NumberFormat('vi-VN').format(o.totalPrice);
-            doc.text(price, 180, y + 6);
+            doc.text(price, x + colW - 2, y + 5, { align: 'right' });
+            
+            // Payment Method
+            doc.setFontSize(6);
             doc.setFont(fontName, 'normal');
+            const method = o.paymentMethod === PaymentMethod.CASH ? 'TM' : (o.paymentVerified ? 'Đã CK' : 'Chờ CK');
+            doc.text(method, x + colW - 2, y + 9, { align: 'right' });
 
-            // Payment Method Label
-            const note = o.paymentMethod === PaymentMethod.CASH ? 'COD' : 'Đã TT';
-            doc.setFontSize(7);
-            doc.text(note, 200, y + 6, { align: 'right' });
-
+            // Separator Line
             doc.setDrawColor(240, 240, 240);
-            doc.line(10, y + rowH, 200, y + rowH);
-            y += rowH + 2;
+            doc.line(x, y + rowH, x + colW, y + rowH);
         }
 
-        // Summary Total Money
-        y += 5;
-        doc.setFontSize(11);
-        doc.setFont(fontName, 'bold'); 
-        doc.text(`TỔNG CỘNG: ${new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(totalAmount)}`, 190, y, { align: 'right' });
-
-        // --- RENDER ITEM AGGREGATION SUMMARY ---
-        y += 15;
-        if (y > 250) {
-            doc.addPage();
-            y = 20;
-        }
-
-        // Header for Summary
-        doc.setFillColor(240, 240, 240);
-        doc.rect(10, y, 190, 8, 'F');
-        doc.setFontSize(11);
+        // --- SUMMARY PAGE ---
+        doc.addPage();
+        doc.setFontSize(14);
         doc.setFont(fontName, 'bold');
-        doc.setTextColor(0, 0, 0);
-        doc.text("TỔNG HỢP HÀNG HÓA CẦN CHUẨN BỊ", 105, y + 5, { align: 'center' });
-        y += 12;
+        doc.text("TỔNG HỢP", pageW / 2, 15, { align: 'center' });
+        
+        doc.setFontSize(11);
+        doc.text(`Tổng đơn: ${orders.length}`, 20, 30);
+        doc.text(`Tổng tiền: ${new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(totalAmount)}`, 20, 38);
 
+        doc.text("HÀNG HÓA CẦN CHUẨN BỊ:", 20, 50);
         doc.setFontSize(10);
         doc.setFont(fontName, 'normal');
-
+        
+        let sumY = 60;
+        const sortedSummary = Object.entries(itemSummary).sort((a, b) => a[0].localeCompare(b[0]));
+        
         sortedSummary.forEach(([name, qty]) => {
-            if (y > 280) {
+            if (sumY > 280) {
                 doc.addPage();
-                y = 20;
+                sumY = 20;
             }
-            
-            // Product Name
-            doc.text(name, 15, y);
-            
-            // Dotted Line
-            const nameWidth = doc.getTextWidth(name);
-            doc.setDrawColor(200, 200, 200);
+            doc.text(name, 20, sumY);
             doc.setLineDashPattern([1, 1], 0);
-            doc.line(15 + nameWidth + 2, y, 185, y);
+            doc.line(100, sumY, 170, sumY);
             doc.setLineDashPattern([], 0);
-
-            // Quantity
             doc.setFont(fontName, 'bold');
-            doc.text(qty.toString(), 190, y, { align: 'right' });
+            doc.text(qty.toString(), 180, sumY, { align: 'right' });
             doc.setFont(fontName, 'normal');
-
-            y += 7;
+            sumY += 7;
         });
 
         const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');

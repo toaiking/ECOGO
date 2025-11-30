@@ -794,21 +794,29 @@ export const storageService = {
   deleteOrdersBatch: async (ids: string[]) => {
       if (!ids || ids.length === 0) return;
       
+      // 1. Local Delete (Instant UI Feedback)
       let list = _memoryOrders || [];
       list = list.filter(o => !ids.includes(o.id));
       _memoryOrders = list;
       localStorage.setItem(ORDER_KEY, JSON.stringify(list));
       window.dispatchEvent(new Event('storage_' + ORDER_KEY));
       
+      // 2. Cloud Delete (Batched)
       if (isOnline()) {
-          const batch = writeBatch(db);
-          ids.forEach(id => {
-             batch.delete(doc(db, "orders", id));
-          });
-          try {
-              await batch.commit();
-          } catch(e) {
-              console.error("Batch delete failed", e);
+          const CHUNK = 400; // Limit for batch writes is 500
+          for (let i = 0; i < ids.length; i += CHUNK) {
+               const chunk = ids.slice(i, i + CHUNK);
+               const batch = writeBatch(db);
+               chunk.forEach(id => {
+                   batch.delete(doc(db, "orders", id));
+               });
+               
+               try {
+                   await batch.commit();
+                   await delay(200); // Small delay
+               } catch(e) {
+                   console.error("Batch delete failed", e);
+               }
           }
       }
   },
@@ -1059,6 +1067,35 @@ export const storageService = {
             console.error("Failed to learn route:", e);
         }
     }
+  },
+
+  // --- BATCH MANAGEMENT ---
+  renameBatch: async (oldBatchId: string, newBatchId: string) => {
+      // 1. Local update
+      let list = _memoryOrders || [];
+      const toUpdate = list.filter(o => o.batchId === oldBatchId);
+      if (toUpdate.length === 0) return;
+      
+      toUpdate.forEach(o => o.batchId = newBatchId);
+      
+      _memoryOrders = list;
+      localStorage.setItem(ORDER_KEY, JSON.stringify(list));
+      window.dispatchEvent(new Event('storage_' + ORDER_KEY));
+
+      // 2. Cloud update (Batched)
+      if (isOnline()) {
+          const CHUNK = 400;
+          for (let i = 0; i < toUpdate.length; i += CHUNK) {
+               const chunk = toUpdate.slice(i, i + CHUNK);
+               const batch = writeBatch(db);
+               chunk.forEach(o => {
+                   batch.update(doc(db, "orders", o.id), { batchId: newBatchId });
+               });
+               try {
+                   await batch.commit();
+               } catch(e) { console.error("Batch rename failed", e); }
+          }
+      }
   },
 
   // --- NOTIFICATIONS ---

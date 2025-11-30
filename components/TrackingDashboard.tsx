@@ -221,6 +221,17 @@ const TrackingDashboard: React.FC = () => {
       clearSelection();
   };
 
+  const handleRenameBatch = async () => {
+      if (filterBatch.length !== 1) return;
+      const oldName = filterBatch[0];
+      const newName = prompt(`Nhập tên mới cho lô: ${oldName}`, oldName);
+      if (newName && newName !== oldName) {
+          await storageService.renameBatch(oldName, newName);
+          toast.success(`Đã đổi tên lô thành: ${newName}`);
+          setFilterBatch([newName]);
+      }
+  };
+
   const handleUpdate = (updatedOrder: Order) => {};
   const handleDeleteClick = (id: string) => { setDeleteId(id); setShowDeleteConfirm(true); };
   const confirmDelete = async () => { 
@@ -246,7 +257,7 @@ const TrackingDashboard: React.FC = () => {
               const count = await storageService.autoSortOrders(filteredOrders); 
               setSortBy('ROUTE'); 
               toast.success(`Đã sắp xếp ${count} đơn theo ưu tiên!`); 
-          } catch (e: any) {
+          } catch (e: unknown) {
               console.error(e);
               const errorMessage = e instanceof Error ? e.message : String(e);
               toast.error("Lỗi sắp xếp: " + errorMessage);
@@ -270,7 +281,7 @@ const TrackingDashboard: React.FC = () => {
   
   const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>, position: number) => { dragItem.current = position; e.currentTarget.closest('.order-row')?.classList.add('opacity-50', 'bg-yellow-50'); };
   const handleTouchMove = (e: React.TouchEvent<HTMLDivElement>) => { if (dragItem.current === null) return; const touch = e.touches[0]; const element = document.elementFromPoint(touch.clientX, touch.clientY); const row = element?.closest('[data-index]'); if (row) { const newIndex = parseInt(row.getAttribute('data-index') || '-1'); if (newIndex !== -1 && newIndex !== dragItem.current) { const _orders = [...visibleOrders]; const draggedItemContent = _orders[dragItem.current]; _orders.splice(dragItem.current, 1); _orders.splice(newIndex, 0, draggedItemContent); dragItem.current = newIndex; saveReorderedList(_orders); } } };
-  const handleTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => { dragItem.current = null; document.querySelectorAll('.order-row').forEach(r => r.classList.remove('opacity-50', 'bg-yellow-50')); };
+  const handleTouchEnd = (e: React.TouchEvent<HTMLDivElement>,) => { dragItem.current = null; document.querySelectorAll('.order-row').forEach(r => r.classList.remove('opacity-50', 'bg-yellow-50')); };
   const handleDragStart = (e: React.DragEvent<HTMLDivElement>, position: number) => { dragItem.current = position; e.currentTarget.classList.add('opacity-40', 'scale-95'); if (e.dataTransfer) e.dataTransfer.effectAllowed = "move"; };
   const handleDragEnter = (e: React.DragEvent<HTMLDivElement>, position: number) => { dragOverItem.current = position; e.preventDefault(); };
   const handleDragEnd = (e: React.DragEvent<HTMLDivElement>) => { e.currentTarget.classList.remove('opacity-40', 'scale-95'); if (dragItem.current !== null && dragOverItem.current !== null && sortBy === 'ROUTE') { const _orders = [...visibleOrders]; const draggedItemContent = _orders[dragItem.current]; _orders.splice(dragItem.current, 1); _orders.splice(dragOverItem.current, 0, draggedItemContent); saveReorderedList(_orders); } dragItem.current = null; dragOverItem.current = null; };
@@ -293,10 +304,10 @@ const TrackingDashboard: React.FC = () => {
           else { await pdfService.generateInvoiceBatch(ordersToPrint, batchName); }
           toast.success("Đã tạo file PDF!");
           if (isSelectionMode) clearSelection();
-      } catch (e: any) {
+      } catch (e: unknown) {
           console.error(e);
           const errorMessage = e instanceof Error ? e.message : String(e);
-          toast.error("Lỗi tạo PDF: " + errorMessage);
+          toast.error(`Lỗi tạo PDF: ${errorMessage}`);
       } finally { setIsPrinting(false); setOrdersToPrint([]); }
   };
 
@@ -311,7 +322,7 @@ const TrackingDashboard: React.FC = () => {
           const result = await reconciliationService.reconcileOrders(file, orders);
           setReconcileResult(result);
           if (result.matchedOrders.length === 0) { toast('Không tìm thấy giao dịch nào khớp.', { icon: '🔍' }); } else { toast.success(`Tìm thấy ${result.matchedOrders.length} giao dịch khớp!`); }
-      } catch (error: any) {
+      } catch (error: unknown) {
           console.error(error);
           const errorMessage = error instanceof Error ? error.message : String(error);
           toast.error(`Lỗi đọc file PDF: ${errorMessage}`);
@@ -346,7 +357,14 @@ const TrackingDashboard: React.FC = () => {
                 <button onClick={copyRouteToClipboard} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-white text-gray-500 hover:text-eco-600 border border-gray-200"><i className="fas fa-map-marked-alt"></i></button>
              </div>
              <div className={`grid transition-[grid-template-rows] duration-300 ease-out ${isHeaderVisible ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}><div className="overflow-hidden"><div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
-                <div className="relative flex-1 min-w-[100px]"><button ref={batchDropdownBtnRef} onClick={() => openDropdown('BATCH')} className="w-full pl-2 pr-6 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-xs font-bold text-gray-700 text-left flex items-center justify-between outline-none truncate"><span className="truncate">{getLabel('BATCH')}</span><i className="fas fa-chevron-down text-gray-400 text-[10px]"></i></button></div>
+                <div className="relative flex-1 min-w-[100px] flex items-center gap-1">
+                     <button ref={batchDropdownBtnRef} onClick={() => openDropdown('BATCH')} className="flex-grow pl-2 pr-6 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-xs font-bold text-gray-700 text-left flex items-center justify-between outline-none truncate"><span className="truncate">{getLabel('BATCH')}</span><i className="fas fa-chevron-down text-gray-400 text-[10px]"></i></button>
+                     {filterBatch.length === 1 && (
+                         <button onClick={handleRenameBatch} className="w-7 h-7 flex-shrink-0 rounded-lg bg-white border border-gray-200 text-gray-400 hover:text-blue-600 hover:border-blue-300 flex items-center justify-center transition-colors" title="Đổi tên Lô">
+                             <i className="fas fa-edit text-xs"></i>
+                         </button>
+                     )}
+                </div>
                 {users.length > 0 && (<div className="relative flex-1 min-w-[90px]"><select value={filterUser} onChange={e => setFilterUser(e.target.value)} className="w-full pl-2 pr-6 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-xs font-medium text-gray-700 appearance-none outline-none"><option value="ALL">User: All</option>{users.map(u => <option key={u} value={u}>{u}</option>)}</select><i className="fas fa-user absolute right-2 top-2 text-gray-400 text-[10px] pointer-events-none"></i></div>)}
                 <div className="relative flex-1 min-w-[110px]"><button ref={statusDropdownBtnRef} onClick={() => openDropdown('STATUS')} className="w-full pl-2 pr-6 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-xs font-medium text-gray-700 text-left flex items-center justify-between outline-none truncate"><span className="truncate">{getLabel('STATUS')}</span><i className="fas fa-chevron-down text-gray-400 text-[10px]"></i></button></div>
                 <div className="flex bg-gray-100 rounded-lg p-0.5 flex-shrink-0">

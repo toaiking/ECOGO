@@ -91,3 +91,12 @@ export interface Notification {
   createdAt: number;
   relatedOrderId?: string;
 }
+
+// Interface for PDF Import Module
+export interface RawPDFImportData {
+  unit_price: number;      // e.g. 120 (means 120,000)
+  customer_name: string;
+  address: string;
+  phone?: string;
+  items_raw: string;       // e.g. "đỏ2 xanh1"
+}
