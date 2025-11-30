@@ -58,6 +58,9 @@ const TrackingDashboard: React.FC = () => {
   const [reconcileResult, setReconcileResult] = useState<ReconciliationResult | null>(null);
   const [isReconciling, setIsReconciling] = useState(false);
 
+  // QR Modal State (Lifted up to fix z-index issues)
+  const [qrState, setQrState] = useState<{ isOpen: boolean, url: string, order: Order | null }>({ isOpen: false, url: '', order: null });
+
   // Pagination / Rendering Limit
   const [visibleCount, setVisibleCount] = useState(20);
 
@@ -257,7 +260,7 @@ const TrackingDashboard: React.FC = () => {
               const count = await storageService.autoSortOrders(filteredOrders); 
               setSortBy('ROUTE'); 
               toast.success(`Đã sắp xếp ${count} đơn theo ưu tiên!`); 
-          } catch (e: unknown) {
+          } catch (e: any) {
               console.error(e);
               const errorMessage = e instanceof Error ? e.message : String(e);
               toast.error("Lỗi sắp xếp: " + errorMessage);
@@ -304,7 +307,7 @@ const TrackingDashboard: React.FC = () => {
           else { await pdfService.generateInvoiceBatch(ordersToPrint, batchName); }
           toast.success("Đã tạo file PDF!");
           if (isSelectionMode) clearSelection();
-      } catch (e: unknown) {
+      } catch (e: any) {
           console.error(e);
           const errorMessage = e instanceof Error ? e.message : String(e);
           toast.error(`Lỗi tạo PDF: ${errorMessage}`);
@@ -322,7 +325,7 @@ const TrackingDashboard: React.FC = () => {
           const result = await reconciliationService.reconcileOrders(file, orders);
           setReconcileResult(result);
           if (result.matchedOrders.length === 0) { toast('Không tìm thấy giao dịch nào khớp.', { icon: '🔍' }); } else { toast.success(`Tìm thấy ${result.matchedOrders.length} giao dịch khớp!`); }
-      } catch (error: unknown) {
+      } catch (error: any) {
           console.error(error);
           const errorMessage = error instanceof Error ? error.message : String(error);
           toast.error(`Lỗi đọc file PDF: ${errorMessage}`);
@@ -336,6 +339,50 @@ const TrackingDashboard: React.FC = () => {
       toast.success(`Đã xác nhận thanh toán cho ${reconcileResult.matchedOrders.length} đơn!`);
       setShowReconcileModal(false);
       setReconcileResult(null);
+  };
+
+  // --- QR MODAL LOGIC (Lifted) ---
+  const handleShowQR = async (order: Order) => {
+      const bankConfig = await storageService.getBankConfig();
+      if (!bankConfig || !bankConfig.accountNo) {
+          toast.error("Vui lòng cài đặt thông tin Ngân hàng trước.");
+          return;
+      }
+      
+      const desc = `DH ${order.id}`;
+      // Generate VietQR URL
+      const url = `https://img.vietqr.io/image/${bankConfig.bankId}-${bankConfig.accountNo}-${bankConfig.template || 'compact2'}.png?amount=${order.totalPrice}&addInfo=${encodeURIComponent(desc)}&accountName=${encodeURIComponent(bankConfig.accountName)}`;
+      
+      setQrState({ isOpen: true, url, order });
+  };
+  
+  const handleConfirmQrPayment = async () => {
+      if (qrState.order) {
+          await storageService.updatePaymentVerification(qrState.order.id, true, { name: qrState.order.customerName });
+          toast.success("Đã xác nhận thanh toán!");
+          setQrState(prev => ({ ...prev, isOpen: false }));
+      }
+  };
+
+  const handleShareQR = async () => {
+      if (!qrState.url || !qrState.order) return;
+      try {
+          const response = await fetch(qrState.url);
+          const blob = await response.blob();
+          const file = new File([blob], `qr-${qrState.order.id}.png`, { type: "image/png" });
+          if (navigator.share) {
+              await navigator.share({ 
+                  title: 'Mã QR', 
+                  text: `Thanh toán ${new Intl.NumberFormat('vi-VN').format(qrState.order.totalPrice)}đ`, 
+                  files: [file] 
+              });
+          } else {
+              await navigator.clipboard.writeText(qrState.url);
+              toast.success("Đã copy link QR");
+          }
+      } catch (e) {
+          toast.error("Lỗi chia sẻ QR");
+      }
   };
 
   const toggleFilter = (type: 'STATUS' | 'BATCH', value: any) => { if (type === 'STATUS') setFilterStatus(prev => prev.includes(value) ? prev.filter(s => s !== value) : [...prev, value]); if (type === 'BATCH') setFilterBatch(prev => prev.includes(value) ? prev.filter(b => b !== value) : [...prev, value]); };
@@ -658,6 +705,7 @@ const TrackingDashboard: React.FC = () => {
                         isSelected={selectedOrderIds.has(order.id)}
                         onToggleSelect={toggleSelectOrder}
                         onLongPress={handleLongPress}
+                        onShowQR={handleShowQR}
                     /></div></div>
             );
         }))}
@@ -674,7 +722,7 @@ const TrackingDashboard: React.FC = () => {
           </div>
       )}
 
-      {editingOrder && (<div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4 animate-fade-in"><div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl flex flex-col" ref={editModalRef}><div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50"><div><h3 className="text-xl font-bold text-gray-800">Chỉnh sửa</h3><p className="text-xs text-gray-500">ID: {editingOrder.id}</p></div><button onClick={() => setEditingOrder(null)} className="w-8 h-8 rounded-full bg-white text-gray-400 hover:text-red-500 hover:shadow-md flex items-center justify-center"><i className="fas fa-times"></i></button></div><form onSubmit={saveEdit} className="p-6 space-y-6 flex-grow overflow-y-auto"><div className="space-y-4"><h4 className="text-sm font-bold text-eco-600 uppercase tracking-wider border-b border-eco-100 pb-1">Khách hàng</h4><div className="grid grid-cols-1 md:grid-cols-2 gap-4"><div><label className="text-xs font-bold text-gray-500 mb-1 block">Tên khách</label><input value={editingOrder.customerName} onChange={e => setEditingOrder({...editingOrder, customerName: e.target.value})} className="w-full p-2.5 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all text-sm font-medium" /></div><div><label className="text-xs font-bold text-gray-500 mb-1 block">Số điện thoại</label><input value={editingOrder.customerPhone} onChange={e => setEditingOrder({...editingOrder, customerPhone: e.target.value})} className="w-full p-2.5 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all text-sm" /></div></div><div><label className="text-xs font-bold text-gray-500 mb-1 block">Địa chỉ</label><textarea value={editingOrder.address} onChange={e => setEditingOrder({...editingOrder, address: e.target.value})} className="w-full p-2.5 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all text-sm resize-none" rows={2} /></div></div><div className="space-y-3"><div className="flex justify-between items-center border-b border-eco-100 pb-1"><h4 className="text-sm font-bold text-eco-600 uppercase tracking-wider">Hàng hóa</h4><button type="button" onClick={addEditItem} className="text-xs font-bold text-eco-600 hover:text-eco-700 bg-eco-50 hover:bg-eco-100 px-2 py-1 rounded transition-colors">+ Thêm</button></div><div className="bg-gray-50 rounded-xl p-3 space-y-3">{editingOrder.items.map((item, idx) => { const selectedIds = editingOrder.items.filter((i, iIdx) => iIdx !== idx && i.productId).map(i => i.productId); const availableProducts = products.filter(p => !selectedIds.includes(p.id) && (!item.name || p.name.toLowerCase().includes(item.name.toLowerCase()))); return (<div key={idx} className="flex gap-2 items-start group/editItem relative product-dropdown-container"><div className="flex-grow relative"><input value={item.name} onChange={(e) => updateEditItem(idx, 'name', e.target.value)} onFocus={() => setActiveEditProductRow(idx)} className="w-full p-2 bg-white border border-gray-200 rounded-lg text-sm focus:border-eco-500 outline-none" placeholder="Tên hàng" />{activeEditProductRow === idx && (<div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-100 rounded-lg shadow-xl z-[70] max-h-40 overflow-y-auto">{availableProducts.length === 0 ? (<div className="p-2 text-xs text-gray-400 text-center">{products.length === 0 ? "Kho trống" : "Không tìm thấy"}</div>) : (availableProducts.map(p => (<div key={p.id} onClick={() => selectProductForEditItem(idx, p)} className="px-3 py-2 hover:bg-eco-50 cursor-pointer flex justify-between items-center border-b border-gray-50 last:border-0"><div className="text-sm font-medium text-gray-800">{p.name}</div><div className="text-xs font-bold text-eco-600">{new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}</div></div>)))}</div>)}</div><div className="w-16"><input type="number" step="any" value={item.quantity === 0 ? '' : item.quantity} onChange={(e) => updateEditItem(idx, 'quantity', e.target.value === '' ? 0 : Number(e.target.value))} className="w-full p-2 text-center bg-white border border-gray-200 rounded-lg text-sm font-bold focus:border-eco-500 outline-none" placeholder="SL" /></div><div className="w-24"><input type="number" step="any" value={item.price === 0 ? '' : item.price} onChange={(e) => updateEditItem(idx, 'price', e.target.value === '' ? 0 : Number(e.target.value))} className="w-full p-2 text-right bg-white border border-gray-200 rounded-lg text-sm font-bold text-gray-700 focus:border-eco-500 outline-none" placeholder="Giá" /></div>{editingOrder.items.length > 1 && (<button type="button" onClick={() => removeEditItem(idx)} className="w-9 h-9 flex items-center justify-center text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"><i className="fas fa-trash-alt"></i></button>)}</div>); })}</div></div><div className="space-y-4"><h4 className="text-sm font-bold text-eco-600 uppercase tracking-wider border-b border-eco-100 pb-1">Thanh toán & Ghi chú</h4><div className="grid grid-cols-2 gap-4"><div><label className="text-xs font-bold text-gray-500 mb-1 block">Tổng tiền</label><input type="number" value={editingOrder.totalPrice} onChange={e => setEditingOrder({...editingOrder, totalPrice: Number(e.target.value)})} className="w-full p-3 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all font-bold text-gray-800" /></div><div><label className="text-xs font-bold text-gray-500 mb-1 block">Hình thức</label><div className="relative"><select value={editingOrder.paymentMethod} onChange={e => setEditingOrder({...editingOrder, paymentMethod: e.target.value as PaymentMethod})} className="w-full p-3 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all appearance-none text-sm font-medium"><option value={PaymentMethod.CASH}>Tiền mặt</option><option value={PaymentMethod.TRANSFER}>Chuyển khoản</option><option value={PaymentMethod.PAID}>Đã thanh toán</option></select><i className="fas fa-chevron-down absolute right-3 top-4 text-gray-400 text-xs pointer-events-none"></i></div></div></div><div><label className="text-xs font-bold text-gray-500 mb-1 block">Ghi chú</label><textarea value={editingOrder.notes || ''} onChange={e => setEditingOrder({...editingOrder, notes: e.target.value})} className="w-full p-3 bg-yellow-50/50 border border-yellow-100 focus:bg-white focus:border-yellow-400 rounded-lg outline-none transition-all text-sm text-yellow-900 placeholder-yellow-300 resize-none" placeholder="Ghi chú thêm..." rows={2} /></div></div></form><div className="p-5 border-t border-gray-100 bg-gray-50 rounded-b-2xl"><button onClick={saveEdit} className="w-full py-3.5 bg-black text-white rounded-xl font-bold hover:bg-gray-800 transition-all shadow-lg shadow-gray-200 active:scale-95">Lưu Thay Đổi</button></div></div></div>)}
+      {editingOrder && (<div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4 animate-fade-in"><div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl flex flex-col" ref={editModalRef}><div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50"><div><h3 className="text-xl font-bold text-gray-800">Chỉnh sửa</h3><p className="text-xs text-gray-500">ID: {editingOrder.id}</p></div><button onClick={() => setEditingOrder(null)} className="w-8 h-8 rounded-full bg-white text-gray-400 hover:text-red-500 hover:text-shadow-md flex items-center justify-center"><i className="fas fa-times"></i></button></div><form onSubmit={saveEdit} className="p-6 space-y-6 flex-grow overflow-y-auto"><div className="space-y-4"><h4 className="text-sm font-bold text-eco-600 uppercase tracking-wider border-b border-eco-100 pb-1">Khách hàng</h4><div className="grid grid-cols-1 md:grid-cols-2 gap-4"><div><label className="text-xs font-bold text-gray-500 mb-1 block">Tên khách</label><input value={editingOrder.customerName} onChange={e => setEditingOrder({...editingOrder, customerName: e.target.value})} className="w-full p-2.5 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all text-sm font-medium" /></div><div><label className="text-xs font-bold text-gray-500 mb-1 block">Số điện thoại</label><input value={editingOrder.customerPhone} onChange={e => setEditingOrder({...editingOrder, customerPhone: e.target.value})} className="w-full p-2.5 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all text-sm" /></div></div><div><label className="text-xs font-bold text-gray-500 mb-1 block">Địa chỉ</label><textarea value={editingOrder.address} onChange={e => setEditingOrder({...editingOrder, address: e.target.value})} className="w-full p-2.5 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all text-sm resize-none" rows={2} /></div></div><div className="space-y-3"><div className="flex justify-between items-center border-b border-eco-100 pb-1"><h4 className="text-sm font-bold text-eco-600 uppercase tracking-wider">Hàng hóa</h4><button type="button" onClick={addEditItem} className="text-xs font-bold text-eco-600 hover:text-eco-700 bg-eco-50 hover:bg-eco-100 px-2 py-1 rounded transition-colors">+ Thêm</button></div><div className="bg-gray-50 rounded-xl p-3 space-y-3">{editingOrder.items.map((item, idx) => { const selectedIds = editingOrder.items.filter((i, iIdx) => iIdx !== idx && i.productId).map(i => i.productId); const availableProducts = products.filter(p => !selectedIds.includes(p.id) && (!item.name || p.name.toLowerCase().includes(item.name.toLowerCase()))); return (<div key={idx} className="flex gap-2 items-start group/editItem relative product-dropdown-container"><div className="flex-grow relative"><input value={item.name} onChange={(e) => updateEditItem(idx, 'name', e.target.value)} onFocus={() => setActiveEditProductRow(idx)} className="w-full p-2 bg-white border border-gray-200 rounded-lg text-sm focus:border-eco-500 outline-none" placeholder="Tên hàng" />{activeEditProductRow === idx && (<div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-100 rounded-lg shadow-xl z-[70] max-h-40 overflow-y-auto">{availableProducts.length === 0 ? (<div className="p-2 text-xs text-gray-400 text-center">{products.length === 0 ? "Kho trống" : "Không tìm thấy"}</div>) : (availableProducts.map(p => (<div key={p.id} onClick={() => selectProductForEditItem(idx, p)} className="px-3 py-2 hover:bg-eco-50 cursor-pointer flex justify-between items-center border-b border-gray-50 last:border-0"><div className="text-sm font-medium text-gray-800">{p.name}</div><div className="text-xs font-bold text-eco-600">{new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}</div></div>)))}</div>)}</div><div className="w-16"><input type="number" step="any" value={item.quantity === 0 ? '' : item.quantity} onChange={(e) => updateEditItem(idx, 'quantity', e.target.value === '' ? 0 : Number(e.target.value))} className="w-full p-2 text-center bg-white border border-gray-200 rounded-lg text-sm font-bold focus:border-eco-500 outline-none" placeholder="SL" /></div><div className="w-24"><input type="number" step="any" value={item.price === 0 ? '' : item.price} onChange={(e) => updateEditItem(idx, 'price', e.target.value === '' ? 0 : Number(e.target.value))} className="w-full p-2 text-right bg-white border border-gray-200 rounded-lg text-sm font-bold text-gray-700 focus:border-eco-500 outline-none" placeholder="Giá" /></div>{editingOrder.items.length > 1 && (<button type="button" onClick={() => removeEditItem(idx)} className="w-9 h-9 flex items-center justify-center text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"><i className="fas fa-trash-alt"></i></button>)}</div>); })}</div></div><div className="space-y-4"><h4 className="text-sm font-bold text-eco-600 uppercase tracking-wider border-b border-eco-100 pb-1">Thanh toán & Ghi chú</h4><div className="grid grid-cols-2 gap-4"><div><label className="text-xs font-bold text-gray-500 mb-1 block">Tổng tiền</label><input type="number" value={editingOrder.totalPrice} onChange={e => setEditingOrder({...editingOrder, totalPrice: Number(e.target.value)})} className="w-full p-3 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all font-bold text-gray-800" /></div><div><label className="text-xs font-bold text-gray-500 mb-1 block">Hình thức</label><div className="relative"><select value={editingOrder.paymentMethod} onChange={e => setEditingOrder({...editingOrder, paymentMethod: e.target.value as PaymentMethod})} className="w-full p-3 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all appearance-none text-sm font-medium"><option value={PaymentMethod.CASH}>Tiền mặt</option><option value={PaymentMethod.TRANSFER}>Chuyển khoản</option><option value={PaymentMethod.PAID}>Đã thanh toán</option></select><i className="fas fa-chevron-down absolute right-3 top-4 text-gray-400 text-xs pointer-events-none"></i></div></div></div><div><label className="text-xs font-bold text-gray-500 mb-1 block">Ghi chú</label><textarea value={editingOrder.notes || ''} onChange={e => setEditingOrder({...editingOrder, notes: e.target.value})} className="w-full p-3 bg-yellow-50/50 border border-yellow-100 focus:bg-white focus:border-yellow-400 rounded-lg outline-none transition-all text-sm text-yellow-900 placeholder-yellow-300 resize-none" placeholder="Ghi chú thêm..." rows={2} /></div></div></form><div className="p-5 border-t border-gray-100 bg-gray-50 rounded-b-2xl"><button onClick={saveEdit} className="w-full py-3.5 bg-black text-white rounded-xl font-bold hover:bg-gray-800 transition-all shadow-lg shadow-gray-200 active:scale-95">Lưu Thay Đổi</button></div></div></div>)}
       <ConfirmModal isOpen={showDeleteConfirm} title="Xóa đơn hàng?" message="Hành động này không thể hoàn tác. Bạn có chắc chắn muốn xóa đơn hàng này?" onConfirm={confirmDelete} onCancel={() => setShowDeleteConfirm(false)} confirmLabel="Xóa" isDanger={true} />
       
       {/* BULK DELETE CONFIRM */}
@@ -687,6 +735,22 @@ const TrackingDashboard: React.FC = () => {
         confirmLabel="Xóa Tất Cả" 
         isDanger={true} 
       />
+
+      {/* GLOBAL QR MODAL (Fixed z-index issues) */}
+      {qrState.isOpen && (
+          <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-gray-900/80 backdrop-blur-sm p-4" onClick={() => setQrState(prev => ({ ...prev, isOpen: false }))}>
+              <div className="bg-white p-5 rounded-xl shadow-2xl max-w-xs w-full text-center" onClick={e => e.stopPropagation()}>
+                  <h3 className="text-base font-bold text-gray-800 mb-3">Thanh toán QR</h3>
+                  {qrState.url ? <img src={qrState.url} className="w-full h-auto rounded border mb-3" /> : <div className="h-48 flex items-center justify-center"><i className="fas fa-spinner fa-spin"></i></div>}
+                  {qrState.order && <div className="text-xl font-black text-gray-900 mb-4">{new Intl.NumberFormat('vi-VN').format(qrState.order.totalPrice)}đ</div>}
+                  <div className="flex gap-2">
+                      <button onClick={handleShareQR} className="flex-1 py-2 bg-blue-50 text-blue-700 font-bold rounded text-xs">Chia sẻ QR</button>
+                      <button onClick={handleConfirmQrPayment} className="flex-1 py-2 bg-green-600 text-white font-bold rounded text-xs">Đã nhận tiền</button>
+                  </div>
+                  <button onClick={() => setQrState(prev => ({ ...prev, isOpen: false }))} className="mt-3 text-gray-400 text-xs hover:text-gray-600">Đóng</button>
+              </div>
+          </div>
+      )}
     </div>
   );
 };

@@ -26,6 +26,9 @@ interface Props {
   isSelected?: boolean;
   onToggleSelect?: (id: string) => void;
   onLongPress?: (id: string) => void;
+  
+  // QR Handler from Parent
+  onShowQR?: (order: Order) => void;
 }
 
 const statusConfig: Record<OrderStatus, { color: string; bg: string; label: string; icon: string }> = {
@@ -80,11 +83,10 @@ export const OrderCard: React.FC<Props> = ({
   onTouchStart, onTouchMove, onTouchEnd,
   isNewCustomer, onSplitBatch, priorityScore,
   customerData,
-  isSelectionMode, isSelected, onToggleSelect, onLongPress
+  isSelectionMode, isSelected, onToggleSelect, onLongPress,
+  onShowQR
 }) => {
   const [uploading, setUploading] = useState(false);
-  const [showQR, setShowQR] = useState(false);
-  const [qrUrl, setQrUrl] = useState('');
   const [showImageModal, setShowImageModal] = useState(false);
   const [showCompactPaymentChoice, setShowCompactPaymentChoice] = useState(false);
   const [showActionMenu, setShowActionMenu] = useState(false);
@@ -190,25 +192,12 @@ export const OrderCard: React.FC<Props> = ({
       else toast("Đã chuyển về: Chờ Chuyển khoản");
   };
   
-  const showVietQR = async (e?: React.MouseEvent) => {
+  const requestQR = (e?: React.MouseEvent) => {
       e?.stopPropagation();
-      if (showQR) { setShowQR(false); return; }
-      const bankConfig = await storageService.getBankConfig();
-      if (!bankConfig || !bankConfig.accountNo) { toast.error("Chưa cài đặt ngân hàng"); return; }
-      const desc = `DH ${order.id}`;
-      const url = `https://img.vietqr.io/image/${bankConfig.bankId}-${bankConfig.accountNo}-${bankConfig.template || 'compact2'}.png?amount=${order.totalPrice}&addInfo=${encodeURIComponent(desc)}&accountName=${encodeURIComponent(bankConfig.accountName)}`;
-      setQrUrl(url);
-      setShowQR(true);
+      if (onShowQR) onShowQR(order);
+      else toast.error("Tính năng QR chưa sẵn sàng");
   };
-  const handleShareQR = async () => {
-      if (!qrUrl) return;
-      try {
-          const response = await fetch(qrUrl);
-          const blob = await response.blob();
-          const file = new File([blob], `qr-${order.id}.png`, { type: "image/png" });
-          if (navigator.share) { await navigator.share({ title: 'Mã QR', text: `Thanh toán ${order.totalPrice}đ`, files: [file] }); } else { await navigator.clipboard.writeText(qrUrl); toast.success("Đã copy link QR"); }
-      } catch (e) { toast.error("Lỗi chia sẻ QR"); }
-  };
+
   const sendSMS = async () => { const msg = await generateDeliveryMessage(order); const ua = navigator.userAgent.toLowerCase(); const isIOS = ua.indexOf('iphone') > -1 || ua.indexOf('ipad') > -1; const separator = isIOS ? '&' : '?'; window.open(`sms:${order.customerPhone}${separator}body=${encodeURIComponent(msg)}`, '_self'); };
   const nextStatus = (e: React.MouseEvent) => { e.stopPropagation(); if(order.status === OrderStatus.PENDING) handleStatusChange(OrderStatus.PICKED_UP); else if(order.status === OrderStatus.PICKED_UP) handleStatusChange(OrderStatus.IN_TRANSIT); else if(order.status === OrderStatus.IN_TRANSIT) setShowCompactPaymentChoice(true); }
   const handlePrint = () => {
@@ -224,14 +213,14 @@ export const OrderCard: React.FC<Props> = ({
   const PaymentBadge = ({ compact = false }) => {
     const showText = isCompleted || order.paymentVerified;
     if (!showText && !compact) {
-         return <button onClick={(e) => { e.stopPropagation(); showVietQR(e); }} className="text-blue-600"><i className="fas fa-qrcode"></i></button>;
+         return <button onClick={(e) => { e.stopPropagation(); requestQR(e); }} className="text-blue-600"><i className="fas fa-qrcode"></i></button>;
     }
     const isTransfer = order.paymentMethod === PaymentMethod.TRANSFER;
     let text = '', style = '';
     if (order.paymentMethod === PaymentMethod.CASH) { text = 'Tiền mặt'; style = 'text-gray-500 bg-gray-50 border-gray-200'; }
     else if (order.paymentMethod === PaymentMethod.PAID) { text = 'Đã TT'; style = 'text-green-700 bg-green-50 border-green-100'; }
     else { text = order.paymentVerified ? 'Đã nhận' : 'Chờ CK'; style = order.paymentVerified ? 'text-green-700 bg-green-50 border-green-100 cursor-pointer' : 'text-blue-600 bg-blue-50 border-blue-100 cursor-pointer'; }
-    return (<div className="flex items-center gap-1" onClick={(e) => { if (isTransfer) { e.stopPropagation(); togglePaymentVerification(); } }}><span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${style}`}>{text}</span>{(!isCompleted && !order.paymentVerified) && <button onClick={showVietQR} className="text-blue-600 ml-0.5"><i className="fas fa-qrcode text-[10px]"></i></button>}</div>);
+    return (<div className="flex items-center gap-1" onClick={(e) => { if (isTransfer) { e.stopPropagation(); togglePaymentVerification(); } }}><span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${style}`}>{text}</span>{(!isCompleted && !order.paymentVerified) && <button onClick={requestQR} className="text-blue-600 ml-0.5"><i className="fas fa-qrcode text-[10px]"></i></button>}</div>);
   };
 
   const CheckboxOverlay = () => { if (!isSelectionMode) return null; return (<div className={`absolute top-0 bottom-0 left-0 w-1.5 ${isSelected ? 'bg-eco-500' : 'bg-transparent'}`}></div>); }
@@ -372,7 +361,6 @@ export const OrderCard: React.FC<Props> = ({
             </div>
         </div>
         {showImageModal && order.deliveryProof && (<div className="fixed inset-0 z-[99999] bg-black/95 flex items-center justify-center p-4" onClick={() => setShowImageModal(false)}><img src={order.deliveryProof} className="max-w-full max-h-full object-contain rounded" onClick={e=>e.stopPropagation()} /><button onClick={() => setShowImageModal(false)} className="absolute top-4 right-4 text-white text-2xl"><i className="fas fa-times"></i></button></div>)}
-        {showQR && (<div className="fixed inset-0 z-[99999] flex items-center justify-center bg-gray-900/80 backdrop-blur-sm p-4" onClick={() => setShowQR(false)}><div className="bg-white p-5 rounded-xl shadow-2xl max-w-xs w-full text-center" onClick={e => e.stopPropagation()}><h3 className="text-base font-bold text-gray-800 mb-3">Thanh toán QR</h3>{qrUrl ? <img src={qrUrl} className="w-full h-auto rounded border mb-3" /> : <div className="h-48 flex items-center justify-center"><i className="fas fa-spinner fa-spin"></i></div>}<div className="text-xl font-black text-gray-900 mb-4">{new Intl.NumberFormat('vi-VN').format(order.totalPrice)}đ</div><div className="flex gap-2"><button onClick={handleShareQR} className="flex-1 py-2 bg-blue-50 text-blue-700 font-bold rounded text-xs">Chia sẻ QR</button><button onClick={() => { togglePaymentVerification(); setShowQR(false); }} className="flex-1 py-2 bg-green-600 text-white font-bold rounded text-xs">Đã nhận tiền</button></div><button onClick={() => setShowQR(false)} className="mt-3 text-gray-400 text-xs hover:text-gray-600">Đóng</button></div></div>)}
     </div>
   );
 };
