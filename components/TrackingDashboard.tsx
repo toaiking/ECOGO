@@ -243,7 +243,11 @@ const TrackingDashboard: React.FC = () => {
 
     recognition.onstart = () => setIsListeningSearch(true);
     recognition.onend = () => setIsListeningSearch(false);
-    recognition.onerror = () => setIsListeningSearch(false);
+    recognition.onerror = (event: any) => {
+        setIsListeningSearch(false);
+        // Silent error or log
+        console.warn("Voice search error", event?.error);
+    };
 
     recognition.onresult = (event: any) => {
         const text = String(event.results[0][0].transcript);
@@ -256,7 +260,7 @@ const TrackingDashboard: React.FC = () => {
 
   const handleRenameBatch = async () => {
       if (filterBatch.length !== 1) return;
-      const oldName = filterBatch[0];
+      const oldName = filterBatch[0] as string;
       if (!oldName) return; // Ensure oldName is a valid string
 
       const newName = prompt(`Nhập tên mới cho lô: ${oldName}`, oldName);
@@ -272,8 +276,9 @@ const TrackingDashboard: React.FC = () => {
   const handleDeleteClick = (id: string) => { setDeleteId(id); setShowDeleteConfirm(true); };
   const confirmDelete = async () => { 
       if (deleteId) { 
-          const orderToDelete = orders.find(o => o.id === deleteId);
-          await storageService.deleteOrder(deleteId, orderToDelete ? { name: orderToDelete.customerName, address: orderToDelete.address } : undefined); 
+          const id = deleteId as string;
+          const orderToDelete = orders.find(o => o.id === id);
+          await storageService.deleteOrder(id, orderToDelete ? { name: orderToDelete.customerName, address: orderToDelete.address } : undefined); 
           toast.success('Đã xóa đơn hàng'); 
           setShowDeleteConfirm(false); setDeleteId(null); 
       } 
