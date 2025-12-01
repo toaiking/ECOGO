@@ -1,6 +1,8 @@
+
 import React, { useState, useEffect } from 'react';
 import { BankConfig } from '../types';
 import { storageService } from '../services/storageService';
+import { dataImportService } from '../services/dataImportService';
 import toast from 'react-hot-toast';
 
 interface Props {
@@ -38,6 +40,11 @@ const SettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
 
   // Logo State
   const [logo, setLogo] = useState<string | null>(null);
+  
+  // Import State
+  const [showPdfImport, setShowPdfImport] = useState(false);
+  const [pdfJsonData, setPdfJsonData] = useState('');
+  const [importBatchName, setImportBatchName] = useState('');
 
   useEffect(() => {
       if (isOpen) {
@@ -55,6 +62,10 @@ const SettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
 
               // Try fetching from cloud to update local if newer
               storageService.fetchQuickTagsFromCloud().then(t => setQuickTags(t));
+              
+              // Default batch name
+              const today = new Date().toISOString().slice(0, 10);
+              setImportBatchName(`PDF-${today}`);
           };
           load();
       }
@@ -117,12 +128,89 @@ const SettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
               const result = await storageService.generatePerformanceData(10000);
               setTestResult(`Hoàn tất! Tạo ${result.count} khách trong ${result.duration}ms.`);
               toast.success(`Stress test OK: ${result.duration}ms`);
-          } catch (e) {
-              setTestResult('Lỗi: ' + e);
+          } catch (e: any) {
+              setTestResult('Lỗi: ' + (e?.message || e));
           } finally {
               setIsRunningTest(false);
           }
       }, 100);
+  };
+
+  const handleMarkOld = async () => {
+      if (window.confirm("Bạn có chắc chắn muốn đánh dấu TẤT CẢ khách hàng hiện tại là KHÁCH CŨ không?\n\nHọ sẽ không hiện nhãn 'NEW' nữa.")) {
+          setIsRunningTest(true);
+          setTestResult('Đang cập nhật...');
+          try {
+              const count = await storageService.markAllCustomersAsOld();
+              setTestResult(`Đã cập nhật xong ${count} khách hàng.`);
+              toast.success(`Xong! ${count} khách hàng đã thành Khách Cũ.`);
+          } catch (e: any) {
+              setTestResult('Lỗi: ' + (e?.message || e));
+          } finally {
+              setIsRunningTest(false);
+          }
+      }
+  };
+  
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      if (file.type !== 'application/pdf') {
+          toast.error("Vui lòng chọn file PDF");
+          return;
+      }
+      
+      setIsRunningTest(true);
+      const loading = toast.loading("AI đang đọc PDF...");
+      setTestResult("Đang phân tích file PDF bằng AI...");
+
+      try {
+          const parsedData = await dataImportService.parsePdfFile(file);
+          setPdfJsonData(JSON.stringify(parsedData, null, 2));
+          toast.success(`Đã đọc được ${parsedData.length} dòng từ PDF!`);
+          setTestResult(`Đã trích xuất ${parsedData.length} đơn hàng. Vui lòng kiểm tra JSON bên dưới và bấm Import.`);
+      } catch (error: any) {
+          console.error(error);
+          toast.error("Lỗi đọc PDF: " + error.message);
+          setTestResult("Lỗi: " + error.message);
+      } finally {
+          toast.dismiss(loading);
+          setIsRunningTest(false);
+          // Clear input so same file can be selected again
+          e.target.value = '';
+      }
+  };
+
+  const handlePdfImport = async () => {
+      if (!pdfJsonData.trim()) {
+          toast.error("Vui lòng dán dữ liệu JSON hoặc chọn file PDF");
+          return;
+      }
+      if (!importBatchName.trim()) {
+          toast.error("Vui lòng nhập tên Lô");
+          return;
+      }
+      
+      setIsRunningTest(true);
+      setTestResult("Đang xử lý import...");
+      
+      try {
+          const rawData = JSON.parse(pdfJsonData);
+          if (!Array.isArray(rawData)) {
+              throw new Error("Dữ liệu JSON phải là một mảng []");
+          }
+          
+          const msg = await dataImportService.processImportData(rawData, importBatchName);
+          setTestResult(msg);
+          toast.success("Import thành công!");
+          setPdfJsonData('');
+      } catch (e: any) {
+          console.error(e);
+          setTestResult("Lỗi Import: " + e.message);
+          toast.error("Lỗi Import (Xem chi tiết bên dưới)");
+      } finally {
+          setIsRunningTest(false);
+      }
   };
 
   if (!isOpen) return null;
@@ -230,8 +318,60 @@ const SettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
 
             <div className="border-t border-gray-100 pt-4">
                 <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-3">Developer Zone</h4>
-                <div className="bg-yellow-50 rounded-xl p-4 border border-yellow-100">
-                    <p className="text-xs text-yellow-800 mb-3">Kiểm tra hiệu năng với dữ liệu lớn (Local Only).</p>
+                <div className="bg-yellow-50 rounded-xl p-4 border border-yellow-100 space-y-3">
+                    <button 
+                        onClick={() => setShowPdfImport(!showPdfImport)}
+                        className="w-full py-2 bg-purple-100 hover:bg-purple-200 text-purple-800 rounded-lg font-bold text-xs transition-colors flex items-center justify-center gap-2"
+                    >
+                        <i className="fas fa-file-import"></i> Import PDF Data (AI)
+                    </button>
+                    
+                    {showPdfImport && (
+                        <div className="space-y-2 animate-fade-in bg-white p-3 rounded-lg border border-yellow-200">
+                            <label className="text-[10px] font-bold text-gray-500 uppercase">Tên lô hàng</label>
+                            <input 
+                                value={importBatchName}
+                                onChange={e => setImportBatchName(e.target.value)}
+                                className="w-full p-2 bg-gray-50 border border-gray-200 rounded text-xs font-bold"
+                            />
+                            
+                            {/* File Upload Button */}
+                            <div className="relative group cursor-pointer">
+                                <label className="block w-full py-2 bg-eco-50 text-eco-700 border border-eco-200 rounded-lg text-center font-bold text-xs cursor-pointer hover:bg-eco-100 transition-colors">
+                                    <i className="fas fa-cloud-upload-alt mr-2"></i> Chọn File PDF để đọc
+                                    <input type="file" accept="application/pdf" className="hidden" onChange={handleFileSelect} disabled={isRunningTest} />
+                                </label>
+                            </div>
+
+                            <div className="text-center text-[10px] text-gray-400">HOẶC Dán JSON</div>
+                            
+                            <textarea 
+                                value={pdfJsonData}
+                                onChange={e => setPdfJsonData(e.target.value)}
+                                placeholder='[{"unit_price":120, "customer_name":"A", ...}]'
+                                className="w-full h-32 p-2 bg-gray-50 border border-gray-200 rounded text-[10px] font-mono"
+                            />
+                            
+                            <button 
+                                onClick={handlePdfImport}
+                                disabled={isRunningTest}
+                                className="w-full py-2 bg-purple-600 text-white rounded font-bold text-xs hover:bg-purple-700 shadow-md"
+                            >
+                                {isRunningTest ? 'Đang xử lý...' : 'Bắt đầu Import'}
+                            </button>
+                        </div>
+                    )}
+
+                    <div className="h-px bg-yellow-200 my-2"></div>
+
+                    <button 
+                        onClick={handleMarkOld} 
+                        disabled={isRunningTest}
+                        className="w-full py-2 bg-blue-100 hover:bg-blue-200 text-blue-800 rounded-lg font-bold text-xs transition-colors"
+                    >
+                        Đánh dấu tất cả là Khách cũ
+                    </button>
+
                     <button 
                         onClick={runStressTest} 
                         disabled={isRunningTest}
@@ -240,7 +380,7 @@ const SettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
                         {isRunningTest ? 'Đang chạy...' : 'Tạo 10.000 Khách hàng ảo'}
                     </button>
                     {testResult && (
-                        <div className="mt-2 text-xs font-mono bg-white p-2 rounded border border-gray-200 text-gray-600">
+                        <div className="mt-2 text-xs font-mono bg-white p-2 rounded border border-gray-200 text-gray-600 max-h-20 overflow-y-auto">
                             {testResult}
                         </div>
                     )}

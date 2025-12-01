@@ -17,12 +17,19 @@ const InventoryManager: React.FC = () => {
   const [formData, setFormData] = useState<Partial<Product>>({
     name: '',
     defaultPrice: 0,
+    importPrice: 0,
     stockQuantity: 0,
   });
+  
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   // Delete Modal State
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+
+  // Sync Confirmation State
+  const [showSyncConfirm, setShowSyncConfirm] = useState(false);
+  const [pendingProductUpdate, setPendingProductUpdate] = useState<Product | null>(null);
 
   useEffect(() => {
     const unsubscribe = storageService.subscribeProducts((data) => {
@@ -58,19 +65,75 @@ const InventoryManager: React.FC = () => {
     if (!formData.name) return;
 
     const qty = Number(formData.stockQuantity) || 0;
-    const newProduct: Product = {
-      id: uuidv4(),
+    
+    const productData: Product = {
+      id: editingId || uuidv4(),
       name: formData.name,
       defaultPrice: Number(formData.defaultPrice) || 0,
+      importPrice: Number(formData.importPrice) || 0,
       defaultWeight: 1, 
       stockQuantity: qty,
-      totalImported: qty, 
+      totalImported: qty, // Note: In edit mode this resets total imported if changed here, simplify for now
       lastImportDate: Date.now(),
     };
 
-    await storageService.saveProduct(newProduct);
-    setFormData({ name: '', defaultPrice: 0, stockQuantity: 0 });
-    toast.success('Đã nhập kho thành công');
+    // If editing existing product, preserve some original fields if not explicitly handled
+    if (editingId) {
+        const original = products.find(p => p.id === editingId);
+        if (original) {
+            productData.totalImported = original.totalImported; // Keep history
+            // If user explicitly changed stock in form, use it, else keep original or calculate diff
+            // Here we assume form input overrides stock
+        }
+    }
+
+    await storageService.saveProduct(productData);
+    
+    if (editingId) {
+        // If updating, ask to sync to pending orders
+        setPendingProductUpdate(productData);
+        setShowSyncConfirm(true);
+    } else {
+        toast.success('Đã nhập kho thành công');
+        resetForm();
+    }
+  };
+
+  const resetForm = () => {
+      setFormData({ name: '', defaultPrice: 0, importPrice: 0, stockQuantity: 0 });
+      setEditingId(null);
+      setPendingProductUpdate(null);
+  };
+
+  const handleEditClick = (product: Product) => {
+      setEditingId(product.id);
+      setFormData({
+          name: product.name,
+          defaultPrice: product.defaultPrice,
+          importPrice: product.importPrice,
+          stockQuantity: product.stockQuantity
+      });
+      // Scroll to top to see form
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleConfirmSync = async () => {
+      if (pendingProductUpdate) {
+          const count = await storageService.syncProductToPendingOrders(pendingProductUpdate);
+          if (count > 0) {
+              toast.success(`Đã cập nhật cho ${count} đơn hàng đang xử lý!`);
+          } else {
+              toast('Đã lưu SP. Không có đơn hàng nào cần cập nhật.', { icon: 'ℹ️' });
+          }
+      }
+      setShowSyncConfirm(false);
+      resetForm();
+  };
+
+  const handleSkipSync = () => {
+      toast.success('Đã cập nhật thông tin sản phẩm (Không đổi đơn cũ)');
+      setShowSyncConfirm(false);
+      resetForm();
   };
 
   const handleDeleteClick = (id: string) => {
@@ -110,8 +173,11 @@ const InventoryManager: React.FC = () => {
         {/* Add Product Form - Sticky Sidebar on Desktop */}
         <div className="lg:col-span-4">
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 sticky top-24">
-            <h3 className="text-xl font-bold text-gray-900 mb-6">
-              Nhập Hàng
+            <h3 className="text-xl font-bold text-gray-900 mb-6 flex justify-between items-center">
+              {editingId ? 'Sửa Sản Phẩm' : 'Nhập Hàng'}
+              {editingId && (
+                  <button onClick={resetForm} className="text-xs text-red-500 font-bold bg-red-50 px-2 py-1 rounded">Hủy sửa</button>
+              )}
             </h3>
             <form onSubmit={handleSubmit} className="space-y-5">
               <div className="group">
@@ -131,26 +197,37 @@ const InventoryManager: React.FC = () => {
                       type="number"
                       value={formData.defaultPrice}
                       onChange={e => setFormData({ ...formData, defaultPrice: Number(e.target.value) })}
-                      className="w-full p-3 bg-gray-50 border-transparent focus:bg-white focus:border-eco-500 border rounded-xl outline-none transition-all"
+                      className="w-full p-3 bg-gray-50 border-transparent focus:bg-white focus:border-eco-500 border rounded-xl outline-none transition-all font-bold"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-eco-600 uppercase tracking-wider mb-2">Số lượng</label>
+                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Giá nhập (Vốn)</label>
                     <input
                       type="number"
-                      value={formData.stockQuantity}
-                      onChange={e => setFormData({ ...formData, stockQuantity: Number(e.target.value) })}
-                      className="w-full p-3 bg-eco-50 border-transparent focus:bg-white focus:border-eco-500 border rounded-xl outline-none transition-all font-bold text-eco-800"
-                      placeholder="0"
+                      value={formData.importPrice}
+                      onChange={e => setFormData({ ...formData, importPrice: Number(e.target.value) })}
+                      className="w-full p-3 bg-gray-50 border-transparent focus:bg-white focus:border-eco-500 border rounded-xl outline-none transition-all text-gray-500"
+                      placeholder="Không bắt buộc"
                     />
                   </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-eco-600 uppercase tracking-wider mb-2">Số lượng tồn kho</label>
+                <input
+                  type="number"
+                  value={formData.stockQuantity}
+                  onChange={e => setFormData({ ...formData, stockQuantity: Number(e.target.value) })}
+                  className="w-full p-3 bg-eco-50 border-transparent focus:bg-white focus:border-eco-500 border rounded-xl outline-none transition-all font-bold text-eco-800"
+                  placeholder="0"
+                />
               </div>
               
               <button
                 type="submit"
-                className="w-full bg-black text-white py-3.5 rounded-xl hover:bg-gray-800 font-bold shadow-lg shadow-gray-200 transition-transform active:scale-95"
+                className={`w-full text-white py-3.5 rounded-xl font-bold shadow-lg transition-transform active:scale-95 ${editingId ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-200' : 'bg-black hover:bg-gray-800 shadow-gray-200'}`}
               >
-                + Thêm Vào Kho
+                {editingId ? 'Lưu Thay Đổi' : '+ Thêm Vào Kho'}
               </button>
             </form>
           </div>
@@ -204,10 +281,21 @@ const InventoryManager: React.FC = () => {
                             <tr key={p.id} className="group hover:bg-gray-50/80 transition-colors">
                                 <td className="p-4 align-top">
                                     <div className="font-bold text-gray-800 text-sm mb-1">{p.name}</div>
-                                    <div className="flex items-center gap-2 text-xs text-gray-500">
-                                        <span className="font-mono">{new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}đ</span>
-                                        <span className="w-1 h-1 rounded-full bg-gray-300"></span>
-                                        <span>{new Date(p.lastImportDate).toLocaleDateString('vi-VN')}</span>
+                                    <div className="flex flex-col gap-0.5">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-xs font-bold text-gray-700">Bán:</span>
+                                            <span className="text-xs font-mono">{new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}đ</span>
+                                        </div>
+                                        {p.importPrice && p.importPrice > 0 && (
+                                            <div className="flex items-center gap-2 text-gray-400">
+                                                <span className="text-[10px] font-bold">Vốn:</span>
+                                                <span className="text-[10px] font-mono">{new Intl.NumberFormat('vi-VN').format(p.importPrice)}đ</span>
+                                            </div>
+                                        )}
+                                        <div className="flex items-center gap-2 text-[10px] text-gray-400 mt-1">
+                                            <i className="far fa-clock"></i>
+                                            <span>{new Date(p.lastImportDate).toLocaleDateString('vi-VN')}</span>
+                                        </div>
                                     </div>
                                 </td>
                                 <td className="p-4 align-middle">
@@ -237,12 +325,22 @@ const InventoryManager: React.FC = () => {
                                     </div>
                                 </td>
                                 <td className="p-4 text-right align-middle">
-                                    <button 
-                                        onClick={() => handleDeleteClick(p.id)}
-                                        className="w-8 h-8 rounded-full flex items-center justify-center text-gray-300 hover:bg-red-50 hover:text-red-500 transition-all"
-                                    >
-                                        <i className="fas fa-times"></i>
-                                    </button>
+                                    <div className="flex justify-end gap-2">
+                                        <button 
+                                            onClick={() => handleEditClick(p)}
+                                            className="w-8 h-8 rounded-full flex items-center justify-center text-gray-400 hover:bg-blue-50 hover:text-blue-500 transition-all"
+                                            title="Sửa"
+                                        >
+                                            <i className="fas fa-edit"></i>
+                                        </button>
+                                        <button 
+                                            onClick={() => handleDeleteClick(p.id)}
+                                            className="w-8 h-8 rounded-full flex items-center justify-center text-gray-300 hover:bg-red-50 hover:text-red-500 transition-all"
+                                            title="Xóa"
+                                        >
+                                            <i className="fas fa-times"></i>
+                                        </button>
+                                    </div>
                                 </td>
                             </tr>
                           );
@@ -264,6 +362,18 @@ const InventoryManager: React.FC = () => {
         onCancel={() => setShowDeleteConfirm(false)}
         confirmLabel="Xóa ngay"
         isDanger={true}
+      />
+
+      {/* SYNC CONFIRMATION MODAL */}
+      <ConfirmModal 
+        isOpen={showSyncConfirm}
+        title="Đồng bộ thay đổi?"
+        message="Bạn có muốn áp dụng thay đổi (Tên/Giá) cho TẤT CẢ các đơn hàng ĐANG XỬ LÝ chứa sản phẩm này không?"
+        onConfirm={handleConfirmSync}
+        onCancel={handleSkipSync}
+        confirmLabel="Có, Đồng bộ ngay"
+        cancelLabel="Không, Chỉ đơn mới"
+        isDanger={false}
       />
     </div>
   );

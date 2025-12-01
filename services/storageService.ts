@@ -1,3 +1,4 @@
+
 import { Order, OrderStatus, Product, Customer, BankConfig, Notification } from '../types';
 import { db } from '../firebaseConfig';
 import { v4 as uuidv4 } from 'uuid';
@@ -85,23 +86,24 @@ const invalidateIndices = () => {
     _idIndex = null;
 };
 
-// String Normalization Helper
-const normalizeString = (str: string): string => {
+// String Normalization Helper - EXPORTED for UI consistency
+export const normalizeString = (str: string): string => {
     if (!str) return "";
     return str
         .normalize("NFD")
         .replace(/[\u0300-\u036f]/g, "")
         .replace(/đ/g, "d").replace(/Đ/g, "D")
-        .replace(/[^a-zA-Z0-9\s]/g, " ") 
-        .replace(/\s+/g, " ") 
-        .trim()
+        .replace(/[^a-zA-Z0-9]/g, "") // Remove ALL special chars including spaces for strict matching
         .toLowerCase();
 };
 
-const normalizePhone = (phone: string) => {
+export const normalizePhone = (phone: string) => {
     if (!phone) return '';
     let p = phone.replace(/[^0-9]/g, '');
     if (p.startsWith('84')) p = '0' + p.slice(2);
+    if (p.startsWith('+84')) p = '0' + p.slice(3);
+    // Handle case where user might enter just 912345678 (missing 0)
+    if (p.length === 9 && !p.startsWith('0')) p = '0' + p;
     return p;
 };
 
@@ -110,6 +112,7 @@ const generateCustomerId = (name: string, phone: string, address: string): strin
     const cleanPhone = normalizePhone(phone);
     if (cleanPhone && cleanPhone.length > 5) return cleanPhone;
     
+    // If no phone, use hash of address
     const key = normalizeString(name) + "_" + normalizeString(address);
     let hash = 0;
     for (let i = 0; i < key.length; i++) {
@@ -143,6 +146,7 @@ const ensureOrdersLoaded = () => {
 };
 
 const buildIndices = () => {
+    // Always rebuild if null, but also allow forced rebuilds via invalidateIndices
     if (_phoneIndex && _addressIndex && _idIndex) return;
     
     const list = ensureCustomersLoaded();
@@ -154,32 +158,46 @@ const buildIndices = () => {
 
     for (const c of list) {
         _idIndex.set(c.id, c);
+        
         if (c.phone && c.phone.length > 5) {
-            _phoneIndex.set(normalizePhone(c.phone), c);
+            const p = normalizePhone(c.phone);
+            _phoneIndex.set(p, c);
         }
+        
         if (c.address && c.address.length > 5) {
             const normAddr = normalizeString(c.address);
+            // We want to keep the one with the lowest priority score (highest rank) if duplicates exist
             const existing = _addressIndex.get(normAddr);
-            if (!existing || (c.priorityScore || 999) < (existing.priorityScore || 999)) {
+            const currentScore = (c.priorityScore !== undefined && c.priorityScore !== null) ? c.priorityScore : 999999;
+            const existingScore = (existing?.priorityScore !== undefined && existing.priorityScore !== null) ? existing.priorityScore : 999999;
+
+            if (!existing || currentScore < existingScore) {
                 _addressIndex.set(normAddr, c);
             }
         }
     }
 };
 
-const findMatchingCustomer = (orderPhone: string, orderAddress: string): Customer | undefined => {
+export const findMatchingCustomer = (orderPhone: string, orderAddress: string, customerId?: string): Customer | undefined => {
     buildIndices(); 
     
+    // 0. Try ID Match First (100% Accuracy)
+    if (customerId && _idIndex?.has(customerId)) {
+        return _idIndex.get(customerId);
+    }
+
+    // 1. Try Phone Match
     if (orderPhone) {
         const normPhone = normalizePhone(orderPhone);
-        if (_phoneIndex?.has(normPhone)) {
+        if (normPhone && _phoneIndex?.has(normPhone)) {
             return _phoneIndex.get(normPhone);
         }
     }
 
+    // 2. Try Address Match
     if (orderAddress) {
         const normAddr = normalizeString(orderAddress);
-        if (_addressIndex?.has(normAddr)) {
+        if (normAddr && _addressIndex?.has(normAddr)) {
             return _addressIndex.get(normAddr);
         }
     }
@@ -403,6 +421,91 @@ export const storageService = {
       await safeCloudOp(() => deleteDoc(doc(db, "products", id)));
   },
 
+  // --- NEW: SYNC PRODUCT UPDATES TO PENDING ORDERS ---
+  syncProductToPendingOrders: async (product: Product) => {
+      const orders = ensureOrdersLoaded() || [];
+      const pendingStatuses = [OrderStatus.PENDING, OrderStatus.PICKED_UP, OrderStatus.IN_TRANSIT];
+      
+      const ordersToUpdate: Order[] = [];
+
+      for (const order of orders) {
+          // Skip completed orders
+          if (!pendingStatuses.includes(order.status)) continue;
+
+          let hasChanges = false;
+          
+          // Check items in order
+          const newItems = order.items.map(item => {
+              if (item.productId === product.id) {
+                  // Only update if something actually changed
+                  if (item.name !== product.name || 
+                      item.price !== product.defaultPrice || 
+                      item.importPrice !== product.importPrice) {
+                      
+                      hasChanges = true;
+                      return {
+                          ...item,
+                          name: product.name,
+                          price: product.defaultPrice,
+                          importPrice: product.importPrice
+                      };
+                  }
+              }
+              return item;
+          });
+
+          if (hasChanges) {
+              const newTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0);
+              const updatedOrder = { 
+                  ...order, 
+                  items: newItems, 
+                  totalPrice: newTotal,
+                  lastUpdatedBy: 'System (Sync)' 
+              };
+              ordersToUpdate.push(updatedOrder);
+          }
+      }
+
+      if (ordersToUpdate.length > 0) {
+          // Batch Update Memory
+          const currentOrders = ensureOrdersLoaded() || [];
+          ordersToUpdate.forEach(updatedOrder => {
+              const idx = currentOrders.findIndex(o => o.id === updatedOrder.id);
+              if (idx >= 0) currentOrders[idx] = updatedOrder;
+          });
+          
+          _memoryOrders = currentOrders;
+          localStorage.setItem(ORDER_KEY, JSON.stringify(currentOrders));
+          window.dispatchEvent(new Event('storage_' + ORDER_KEY));
+
+          // Batch Update Cloud
+          if (isOnline()) {
+              const CHUNK = 300;
+              for (let i = 0; i < ordersToUpdate.length; i += CHUNK) {
+                  const chunk = ordersToUpdate.slice(i, i + CHUNK);
+                  const batch = writeBatch(db);
+                  
+                  chunk.forEach(o => {
+                      const ref = doc(db, "orders", o.id);
+                      batch.update(ref, { 
+                          items: o.items, 
+                          totalPrice: o.totalPrice,
+                          lastUpdatedBy: 'System (Product Sync)' 
+                      });
+                  });
+                  
+                  try {
+                      await batch.commit();
+                  } catch (e) {
+                      console.error("Failed to sync product to pending orders", e);
+                  }
+              }
+          }
+          return ordersToUpdate.length;
+      }
+      return 0;
+  },
+
   // --- CUSTOMERS (DELTA SYNC ENGINE) ---
   subscribeCustomers: (callback: (customers: Customer[]) => void) => {
       const list = ensureCustomersLoaded();
@@ -544,321 +647,156 @@ export const storageService = {
       invalidateIndices();
       localStorage.removeItem(CUSTOMER_KEY);
       window.dispatchEvent(new Event('storage_' + CUSTOMER_KEY));
-      
+
       if (!skipCloud && isOnline()) {
-          const deleteBatch = async () => {
-             if (_quotaExhausted) return;
-
-             const q = query(collection(db, "customers"), limit(400));
-             try {
-                const snap = await getDocs(q);
-                if (snap.empty) return;
-
-                const batch = writeBatch(db);
-                snap.forEach(d => batch.delete(d.ref));
-                await batch.commit();
-                await delay(500); 
-                await deleteBatch();
-             } catch (e: any) {
-                if (e.code === 'resource-exhausted') {
-                    markQuotaExhausted();
-                }
-             }
-          };
-
-          await safeCloudOp(async () => {
-              await deleteBatch();
-          });
+          const q = query(collection(db, "customers"));
+          const snapshot = await getDocs(q);
+          const batch = writeBatch(db);
+          snapshot.docs.forEach((doc) => batch.delete(doc.ref));
+          await batch.commit();
       }
   },
 
-  importCustomersBatch: async (customers: Customer[], skipCloud = false) => {
+  markAllCustomersAsOld: async () => {
+      const list = ensureCustomersLoaded() || [];
+      if (list.length === 0) return 0;
+
+      // 1. Update in memory and local storage immediately for UI response
+      list.forEach(c => {
+          c.isLegacy = true;
+          c.updatedAt = Date.now();
+      });
+      _memoryCustomers = list;
+      localStorage.setItem(CUSTOMER_KEY, JSON.stringify(list));
+      window.dispatchEvent(new Event('storage_' + CUSTOMER_KEY));
+
+      // 2. Batch Update to Cloud (Chunked)
+      if (isOnline()) {
+          const CHUNK = 400; // Safe limit
+          let processed = 0;
+          
+          for (let i = 0; i < list.length; i += CHUNK) {
+              if (_quotaExhausted) break;
+              
+              const batch = writeBatch(db);
+              const chunk = list.slice(i, i + CHUNK);
+              
+              chunk.forEach(c => {
+                   const ref = doc(db, "customers", c.id);
+                   batch.update(ref, { isLegacy: true, updatedAt: Date.now() });
+              });
+
+              try {
+                  await batch.commit();
+                  processed += chunk.length;
+                  await delay(200); // Small delay between batches
+              } catch (e: any) {
+                  if (e.code === 'resource-exhausted') markQuotaExhausted();
+                  console.error("Batch update failed", e);
+              }
+          }
+          return processed;
+      }
+      return list.length;
+  },
+
+  importCustomersBatch: async (newCustomers: Customer[], localOnly = false) => {
       const currentList = ensureCustomersLoaded() || [];
       const map = new Map<string, Customer>();
       
       currentList.forEach(c => map.set(c.id, c));
       
-      customers.forEach(c => {
-          const id = c.id || generateCustomerId(c.name, c.phone, c.address);
-          const finalCustomer = { ...c, id, updatedAt: Date.now() };
-          
-          const existing = map.get(id);
-          if (!existing) {
-              map.set(id, finalCustomer);
-          } else {
-              map.set(id, {
-                  ...finalCustomer,
-                  lastOrderDate: Math.max(existing.lastOrderDate, finalCustomer.lastOrderDate),
-                  totalOrders: existing.totalOrders
-              });
-          }
-      }); 
-      
-      const newList = Array.from(map.values());
-      _memoryCustomers = newList;
-      invalidateIndices(); 
+      newCustomers.forEach(c => {
+          map.set(c.id, { ...c, updatedAt: Date.now() });
+      });
 
-      localStorage.setItem(CUSTOMER_KEY, JSON.stringify(newList));
+      const mergedList = Array.from(map.values());
+      _memoryCustomers = mergedList;
+      invalidateIndices();
+
+      localStorage.setItem(CUSTOMER_KEY, JSON.stringify(mergedList));
       window.dispatchEvent(new Event('storage_' + CUSTOMER_KEY));
 
-      if (isOnline() && !skipCloud) {
-          const CHUNK_SIZE = 200; 
-          for (let i = 0; i < customers.length; i += CHUNK_SIZE) {
-              if (_quotaExhausted) break;
-              const chunk = customers.slice(i, i + CHUNK_SIZE);
-              const batch = writeBatch(db);
-              chunk.forEach(c => {
-                  const id = c.id || generateCustomerId(c.name, c.phone, c.address);
-                  batch.set(doc(db, "customers", id), sanitize({ ...c, id, updatedAt: Date.now() }));
-              });
-              try {
-                await batch.commit();
-                await delay(300); 
-              } catch (e: any) {
-                 if (e.code === 'resource-exhausted') {
-                     markQuotaExhausted();
-                     break; 
-                 }
-              }
+      if (!localOnly && isOnline()) {
+          const CHUNK = 300;
+          for (let i = 0; i < newCustomers.length; i += CHUNK) {
+               if (_quotaExhausted) break;
+               const batch = writeBatch(db);
+               const chunk = newCustomers.slice(i, i + CHUNK);
+               chunk.forEach(c => {
+                   const ref = doc(db, "customers", c.id);
+                   batch.set(ref, sanitize({ ...c, updatedAt: Date.now() }));
+               });
+               try {
+                   await batch.commit();
+                   await delay(500);
+               } catch(e: any) {
+                   if(e.code === 'resource-exhausted') markQuotaExhausted();
+               }
           }
       }
-      return customers.length;
+  },
+
+  generatePerformanceData: async (count: number) => {
+      const startTime = Date.now();
+      const dummy: Customer[] = [];
+      for(let i=0; i<count; i++) {
+          const id = uuidv4();
+          dummy.push({
+              id,
+              name: `Khách Hàng Test ${i}`,
+              phone: `09${Math.floor(Math.random()*100000000)}`,
+              address: `Địa chỉ giả lập số ${i}, Quận ${i%10 + 1}, TP.HCM`,
+              priorityScore: i,
+              lastOrderDate: Date.now(),
+              updatedAt: Date.now()
+          });
+      }
+      
+      // Local Only Import for Performance Test
+      await storageService.importCustomersBatch(dummy, true);
+      
+      return { count, duration: Date.now() - startTime };
+  },
+
+  findMatchingCustomer: findMatchingCustomer,
+
+  isNewCustomer: (phone: string, address: string, customerId?: string): boolean => {
+      const c = findMatchingCustomer(phone, address, customerId);
+      // If customer not found in DB, they are NEW
+      if (!c) return true;
+      
+      // If explicitly marked as legacy (old), they are NOT new
+      if (c.isLegacy) return false;
+
+      // Otherwise fallback to order count logic
+      return (c.totalOrders || 0) <= 1;
   },
 
   // --- ORDERS ---
   subscribeOrders: (callback: (orders: Order[]) => void) => {
-      const list = ensureOrdersLoaded();
-      if (list) callback(list);
+      const load = () => { 
+          try {
+             const local = localStorage.getItem(ORDER_KEY);
+             _memoryOrders = local ? JSON.parse(local) : [];
+             callback(_memoryOrders || []); 
+          } catch { callback([]); }
+      };
+      load();
 
       if (isOnline()) {
-          const q = query(collection(db, "orders"));
+          // Chỉ lấy đơn hàng trong 30 ngày gần đây để tối ưu
+          const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
+          const q = query(collection(db, "orders"), where("createdAt", ">", thirtyDaysAgo));
+          
           return onSnapshot(q, (snapshot) => {
-              const newList: Order[] = [];
-              snapshot.forEach(d => newList.push(d.data() as Order));
+              const list: Order[] = [];
+              snapshot.forEach(d => list.push(d.data() as Order));
               
-              _memoryOrders = newList;
-              callback(newList);
-
-              if (_orderSaveTimer) clearTimeout(_orderSaveTimer);
-              _orderSaveTimer = setTimeout(() => {
-                  localStorage.setItem(ORDER_KEY, JSON.stringify(newList));
-              }, 2000);
-          }, (err) => {
-              if (err.code === 'resource-exhausted') {
-                  markQuotaExhausted();
-              }
-          });
-      } else {
-          const handler = () => {
-              const list = ensureOrdersLoaded();
-              if (list) callback(list);
-          };
-          window.addEventListener('storage_' + ORDER_KEY, handler);
-          return () => window.removeEventListener('storage_' + ORDER_KEY, handler);
-      }
-  },
-
-  saveOrder: async (order: Order) => {
-      const cleanOrder = sanitize(order);
-      const list = ensureOrdersLoaded() || [];
-      list.unshift(cleanOrder);
-      
-      _memoryOrders = list;
-      window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-      localStorage.setItem(ORDER_KEY, JSON.stringify(list));
-      
-      await safeCloudOp(async () => {
-          await setDoc(doc(db, "orders", order.id), cleanOrder);
-      });
-      
-      await storageService.addNotification("Đơn hàng mới", `Đơn #${order.id} của ${order.customerName} đã được tạo.`, 'info', order.id);
-  },
-
-  deleteOrder: async (id: string, details?: { name: string, address: string }) => {
-      let list = ensureOrdersLoaded() || [];
-      list = list.filter(o => o.id !== id);
-      
-      _memoryOrders = list;
-      window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-      localStorage.setItem(ORDER_KEY, JSON.stringify(list));
-      
-      await safeCloudOp(() => deleteDoc(doc(db, "orders", id)));
-
-      if (details) {
-           await storageService.addNotification("Đã xóa đơn", `Đơn #${id} (${details.name}) đã bị xóa.`, 'warning');
-      }
-  },
-
-  updateOrderDetails: async (order: Order) => {
-      const updated = { 
-          ...order, 
-          updatedAt: Date.now(), 
-          lastUpdatedBy: localStorage.getItem(USER_KEY) || 'Admin' 
-      };
-
-      const list = ensureOrdersLoaded() || [];
-      const idx = list.findIndex(o => o.id === order.id);
-      if (idx >= 0) {
-           list[idx] = updated;
-           _memoryOrders = list;
-           window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-           localStorage.setItem(ORDER_KEY, JSON.stringify(list));
-      }
-
-      await safeCloudOp(() => setDoc(doc(db, "orders", order.id), sanitize(updated)));
-  },
-
-  updateStatus: async (id: string, status: OrderStatus, proof?: string, details?: {name: string, address: string}) => {
-      const updateData: any = { 
-          status, 
-          updatedAt: Date.now(),
-          lastUpdatedBy: localStorage.getItem(USER_KEY) || 'Admin'
-      };
-      if (proof) updateData.deliveryProof = proof;
-
-      const list = ensureOrdersLoaded() || [];
-      const idx = list.findIndex(o => o.id === id);
-      if (idx >= 0) {
-           list[idx] = { ...list[idx], ...updateData };
-           _memoryOrders = list;
-           window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-           localStorage.setItem(ORDER_KEY, JSON.stringify(list));
-      }
-
-      await safeCloudOp(() => updateDoc(doc(db, "orders", id), updateData));
-
-      if (details && (status === OrderStatus.DELIVERED || status === OrderStatus.CANCELLED)) {
-           const type = status === OrderStatus.DELIVERED ? 'success' : 'error';
-           const msg = status === OrderStatus.DELIVERED ? `Đã giao thành công đơn #${id}` : `Đã hủy đơn #${id}`;
-           await storageService.addNotification("Cập nhật trạng thái", msg, type, id);
-      }
-  },
-
-  deleteDeliveryProof: async (id: string) => {
-      const list = ensureOrdersLoaded() || [];
-      const idx = list.findIndex(o => o.id === id);
-      if (idx >= 0) {
-           delete list[idx].deliveryProof;
-           _memoryOrders = list;
-           window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-           localStorage.setItem(ORDER_KEY, JSON.stringify(list));
-      }
-      await safeCloudOp(() => updateDoc(doc(db, "orders", id), { deliveryProof: deleteField() }));
-  },
-
-  updatePaymentVerification: async (id: string, verified: boolean, details?: {name: string}) => {
-      const updateData = { 
-          paymentVerified: verified,
-          updatedAt: Date.now(),
-          lastUpdatedBy: localStorage.getItem(USER_KEY) || 'Admin'
-      };
-
-      const list = ensureOrdersLoaded() || [];
-      const idx = list.findIndex(o => o.id === id);
-      if (idx >= 0) {
-           list[idx] = { ...list[idx], ...updateData };
-           _memoryOrders = list;
-           window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-           localStorage.setItem(ORDER_KEY, JSON.stringify(list));
-      }
-
-      await safeCloudOp(() => updateDoc(doc(db, "orders", id), updateData));
-
-      if (verified && details) {
-          await storageService.addNotification("Xác nhận thanh toán", `Đã nhận tiền đơn #${id} (${details.name})`, 'success', id);
-      }
-  },
-
-  saveOrdersList: async (orders: Order[]) => {
-      _memoryOrders = orders;
-      localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
-      window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-
-      await safeCloudOp(async () => {
-          const batch = writeBatch(db);
-          orders.forEach(o => {
-              batch.update(doc(db, "orders", o.id), { orderIndex: o.orderIndex });
-          });
-          await batch.commit();
-      });
-  },
-
-  splitOrderToNextBatch: async (id: string, currentBatch: string) => {
-      let nextBatch = currentBatch.includes('-Split') ? currentBatch : (currentBatch + "-Split");
-      const list = ensureOrdersLoaded() || [];
-      const order = list.find(o => o.id === id);
-
-      if (order) {
-           const updated = { ...order, batchId: nextBatch, updatedAt: Date.now() };
-           await storageService.updateOrderDetails(updated);
-           await storageService.addNotification("Tách lô", `Đơn #${id} đã chuyển sang lô ${nextBatch}`, 'warning', id);
-      }
-  },
-  
-  autoSortOrders: async (orders: Order[]) => {
-      buildIndices(); 
-
-      const sorted = [...orders].sort((a, b) => {
-          const customerA = findMatchingCustomer(a.customerPhone, a.address);
-          const customerB = findMatchingCustomer(b.customerPhone, b.address);
-
-          const pA = customerA?.priorityScore || 999;
-          const pB = customerB?.priorityScore || 999;
-          
-          if (pA !== pB) return pA - pB;
-          
-          const addrA = normalizeString(a.address);
-          const addrB = normalizeString(b.address);
-          const addrCompare = addrA.localeCompare(addrB);
-          
-          if (addrCompare !== 0) return addrCompare;
-
-          return (a.createdAt - b.createdAt);
-      });
-
-      const reindexed = sorted.map((o, idx) => ({ ...o, orderIndex: idx }));
-      await storageService.saveOrdersList(reindexed);
-      
-      return reindexed.length;
-  },
-
-  isNewCustomer: (phone: string, address: string): boolean => {
-      buildIndices();
-      const match = findMatchingCustomer(phone, address);
-      return !match;
-  },
-
-  // --- NOTIFICATIONS ---
-  addNotification: async (title: string, message: string, type: 'info' | 'success' | 'warning' | 'error', relatedOrderId?: string) => {
-      const notifData: any = { 
-          id: uuidv4(), 
-          title, 
-          message, 
-          type, 
-          isRead: false, 
-          createdAt: Date.now() 
-      };
-      if (relatedOrderId) notifData.relatedOrderId = relatedOrderId;
-
-      const local = localStorage.getItem(NOTIF_KEY);
-      const list: Notification[] = local ? JSON.parse(local) : [];
-      list.unshift(notifData as Notification);
-      if (list.length > 20) list.splice(20); 
-      localStorage.setItem(NOTIF_KEY, JSON.stringify(list));
-      window.dispatchEvent(new Event('storage_notif'));
-
-      await safeCloudOp(() => addDoc(collection(db, "notifications"), sanitize(notifData)));
-  },
-
-  subscribeNotifications: (callback: (notifs: Notification[]) => void) => {
-      try { const data = localStorage.getItem(NOTIF_KEY); callback(data ? JSON.parse(data) : []); } catch { callback([]); }
-
-      if (isOnline()) {
-          const q = query(collection(db, "notifications"), orderBy("createdAt", "desc"), limit(20));
-          return onSnapshot(q, (snapshot) => {
-              const list: Notification[] = [];
-              snapshot.forEach(d => list.push({ ...d.data(), id: d.id } as Notification));
-              localStorage.setItem(NOTIF_KEY, JSON.stringify(list));
+              // Merge with local older orders if needed (optional strategy)
+              // For now, assume we just sync the active window
+              _memoryOrders = list;
+              localStorage.setItem(ORDER_KEY, JSON.stringify(list));
               callback(list);
           }, (err) => {
               if (err.code === 'resource-exhausted') {
@@ -866,84 +804,550 @@ export const storageService = {
               }
           });
       } else {
-          const handler = () => { try { const data = localStorage.getItem(NOTIF_KEY); callback(data ? JSON.parse(data) : []); } catch {} };
-          window.addEventListener('storage_notif', handler);
-          return () => window.removeEventListener('storage_notif', handler);
+          const handler = () => load();
+          window.addEventListener('storage_' + ORDER_KEY, handler);
+          return () => window.removeEventListener('storage_' + ORDER_KEY, handler);
       }
+  },
+
+  // NEW: Fetch Long Term Stats (12 Months) - One time fetch
+  fetchLongTermStats: async (): Promise<Order[]> => {
+      // 1. Get Local Data First
+      let allOrders = ensureOrdersLoaded() || [];
+      
+      if (isOnline()) {
+          try {
+              // Fetch last 12 months delivered/completed orders
+              const oneYearAgo = Date.now() - (365 * 24 * 60 * 60 * 1000);
+              
+              // FIX: Query only by createdAt to avoid needing a Composite Index (createdAt + status).
+              // We filter status client-side.
+              const q = query(
+                  collection(db, "orders"), 
+                  where("createdAt", ">", oneYearAgo)
+              );
+              
+              const snapshot = await getDocs(q);
+              const cloudOrders: Order[] = [];
+              snapshot.forEach(d => {
+                  const data = d.data() as Order;
+                  if (data.status === 'DELIVERED') {
+                      cloudOrders.push(data);
+                  }
+              });
+              
+              // Merge: Create a Map of ID -> Order
+              const mergedMap = new Map<string, Order>();
+              allOrders.forEach(o => mergedMap.set(o.id, o));
+              cloudOrders.forEach(o => mergedMap.set(o.id, o));
+              
+              return Array.from(mergedMap.values());
+          } catch (e) {
+              console.error("Failed to fetch long term stats", e);
+              return allOrders; // Fallback to local
+          }
+      }
+      return allOrders;
+  },
+
+  saveOrder: async (order: Order) => {
+      let list = _memoryOrders || [];
+      if (list.length === 0) {
+           const local = localStorage.getItem(ORDER_KEY);
+           if(local) list = JSON.parse(local);
+      }
+      
+      // AUTO LINK CUSTOMER LOGIC
+      // 1. Check if customer already exists by Phone/Address
+      let existingCust = findMatchingCustomer(order.customerPhone, order.address, order.customerId);
+      
+      if (!existingCust) {
+          // Create New Customer
+          const newCustId = generateCustomerId(order.customerName, order.customerPhone, order.address);
+          const newCust: Customer = {
+              id: newCustId,
+              name: order.customerName,
+              phone: order.customerPhone,
+              address: order.address,
+              lastOrderDate: Date.now(),
+              totalOrders: 1,
+              priorityScore: 999999
+          };
+          await storageService.upsertCustomer(newCust);
+          // LINK ORDER TO NEW ID
+          order.customerId = newCustId;
+      } else {
+          // Update Existing Customer
+          existingCust.lastOrderDate = Date.now();
+          existingCust.totalOrders = (existingCust.totalOrders || 0) + 1;
+          await storageService.upsertCustomer(existingCust);
+          // LINK ORDER TO EXISTING ID
+          order.customerId = existingCust.id;
+      }
+
+      // 2. Save Order
+      const idx = list.findIndex(o => o.id === order.id);
+      if (idx >= 0) list[idx] = order; else list.push(order);
+      
+      _memoryOrders = list;
+      localStorage.setItem(ORDER_KEY, JSON.stringify(list));
+      window.dispatchEvent(new Event('storage_' + ORDER_KEY));
+
+      await safeCloudOp(() => setDoc(doc(db, "orders", order.id), sanitize(order)));
+  },
+
+  deleteOrder: async (id: string, customerContext?: { name: string, address: string }) => {
+      let list = _memoryOrders || [];
+      list = list.filter(o => o.id !== id);
+      _memoryOrders = list;
+      localStorage.setItem(ORDER_KEY, JSON.stringify(list));
+      window.dispatchEvent(new Event('storage_' + ORDER_KEY));
+
+      await safeCloudOp(() => deleteDoc(doc(db, "orders", id)));
+      if (customerContext) {
+           storageService.createNotification({
+              id: uuidv4(),
+              title: "Đơn hàng bị xóa",
+              message: `Đơn ${id} của ${customerContext.name} đã bị xóa bởi ${storageService.getCurrentUser()}`,
+              type: 'warning',
+              isRead: false,
+              createdAt: Date.now()
+          });
+      }
+  },
+  
+  deleteOrdersBatch: async (ids: string[]) => {
+      if (!ids || ids.length === 0) return;
+      
+      // 1. Local Delete (Instant UI Feedback)
+      let list = _memoryOrders || [];
+      list = list.filter(o => !ids.includes(o.id));
+      _memoryOrders = list;
+      localStorage.setItem(ORDER_KEY, JSON.stringify(list));
+      window.dispatchEvent(new Event('storage_' + ORDER_KEY));
+      
+      // 2. Cloud Delete (Batched)
+      if (isOnline()) {
+          const CHUNK = 400; // Limit for batch writes is 500
+          for (let i = 0; i < ids.length; i += CHUNK) {
+               const chunk = ids.slice(i, i + CHUNK);
+               const batch = writeBatch(db);
+               chunk.forEach(id => {
+                   batch.delete(doc(db, "orders", id));
+               });
+               
+               try {
+                   await batch.commit();
+                   await delay(200); // Small delay
+               } catch(e) {
+                   console.error("Batch delete failed", e);
+               }
+          }
+      }
+  },
+
+  updateStatus: async (orderId: string, status: OrderStatus, proofImage?: string, customerContext?: { name: string, address: string }) => {
+      const list = _memoryOrders || [];
+      const idx = list.findIndex(o => o.id === orderId);
+      if (idx >= 0) {
+          const finalProof = proofImage || list[idx].deliveryProof;
+          
+          const updated = { 
+              ...list[idx], 
+              status, 
+              deliveryProof: finalProof,
+              lastUpdatedBy: storageService.getCurrentUser() || 'Unknown' 
+          };
+          list[idx] = updated;
+          _memoryOrders = list;
+          localStorage.setItem(ORDER_KEY, JSON.stringify(list));
+          window.dispatchEvent(new Event('storage_' + ORDER_KEY));
+
+          // Create cloud update payload dynamically to avoid undefined values
+          const updatePayload: any = { 
+              status, 
+              lastUpdatedBy: storageService.getCurrentUser() || 'Unknown'
+          };
+          
+          if (finalProof !== undefined) {
+              updatePayload.deliveryProof = finalProof;
+          }
+
+          await safeCloudOp(() => updateDoc(doc(db, "orders", orderId), updatePayload));
+
+          if (customerContext) {
+              storageService.createNotification({
+                  id: uuidv4(),
+                  title: `Cập nhật trạng thái đơn ${orderId}`,
+                  message: `Đơn của ${customerContext.name} đã chuyển sang: ${status}`,
+                  type: 'info',
+                  isRead: false,
+                  createdAt: Date.now(),
+                  relatedOrderId: orderId
+              });
+          }
+      }
+  },
+
+  deleteDeliveryProof: async (orderId: string) => {
+      const list = _memoryOrders || [];
+      const idx = list.findIndex(o => o.id === orderId);
+      if (idx >= 0) {
+          const updated = { ...list[idx] };
+          delete updated.deliveryProof;
+          
+          list[idx] = updated;
+          _memoryOrders = list;
+          localStorage.setItem(ORDER_KEY, JSON.stringify(list));
+          window.dispatchEvent(new Event('storage_' + ORDER_KEY));
+
+          await safeCloudOp(() => updateDoc(doc(db, "orders", orderId), { 
+              deliveryProof: deleteField()
+          }));
+      }
+  },
+
+  updatePaymentVerification: async (orderId: string, verified: boolean, customerContext?: { name: string }) => {
+      const list = _memoryOrders || [];
+      const idx = list.findIndex(o => o.id === orderId);
+      if (idx >= 0) {
+          const updated = { ...list[idx], paymentVerified: verified };
+          list[idx] = updated;
+          _memoryOrders = list;
+          localStorage.setItem(ORDER_KEY, JSON.stringify(list));
+          window.dispatchEvent(new Event('storage_' + ORDER_KEY));
+
+          await safeCloudOp(() => updateDoc(doc(db, "orders", orderId), { paymentVerified: verified }));
+
+          if (verified && customerContext) {
+              storageService.createNotification({
+                  id: uuidv4(),
+                  title: "Thanh toán thành công",
+                  message: `Đơn ${orderId} của ${customerContext.name} đã xác nhận nhận tiền.`,
+                  type: 'success',
+                  isRead: false,
+                  createdAt: Date.now(),
+                  relatedOrderId: orderId
+              });
+          }
+      }
+  },
+
+  updateOrderDetails: async (order: Order) => {
+      const list = _memoryOrders || [];
+      const idx = list.findIndex(o => o.id === order.id);
+      if (idx >= 0) {
+          list[idx] = order;
+          _memoryOrders = list;
+          localStorage.setItem(ORDER_KEY, JSON.stringify(list));
+          window.dispatchEvent(new Event('storage_' + ORDER_KEY));
+          await safeCloudOp(() => setDoc(doc(db, "orders", order.id), sanitize(order)));
+      }
+  },
+
+  saveOrdersList: async (orders: Order[]) => {
+      // Batch save local
+      _memoryOrders = orders;
+      localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
+      window.dispatchEvent(new Event('storage_' + ORDER_KEY));
+
+      // Cloud update orderIndex & Link ID if missing
+      if (isOnline()) {
+           const batch = writeBatch(db);
+           orders.forEach(o => {
+               const ref = doc(db, "orders", o.id);
+               const updateData: any = { orderIndex: o.orderIndex };
+               // If we just linked an ID during sort, save it to cloud too
+               if (o.customerId) {
+                   updateData.customerId = o.customerId;
+               }
+               batch.update(ref, updateData);
+           });
+           await batch.commit();
+      }
+  },
+
+  autoSortOrders: async (orders: Order[]) => {
+     // CRITICAL: Force rebuild indices to ensure we have latest customer scores from LocalStorage
+     invalidateIndices();
+     ensureCustomersLoaded(); 
+     buildIndices(); 
+     
+     const sorted = [...orders].sort((a, b) => {
+         const custA = findMatchingCustomer(a.customerPhone, a.address, a.customerId);
+         const custB = findMatchingCustomer(b.customerPhone, b.address, b.customerId);
+         
+         // Inject customerId back into order object if found (Healing self)
+         if (custA && !a.customerId) a.customerId = custA.id;
+         if (custB && !b.customerId) b.customerId = custB.id;
+
+         // Use strict default to ensure math works
+         // Default to extremely high number if not found so they go to bottom
+         const scoreA = (custA?.priorityScore !== undefined && custA.priorityScore !== null) ? custA.priorityScore : 999999;
+         const scoreB = (custB?.priorityScore !== undefined && custB.priorityScore !== null) ? custB.priorityScore : 999999;
+         
+         // 1. Primary Sort: Customer Priority Score (Low number = High priority)
+         // Ascending order: 1, 2, 3 ... 
+         if (scoreA !== scoreB) return scoreA - scoreB;
+         
+         // 2. Secondary Sort: Stability using existing orderIndex (visual order)
+         return (a.orderIndex || 0) - (b.orderIndex || 0);
+     });
+
+     // Re-assign indexes
+     const reindexed = sorted.map((o, idx) => ({ ...o, orderIndex: idx }));
+     
+     await storageService.saveOrdersList(reindexed);
+     return reindexed.length;
+  },
+
+  // --- ROUTE LEARNING LOGIC (ROBUST BACKWARD RIPPLE) ---
+  learnRoutePriority: async (orders: Order[]) => {
+    // Force Load fresh customer list from storage to avoid reference issues
+    const freshCustomerList = ensureCustomersLoaded();
+    if (!freshCustomerList) return;
+
+    // Create a Map for O(1) access during the loop
+    const customerMap = new Map<string, Customer>();
+    freshCustomerList.forEach(c => customerMap.set(c.id, c));
+    
+    // Also build a quick lookup for order -> customer ID
+    // Optimization: Build Index ONCE.
+    invalidateIndices();
+    buildIndices();
+
+    const uniqueCustomerIdsInOrder: string[] = [];
+    const seenIDs = new Set<string>();
+
+    // 1. Extract Unique Customer IDs from the new sorted order
+    for (const order of orders) {
+        const c = findMatchingCustomer(order.customerPhone, order.address, order.customerId);
+        if (c && !seenIDs.has(c.id)) {
+            uniqueCustomerIdsInOrder.push(c.id);
+            seenIDs.add(c.id);
+        }
+    }
+
+    if (uniqueCustomerIdsInOrder.length < 2) return;
+
+    // 2. BACKWARD RIPPLE ALGORITHM
+    // We modify the objects inside customerMap directly, then save the array back.
+    let memoryUpdated = false;
+    const batch = writeBatch(db);
+    let commitNeeded = false;
+    
+    // Loop from second-to-last down to 0
+    for (let i = uniqueCustomerIdsInOrder.length - 2; i >= 0; i--) {
+        const currentId = uniqueCustomerIdsInOrder[i];
+        const nextId = uniqueCustomerIdsInOrder[i+1];
+
+        const currentCust = customerMap.get(currentId);
+        const nextCust = customerMap.get(nextId);
+
+        if (!currentCust || !nextCust) continue;
+
+        const currentScore = (currentCust.priorityScore !== undefined && currentCust.priorityScore !== null) ? currentCust.priorityScore : 999999;
+        const nextScore = (nextCust.priorityScore !== undefined && nextCust.priorityScore !== null) ? nextCust.priorityScore : 999999;
+
+        // VIOLATION DETECTED: Current should be smaller than Next (Priority 1 is better than 10)
+        // If they are equal, or current is larger, we must push current down (make it smaller number)
+        if (currentScore >= nextScore) {
+            const newScore = nextScore - 1;
+            
+            // UPDATE IN MEMORY OBJECT
+            if (currentCust.priorityScore !== newScore) {
+                currentCust.priorityScore = newScore;
+                currentCust.updatedAt = Date.now();
+                memoryUpdated = true;
+
+                if (isOnline()) {
+                    const ref = doc(db, "customers", currentCust.id);
+                    batch.update(ref, { priorityScore: newScore, updatedAt: Date.now() });
+                    commitNeeded = true;
+                }
+            }
+        }
+    }
+    
+    // 3. Save Changes
+    if (memoryUpdated) {
+        // Re-construct array from map
+        const updatedList = Array.from(customerMap.values());
+        _memoryCustomers = updatedList;
+        localStorage.setItem(CUSTOMER_KEY, JSON.stringify(_memoryCustomers));
+        
+        // CRITICAL: Clear indices so next Auto Sort uses the new scores immediately
+        invalidateIndices(); 
+        
+        window.dispatchEvent(new Event('storage_' + CUSTOMER_KEY));
+        console.log("Route learned: Updated priorities in local storage.");
+    }
+
+    // Commit Cloud Batch
+    if (commitNeeded && isOnline()) {
+        try {
+            await batch.commit();
+            console.log("Route preference learned and saved to Cloud.");
+        } catch (e) {
+            console.error("Failed to learn route:", e);
+        }
+    }
+  },
+
+  // --- BATCH MANAGEMENT ---
+  renameBatch: async (oldBatchId: string, newBatchId: string) => {
+      // 1. Local update (Memory Orders)
+      let list = ensureOrdersLoaded() || [];
+      const toUpdate = list.filter(o => o.batchId === oldBatchId);
+      
+      if (toUpdate.length === 0) return;
+      
+      toUpdate.forEach(o => o.batchId = newBatchId);
+      
+      // Update memory reference & Save to LocalStorage immediately for UI reactivity
+      _memoryOrders = list;
+      localStorage.setItem(ORDER_KEY, JSON.stringify(list));
+      window.dispatchEvent(new Event('storage_' + ORDER_KEY));
+
+      // 2. Cloud update (Batched)
+      if (isOnline()) {
+          const CHUNK = 400;
+          for (let i = 0; i < toUpdate.length; i += CHUNK) {
+               const chunk = toUpdate.slice(i, i + CHUNK);
+               const batch = writeBatch(db);
+               chunk.forEach(o => {
+                   batch.update(doc(db, "orders", o.id), { batchId: newBatchId });
+               });
+               try {
+                   await batch.commit();
+               } catch(e) { console.error("Batch rename failed", e); }
+          }
+      }
+  },
+
+  // --- NOTIFICATIONS ---
+  subscribeNotifications: (callback: (notifs: Notification[]) => void) => {
+      const load = () => {
+          try {
+              const local = localStorage.getItem(NOTIF_KEY);
+              callback(local ? JSON.parse(local) : []);
+          } catch { callback([]); }
+      };
+      load();
+
+      if (isOnline()) {
+          // Listen to last 20 notifications
+          const q = query(collection(db, "notifications"), orderBy("createdAt", "desc"), limit(20));
+          return onSnapshot(q, (snapshot) => {
+              const list: Notification[] = [];
+              snapshot.forEach(d => list.push(d.data() as Notification));
+              localStorage.setItem(NOTIF_KEY, JSON.stringify(list));
+              callback(list);
+          }, (err) => {
+              // ignore quota error for notifs
+          });
+      } else {
+          const handler = () => load();
+          window.addEventListener('storage_' + NOTIF_KEY, handler);
+          return () => window.removeEventListener('storage_' + NOTIF_KEY, handler);
+      }
+  },
+
+  createNotification: async (notif: Notification) => {
+      // Local first
+      const local = localStorage.getItem(NOTIF_KEY);
+      const list: Notification[] = local ? JSON.parse(local) : [];
+      list.unshift(notif);
+      if(list.length > 50) list.pop();
+      localStorage.setItem(NOTIF_KEY, JSON.stringify(list));
+      window.dispatchEvent(new Event('storage_' + NOTIF_KEY));
+
+      await safeCloudOp(() => setDoc(doc(db, "notifications", notif.id), sanitize(notif)));
   },
 
   markNotificationRead: async (id: string) => {
       const local = localStorage.getItem(NOTIF_KEY);
-      if (local) {
+      if(local) {
           const list: Notification[] = JSON.parse(local);
-          const idx = list.findIndex(n => n.id === id);
-          if (idx !== -1) { 
-              list[idx].isRead = true; 
-              localStorage.setItem(NOTIF_KEY, JSON.stringify(list)); 
-              window.dispatchEvent(new Event('storage_notif')); 
+          const item = list.find(n => n.id === id);
+          if(item) {
+              item.isRead = true;
+              localStorage.setItem(NOTIF_KEY, JSON.stringify(list));
+              window.dispatchEvent(new Event('storage_' + NOTIF_KEY));
+              // Dispatch specific event for UI feedback
+              window.dispatchEvent(new CustomEvent('local_notif_read', { detail: id }));
           }
       }
-      window.dispatchEvent(new CustomEvent('local_notif_read', { detail: id }));
       await safeCloudOp(() => updateDoc(doc(db, "notifications", id), { isRead: true }));
   },
 
   markAllNotificationsRead: async () => {
-      window.dispatchEvent(new Event('local_notif_read_all'));
       const local = localStorage.getItem(NOTIF_KEY);
-      if (local) {
-          const list: Notification[] = JSON.parse(local).map((n: Notification) => ({ ...n, isRead: true }));
+      if(local) {
+          const list: Notification[] = JSON.parse(local);
+          list.forEach(n => n.isRead = true);
           localStorage.setItem(NOTIF_KEY, JSON.stringify(list));
-          window.dispatchEvent(new Event('storage_notif'));
+          window.dispatchEvent(new Event('storage_' + NOTIF_KEY));
+          window.dispatchEvent(new Event('local_notif_read_all'));
       }
-      await safeCloudOp(async () => {
-          const q = query(collection(db, "notifications"), limit(50));
-          const snap = await getDocs(q);
+      
+      if(isOnline()) {
           const batch = writeBatch(db);
-          let count = 0;
-          snap.forEach(d => { if (!d.data().isRead) { batch.update(d.ref, { isRead: true }); count++; } });
-          if (count > 0) await batch.commit();
-      });
+          const q = query(collection(db, "notifications"), where("isRead", "==", false), limit(20));
+          const snap = await getDocs(q);
+          snap.forEach(d => {
+              batch.update(d.ref, { isRead: true });
+          });
+          if(!snap.empty) await batch.commit();
+      }
   },
 
   clearAllNotifications: async () => {
       localStorage.removeItem(NOTIF_KEY);
-      window.dispatchEvent(new Event('storage_notif'));
-      await safeCloudOp(async () => {
-           const q = query(collection(db, "notifications"), limit(100));
-           const snap = await getDocs(q);
-           const batch = writeBatch(db);
-           snap.forEach(d => batch.delete(d.ref));
-           await batch.commit();
-      });
+      window.dispatchEvent(new Event('storage_' + NOTIF_KEY));
+      window.dispatchEvent(new Event('local_notif_clear_all'));
+      
+      // Note: We don't clear from Cloud to keep audit trail, just local view
   },
 
-  // --- STRESS TEST TOOL ---
-  generatePerformanceData: async (count: number) => {
-      const startTime = performance.now();
-      const dummyCustomers: Customer[] = [];
-      const streets = ['Lê Lợi', 'Nguyễn Huệ', 'Trần Hưng Đạo', 'Cách Mạng Tháng 8', 'Điện Biên Phủ'];
-      const districts = ['Quận 1', 'Quận 3', 'Quận 5', 'Quận 10', 'Bình Thạnh'];
+  splitOrderToNextBatch: async (orderId: string, currentBatchId: string) => {
+      const list = _memoryOrders || [];
+      const order = list.find(o => o.id === orderId);
+      if(!order) return;
 
-      for (let i = 0; i < count; i++) {
-          const street = streets[Math.floor(Math.random() * streets.length)];
-          const district = districts[Math.floor(Math.random() * districts.length)];
-          dummyCustomers.push({
-              id: uuidv4(),
-              name: `Khách hàng Test ${i + 1}`,
-              phone: `09${Math.floor(Math.random() * 100000000)}`,
-              address: `Số ${i} ${street}, ${district}, TP.HCM`,
-              priorityScore: Math.floor(Math.random() * 6000),
-              lastOrderDate: Date.now(),
-              updatedAt: Date.now()
-          });
-      }
-
-      await storageService.importCustomersBatch(dummyCustomers, true);
-
-      const endTime = performance.now();
-      return {
-          duration: Math.round(endTime - startTime),
-          count: count
+      // Logic to find next batch name? 
+      // Simplified: Just add suffix or date
+      // If current is LÔ-2023-10-27, next is LÔ-2023-10-28 or LÔ-2023-10-27-CA-2
+      const today = new Date();
+      today.setDate(today.getDate() + 1);
+      const nextDateStr = today.toISOString().slice(0, 10);
+      const nextBatchId = `LÔ-${nextDateStr}`;
+      
+      const updated = { 
+          ...order, 
+          batchId: nextBatchId, 
+          status: OrderStatus.PENDING,
+          orderIndex: 0 // Reset index
       };
+      
+      await storageService.updateOrderDetails(updated);
+      
+      storageService.createNotification({
+          id: uuidv4(),
+          title: "Đơn hàng chuyển lô",
+          message: `Đơn ${orderId} đã được chuyển sang lô ${nextBatchId}`,
+          type: 'info',
+          isRead: false,
+          createdAt: Date.now(),
+          relatedOrderId: orderId
+      });
+  },
+  
+  splitOrdersBatch: async (orders: {id: string, batchId: string}[]) => {
+      // Reuse single logic in a loop or batch
+      // Since splitting involves notifications and complex logic, we'll iterate
+      for (const o of orders) {
+          await storageService.splitOrderToNextBatch(o.id, o.batchId);
+      }
   }
 };

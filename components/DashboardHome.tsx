@@ -3,10 +3,12 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { NavLink } from 'react-router-dom';
 import { Order, Product, OrderStatus } from '../types';
 import { storageService } from '../services/storageService';
+import RevenueReport from './RevenueReport';
 
 const DashboardHome: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [showReport, setShowReport] = useState(false);
   const currentUser = storageService.getCurrentUser() || 'Admin';
 
   useEffect(() => {
@@ -57,9 +59,17 @@ const DashboardHome: React.FC = () => {
   return (
     <div className="max-w-6xl mx-auto pb-10 animate-fade-in">
       {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-2xl font-black text-gray-800 tracking-tight">Xin chào, {currentUser}! 👋</h1>
-        <p className="text-gray-500">Đây là tổng quan tình hình kinh doanh hôm nay.</p>
+      <div className="mb-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div>
+            <h1 className="text-2xl font-black text-gray-800 tracking-tight">Xin chào, {currentUser}! 👋</h1>
+            <p className="text-gray-500">Đây là tổng quan tình hình kinh doanh hôm nay.</p>
+        </div>
+        <button 
+            onClick={() => setShowReport(true)}
+            className="bg-white border border-gray-200 text-gray-700 hover:text-blue-600 hover:border-blue-200 px-4 py-2 rounded-xl font-bold text-sm shadow-sm transition-all flex items-center gap-2"
+        >
+            <i className="fas fa-chart-pie"></i> Xem Báo Cáo Chi Tiết
+        </button>
       </div>
 
       {/* Stats Grid */}
@@ -131,6 +141,8 @@ const DashboardHome: React.FC = () => {
             </NavLink>
         </div>
       </div>
+
+      <RevenueReport isOpen={showReport} onClose={() => setShowReport(false)} />
     </div>
   );
 };

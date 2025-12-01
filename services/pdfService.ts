@@ -146,13 +146,13 @@ const generateQRCode = async (text: string): Promise<string> => {
 };
 
 const drawDashedLine = (doc: jsPDF, x1: number, y1: number, x2: number, y2: number) => {
-    doc.setLineDashPattern([3, 3], 0);
+    doc.setLineDashPattern([2, 2], 0);
     doc.line(x1, y1, x2, y2);
     doc.setLineDashPattern([], 0); // Reset
 };
 
 export const pdfService = {
-    // --- MODE 1: COMPACT LIST (Bảng kê chi tiết) ---
+    // --- MODE 1: COMPACT LIST (2 COLUMNS - ~50 orders/page) ---
     generateCompactList: async (orders: Order[], batchId: string) => {
         const doc = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
         
@@ -162,122 +162,182 @@ export const pdfService = {
         if (binaryFont) {
             const fontFileName = 'Roboto.ttf';
             doc.addFileToVFS(fontFileName, binaryFont);
-            
-            // CRITICAL FIX: Map both normal and bold styles to the SAME font file
-            // This prevents jsPDF from falling back to Helvetica when setFont(..., 'bold') is called
             doc.addFont(fontFileName, 'Roboto', 'normal');
             doc.addFont(fontFileName, 'Roboto', 'bold');
-            
             doc.setFont('Roboto');
             fontName = 'Roboto';
         }
 
         const logoBase64 = storageService.getLogo();
-        let y = 15;
-
-        // Header
-        if (logoBase64) {
-            try { doc.addImage(logoBase64, 'PNG', 10, 5, 15, 15, undefined, 'FAST'); } catch(e){}
-        }
         
-        doc.setFontSize(16);
-        doc.setFont(fontName, 'bold');
-        doc.text("DANH SÁCH ĐƠN HÀNG", 105, 12, { align: 'center' });
+        // --- PAGE CONFIG ---
+        const pageH = 297;
+        const pageW = 210;
+        const margin = 5;
+        const headerH = 25;
+        const footerH = 10;
         
-        doc.setFont(fontName, 'normal');
-        doc.setFontSize(10);
-        doc.text(`Lô: ${batchId} - Tổng: ${orders.length} đơn`, 105, 18, { align: 'center' });
-        doc.text(`Ngày in: ${new Date().toLocaleDateString('vi-VN')}`, 105, 23, { align: 'center' });
-
-        y = 30;
-
-        // Table Header
-        doc.setFontSize(9);
-        doc.setFillColor(230, 230, 230);
-        doc.rect(10, y, 190, 8, 'F');
+        // Column Config
+        const colGap = 5;
+        const colW = (pageW - (margin * 2) - colGap) / 2; // ~97.5mm
         
-        doc.setFont(fontName, 'bold');
-        doc.text("STT", 12, y + 5);
-        doc.text("Khách hàng / SĐT", 25, y + 5);
-        doc.text("Địa chỉ", 75, y + 5);
-        doc.text("Ghi chú", 140, y + 5);
-        doc.text("Thu hộ", 180, y + 5);
-        y += 8;
-
-        doc.setFont(fontName, 'normal');
+        // Content Config
+        const startY = headerH;
+        const contentH = pageH - headerH - footerH;
+        const rowH = 11; // 10mm height per order
+        const rowsPerCol = Math.floor(contentH / rowH); // ~26 rows
+        const ordersPerPage = rowsPerCol * 2; // ~52 orders
 
         let totalAmount = 0;
+        const itemSummary: Record<string, number> = {};
 
+        // Prepare Summary Data
+        orders.forEach(o => {
+            totalAmount += o.totalPrice;
+            o.items.forEach(item => {
+                const name = item.name.trim();
+                if(name) itemSummary[name] = (itemSummary[name] || 0) + item.quantity;
+            });
+        });
+
+        // HELPER: Draw Header on New Page
+        const drawHeader = (pageNo: number) => {
+            if (logoBase64) {
+                try { doc.addImage(logoBase64, 'PNG', margin, 5, 12, 12, undefined, 'FAST'); } catch(e){}
+            }
+            doc.setFontSize(14);
+            doc.setFont(fontName, 'bold');
+            doc.text("DANH SÁCH GIAO HÀNG", pageW / 2, 10, { align: 'center' });
+            
+            doc.setFontSize(9);
+            doc.setFont(fontName, 'normal');
+            doc.text(`Lô: ${batchId} | ${new Date().toLocaleDateString('vi-VN')} | Trang ${pageNo}`, pageW / 2, 16, { align: 'center' });
+            
+            // Draw Column Headers
+            doc.setFontSize(8);
+            doc.setFont(fontName, 'bold');
+            doc.setFillColor(230, 230, 230);
+            
+            // Col 1 Header
+            doc.rect(margin, 20, colW, 5, 'F');
+            doc.text("#", margin + 2, 23.5);
+            doc.text("Khách / ĐC / Hàng", margin + 8, 23.5);
+            doc.text("Thu hộ", margin + colW - 2, 23.5, { align: 'right' });
+
+            // Col 2 Header
+            const col2X = margin + colW + colGap;
+            doc.rect(col2X, 20, colW, 5, 'F');
+            doc.text("#", col2X + 2, 23.5);
+            doc.text("Khách / ĐC / Hàng", col2X + 8, 23.5);
+            doc.text("Thu hộ", col2X + colW - 2, 23.5, { align: 'right' });
+        };
+
+        let pageIndex = 1;
+        drawHeader(pageIndex);
+
+        // --- RENDER LOOP ---
         for (let i = 0; i < orders.length; i++) {
             const o = orders[i];
-            totalAmount += o.totalPrice;
-
-            if (y > 280) {
+            
+            // Calculate Position
+            const indexInPage = i % ordersPerPage;
+            if (i > 0 && indexInPage === 0) {
                 doc.addPage();
-                y = 15;
-                doc.setFont(fontName, 'bold');
-                doc.text("STT", 12, y);
-                doc.text("Khách hàng", 25, y);
-                y += 5;
-                doc.setFont(fontName, 'normal');
+                pageIndex++;
+                drawHeader(pageIndex);
             }
 
-            const rowH = 10;
-            doc.setFontSize(9);
-            doc.text(`${i + 1}`, 12, y + 4);
+            const colIndex = indexInPage < rowsPerCol ? 0 : 1;
+            const rowIndex = indexInPage % rowsPerCol;
             
-            // Name & Phone
+            const x = margin + (colIndex * (colW + colGap));
+            const y = startY + (rowIndex * rowH);
+
+            // Draw Row Content
+            // 1. Index
+            doc.setFontSize(8);
             doc.setFont(fontName, 'bold');
-            doc.text(o.customerName, 25, y + 4);
-            doc.setFont(fontName, 'normal');
-            doc.setFontSize(8);
-            doc.text(o.customerPhone, 25, y + 8);
-
-            // Address & Items
-            doc.setFontSize(8);
-            const addr = doc.splitTextToSize(o.address, 60);
-            doc.text(addr[0] + (addr.length > 1 ? '...' : ''), 75, y + 4);
+            doc.text(`${i + 1}`, x + 2, y + 4);
             
-            doc.setTextColor(80, 80, 80);
-            const items = o.items.map(it => `${it.name} (${it.quantity})`).join(', ');
-            const itemsSplit = doc.splitTextToSize(items, 60);
-            doc.text(itemsSplit[0], 75, y + 8);
-            doc.setTextColor(0, 0, 0);
+            // 2. Customer Name (Bold)
+            doc.setFontSize(8);
+            doc.text(o.customerName, x + 8, y + 4);
+            
+            // Phone (Small next to name)
+            doc.setFont(fontName, 'normal');
+            doc.setFontSize(7);
+            doc.text(` - ${o.customerPhone}`, x + 8 + doc.getTextWidth(o.customerName), y + 4);
 
-            // Notes
-            if (o.notes) {
-                const notesSplit = doc.splitTextToSize(o.notes, 35);
-                doc.text(notesSplit[0] + (notesSplit.length > 1 ? '...' : ''), 140, y + 4);
+            // 3. Address (Truncated line 1)
+            const addrWidth = colW - 35; // Space for address
+            const addr = o.address.length > 35 ? o.address.substring(0, 32) + "..." : o.address;
+            doc.text(addr, x + 8, y + 7);
+
+            // 4. Items (Line 2)
+            doc.setFontSize(7);
+            const items = o.items.map(it => `${it.name}(${it.quantity})`).join(', ');
+            let itemStr = items;
+            if (doc.getTextWidth(items) > addrWidth) {
+                 // Simple truncate for compact view
+                 itemStr = items.substring(0, 50) + "...";
             }
+            doc.text(itemStr, x + 8, y + 10);
 
-            // Price
+            // 5. Money
             doc.setFontSize(9);
             doc.setFont(fontName, 'bold');
             const price = new Intl.NumberFormat('vi-VN').format(o.totalPrice);
-            doc.text(price, 180, y + 6);
+            doc.text(price, x + colW - 2, y + 5, { align: 'right' });
+            
+            // Payment Method
+            doc.setFontSize(6);
             doc.setFont(fontName, 'normal');
+            const method = o.paymentMethod === PaymentMethod.CASH ? 'TM' : (o.paymentVerified ? 'Đã CK' : 'Chờ CK');
+            doc.text(method, x + colW - 2, y + 9, { align: 'right' });
 
-            // Payment Method Label
-            const note = o.paymentMethod === PaymentMethod.CASH ? 'COD' : 'Đã TT';
-            doc.setFontSize(7);
-            doc.text(note, 200, y + 6, { align: 'right' });
-
+            // Separator Line
             doc.setDrawColor(240, 240, 240);
-            doc.line(10, y + rowH, 200, y + rowH);
-            y += rowH + 2;
+            doc.line(x, y + rowH, x + colW, y + rowH);
         }
 
-        // Summary Footer
-        y += 5;
+        // --- SUMMARY PAGE ---
+        doc.addPage();
+        doc.setFontSize(14);
+        doc.setFont(fontName, 'bold');
+        doc.text("TỔNG HỢP", pageW / 2, 15, { align: 'center' });
+        
         doc.setFontSize(11);
-        doc.setFont(fontName, 'bold'); 
-        doc.text(`TỔNG CỘNG: ${new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(totalAmount)}`, 190, y, { align: 'right' });
+        doc.text(`Tổng đơn: ${orders.length}`, 20, 30);
+        doc.text(`Tổng tiền: ${new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(totalAmount)}`, 20, 38);
+
+        doc.text("HÀNG HÓA CẦN CHUẨN BỊ:", 20, 50);
+        doc.setFontSize(10);
+        doc.setFont(fontName, 'normal');
+        
+        let sumY = 60;
+        const sortedSummary = Object.entries(itemSummary).sort((a, b) => a[0].localeCompare(b[0]));
+        
+        sortedSummary.forEach(([name, qty]) => {
+            if (sumY > 280) {
+                doc.addPage();
+                sumY = 20;
+            }
+            doc.text(name, 20, sumY);
+            doc.setLineDashPattern([1, 1], 0);
+            doc.line(100, sumY, 170, sumY);
+            doc.setLineDashPattern([], 0);
+            doc.setFont(fontName, 'bold');
+            doc.text(qty.toString(), 180, sumY, { align: 'right' });
+            doc.setFont(fontName, 'normal');
+            sumY += 7;
+        });
 
         const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
         doc.save(`DanhSach_${batchId}_${dateStr}.pdf`);
     },
 
-    // --- MODE 2: INVOICE BATCH (8 TEM/TRANG) ---
+    // --- MODE 2: MODERN INVOICE GRID (8 TEM/A4) ---
+    // Updated Layout: Professional, Clean Grid, High Priority on Total & ID
     generateInvoiceBatch: async (orders: Order[], batchId: string) => {
         const doc = new jsPDF({
             orientation: 'p',
@@ -302,19 +362,22 @@ export const pdfService = {
         const logoBase64 = storageService.getLogo();
         const bankConfig = await storageService.getBankConfig();
 
+        // BRAND COLORS
+        const COLOR_PRIMARY = [21, 128, 61]; // Eco Green #15803d
+        const COLOR_TEXT = [31, 41, 55];     // Gray 800
+        const COLOR_LIGHT = [107, 114, 128]; // Gray 500
+
         const pageWidth = 210;
         const pageHeight = 297;
-        const marginLeft = 10;
-        const marginTop = 10;
-        const gapX = 6;
-        const gapY = 6;
+        const marginLeft = 0; // Use almost full width, margins handled inside cell
+        const marginTop = 0;
+        
+        // Grid Config
         const cols = 2;
         const rows = 4;
-        
-        const totalContentWidth = pageWidth - (marginLeft * 2);
-        const cellWidth = (totalContentWidth - gapX) / cols;
-        const totalContentHeight = pageHeight - (marginTop * 2);
-        const cellHeight = (totalContentHeight - (gapY * (rows - 1))) / rows;
+        const cellWidth = pageWidth / cols; // 105mm
+        const cellHeight = pageHeight / rows; // 74.25mm
+        const padding = 5; // Internal padding inside each invoice
 
         for (let i = 0; i < orders.length; i++) {
             const order = orders[i];
@@ -328,122 +391,168 @@ export const pdfService = {
             const colIndex = posInPage % 2;
             const rowIndex = Math.floor(posInPage / 2);
 
-            const x = marginLeft + (colIndex * (cellWidth + gapX));
-            const y = marginTop + (rowIndex * (cellHeight + gapY));
+            // Absolute Coords for this Cell
+            const x = colIndex * cellWidth;
+            const y = rowIndex * cellHeight;
 
-            // Cutting Guides
-            doc.setDrawColor(180, 180, 180);
+            // --- 1. CUTTING MARKS (Gray Dashed) ---
+            doc.setDrawColor(200, 200, 200);
             doc.setLineWidth(0.1);
-            if (colIndex === 0) {
-                const cutX = x + cellWidth + (gapX / 2);
-                drawDashedLine(doc, cutX, y, cutX, y + cellHeight);
-            }
-            if (rowIndex < rows - 1) {
-                const cutY = y + cellHeight + (gapY / 2);
-                drawDashedLine(doc, x, cutY, x + cellWidth, cutY);
-            }
+            if (colIndex === 0) drawDashedLine(doc, x + cellWidth, y, x + cellWidth, y + cellHeight); // Vert
+            if (rowIndex < rows - 1) drawDashedLine(doc, x, y + cellHeight, x + cellWidth * 2, y + cellHeight); // Horz
 
-            // Box Outline
-            doc.setDrawColor(0, 0, 0);
-            doc.setLineWidth(0.2);
-            doc.rect(x, y, cellWidth, cellHeight);
-            
-            const p = 3;
-            const ix = x + p;
-            let iy = y + p;
+            // Working Area (With Padding)
+            const wx = x + padding;
+            const wy = y + padding;
+            const wWidth = cellWidth - (padding * 2);
+            const wHeight = cellHeight - (padding * 2);
 
-            // --- HEADER ---
+            // --- 2. HEADER BAR (Solid Green) ---
+            const headerH = 9;
+            doc.setFillColor(COLOR_PRIMARY[0], COLOR_PRIMARY[1], COLOR_PRIMARY[2]);
+            doc.rect(x, y, cellWidth, headerH + 2, 'F'); // Full width header strip + slight bleed
+
+            // Logo & Brand Name
             if (logoBase64) {
                 try {
-                    doc.addImage(logoBase64, 'PNG', ix, iy, 12, 12, undefined, 'FAST');
+                    doc.addImage(logoBase64, 'PNG', wx, y + 1.5, 8, 8, undefined, 'FAST');
                 } catch (e) {}
             }
-            
+            doc.setTextColor(255, 255, 255);
             doc.setFontSize(10);
             doc.setFont(fontName, 'bold');
-            doc.text("ECOGO LOGISTICS", ix + 14, iy + 4);
+            doc.text("ECOGO LOGISTICS", wx + (logoBase64 ? 10 : 0), y + 7);
             
+            // Right Header Text (Optional hotline/web)
+            doc.setFontSize(7);
+            doc.setFont(fontName, 'normal');
+            doc.text("Hotline: 0909...", x + cellWidth - padding, y + 7, { align: 'right' });
+
+            // Reset Text Color
+            doc.setTextColor(COLOR_TEXT[0], COLOR_TEXT[1], COLOR_TEXT[2]);
+
+            // --- 3. METADATA BLOCK (Order ID & Date) ---
+            let cy = y + headerH + 6; // Current Y cursor
+            
+            // Order ID (Big & Bold)
+            doc.setFontSize(12);
+            doc.setFont(fontName, 'bold');
+            doc.text(`#${order.id}`, wx, cy);
+
+            // Date (Right aligned, lighter)
+            doc.setTextColor(COLOR_LIGHT[0], COLOR_LIGHT[1], COLOR_LIGHT[2]);
             doc.setFontSize(8);
             doc.setFont(fontName, 'normal');
-            doc.text(`Đơn: #${order.id} | ${new Date(order.createdAt).toLocaleDateString('vi-VN')}`, ix + 14, iy + 9);
+            doc.text(new Date(order.createdAt).toLocaleDateString('vi-VN'), x + cellWidth - padding, cy, { align: 'right' });
             
-            iy += 15;
+            cy += 5;
 
-            // --- CUSTOMER (Bold Name) ---
+            // --- 4. CUSTOMER INFO ---
+            doc.setTextColor(COLOR_TEXT[0], COLOR_TEXT[1], COLOR_TEXT[2]);
+            // Name
             doc.setFontSize(9);
-            doc.setFont(fontName, 'bold'); 
-            doc.text(`Người nhận: ${order.customerName}`, ix, iy);
+            doc.setFont(fontName, 'bold');
+            doc.text(order.customerName, wx, cy);
             
+            // Phone
+            const nameWidth = doc.getTextWidth(order.customerName);
             doc.setFont(fontName, 'normal');
-            doc.setFontSize(8);
-            doc.text(`SĐT: ${order.customerPhone}`, ix, iy + 4);
-            
-            const addr = `ĐC: ${order.address}`;
-            const splitAddr = doc.splitTextToSize(addr, cellWidth - (p * 2));
-            doc.text(splitAddr, ix, iy + 8);
-            
-            const addrHeight = splitAddr.length * 3.5;
-            iy += 8 + addrHeight;
+            doc.setFontSize(9);
+            doc.text(` - ${order.customerPhone}`, wx + nameWidth, cy);
 
-            // Notes field if exists
-            if (order.notes) {
-                doc.setFont(fontName, 'bold'); 
-                const noteStr = `Ghi chú: ${order.notes}`;
-                const splitNote = doc.splitTextToSize(noteStr, cellWidth - (p * 2));
-                doc.text(splitNote, ix, iy + 2);
-                iy += (splitNote.length * 3.5);
-                doc.setFont(fontName, 'normal'); 
+            cy += 4.5;
+            // Address (Limit width)
+            doc.setFontSize(8);
+            doc.setTextColor(COLOR_LIGHT[0], COLOR_LIGHT[1], COLOR_LIGHT[2]);
+            const addr = order.address.length > 55 ? order.address.substring(0, 52) + "..." : order.address;
+            doc.text(addr, wx, cy);
+
+            // Divider Line
+            cy += 3;
+            doc.setDrawColor(220, 220, 220);
+            doc.setLineWidth(0.1);
+            doc.line(wx, cy, x + cellWidth - padding, cy);
+            
+            cy += 4;
+
+            // --- 5. ITEMS LIST ---
+            // Render max 3-4 items to fit
+            doc.setTextColor(COLOR_TEXT[0], COLOR_TEXT[1], COLOR_TEXT[2]);
+            doc.setFontSize(8);
+            
+            const MAX_ITEMS = 4;
+            const itemsToShow = order.items.slice(0, MAX_ITEMS);
+            
+            itemsToShow.forEach(item => {
+                const name = item.name.length > 30 ? item.name.substring(0, 28) + ".." : item.name;
+                doc.text(name, wx, cy);
+                
+                // Qty & Price
+                const meta = `x${item.quantity}`;
+                doc.setFont(fontName, 'bold');
+                doc.text(meta, x + cellWidth - padding - 20, cy, { align: 'right' });
+                
+                // If needed, can show price per item, but usually total is enough for labels
+                // doc.text(formatMoney(item.price * item.quantity), x + cellWidth - padding, cy, { align: 'right' });
+                
+                doc.setFont(fontName, 'normal');
+                cy += 4;
+            });
+            
+            if (order.items.length > MAX_ITEMS) {
+                doc.setFontSize(7);
+                doc.setTextColor(COLOR_LIGHT[0], COLOR_LIGHT[1], COLOR_LIGHT[2]);
+                doc.text(`...và ${order.items.length - MAX_ITEMS} sản phẩm khác`, wx, cy);
             }
 
-            iy += 1;
-            // Separator Line
-            doc.setDrawColor(220, 220, 220);
-            doc.line(ix, iy, ix + cellWidth - (p * 2), iy);
-            iy += 4;
-
-            // Items
-            const itemsStr = order.items.map(it => `${it.name} (x${it.quantity})`).join(', ');
-            const splitItems = doc.splitTextToSize(itemsStr, cellWidth - (p * 2));
-            doc.setFontSize(9);
-            doc.text(splitItems, ix, iy);
-
-            // --- FOOTER ---
-            const footerY = y + cellHeight - p;
+            // --- 6. FOOTER (Total & QR) ---
+            const footerY = y + cellHeight - padding;
             
-            // Total Price (Bold)
-            doc.setFontSize(12);
-            doc.setFont(fontName, 'bold'); 
-            doc.text(`${new Intl.NumberFormat('vi-VN').format(order.totalPrice)}đ`, ix, footerY - 2);
-
-            // --- QR CODE (VietQR / EMVCo) ---
-            const qrSize = 20;
-            const qrX = x + cellWidth - p - qrSize;
-            const qrY = y + cellHeight - p - qrSize;
+            // QR Code (Bottom Left)
+            const qrSize = 16;
+            const qrX = wx;
+            const qrY = footerY - qrSize + 2;
 
             if (bankConfig && bankConfig.accountNo && order.paymentMethod !== PaymentMethod.PAID) {
-                // Generate VietQR / EMVCo Payload
+                // Generate VietQR
                 const content = `DH ${order.id}`;
                 const qrString = generateVietQRPayload(bankConfig.bankId, bankConfig.accountNo, order.totalPrice, content);
-                
                 const qrBase64 = await generateQRCode(qrString);
                 if (qrBase64) {
                     doc.addImage(qrBase64, 'PNG', qrX, qrY, qrSize, qrSize);
                 }
-                
                 doc.setFontSize(6);
-                doc.setFont(fontName, 'normal');
-                doc.text("Quét thanh toán", qrX, qrY - 1, { align: 'left' });
+                doc.text("Quét để TT", qrX + (qrSize/2), qrY + qrSize + 2, { align: 'center' });
             } else if (order.paymentMethod === PaymentMethod.PAID) {
-                doc.setFontSize(10);
+                // Paid Badge
+                doc.setDrawColor(21, 128, 61); // Green
+                doc.roundedRect(qrX, footerY - 10, 25, 8, 1, 1, 'D');
+                doc.setTextColor(21, 128, 61);
+                doc.setFontSize(8);
                 doc.setFont(fontName, 'bold');
-                doc.setTextColor(0, 128, 0);
-                doc.text("ĐÃ THANH TOÁN", qrX - 5, footerY - 8);
-                doc.setTextColor(0, 0, 0);
+                doc.text("ĐÃ THANH TOÁN", qrX + 12.5, footerY - 5, { align: 'center' });
             } else {
-                 doc.setFontSize(8);
-                 doc.setFont(fontName, 'normal');
-                 doc.text("Thu hộ (COD)", qrX, footerY - 8);
+                // COD Badge
+                doc.setDrawColor(100, 100, 100); 
+                doc.roundedRect(qrX, footerY - 10, 20, 8, 1, 1, 'D');
+                doc.setTextColor(100, 100, 100);
+                doc.setFontSize(8);
+                doc.setFont(fontName, 'bold');
+                doc.text("COD", qrX + 10, footerY - 5, { align: 'center' });
             }
+
+            // TOTAL (Bottom Right - HUGE)
+            doc.setTextColor(COLOR_PRIMARY[0], COLOR_PRIMARY[1], COLOR_PRIMARY[2]); // Green
+            doc.setFontSize(16);
+            doc.setFont(fontName, 'bold');
+            const totalStr = `${new Intl.NumberFormat('vi-VN').format(order.totalPrice)}đ`;
+            doc.text(totalStr, x + cellWidth - padding, footerY - 4, { align: 'right' });
+            
+            // Label "Tổng cộng"
+            doc.setTextColor(COLOR_LIGHT[0], COLOR_LIGHT[1], COLOR_LIGHT[2]);
+            doc.setFontSize(7);
+            doc.setFont(fontName, 'normal');
+            doc.text("TỔNG CỘNG", x + cellWidth - padding, footerY - 11, { align: 'right' });
         }
 
         const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');

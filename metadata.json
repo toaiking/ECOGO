@@ -3,6 +3,7 @@
   "description": "An integrated order management and delivery tracking system powered by Gemini AI. Features smart order parsing and real-time delivery status updates.",
   "requestFramePermissions": [
     "camera",
-    "geolocation"
+    "geolocation",
+    "microphone"
   ]
 }

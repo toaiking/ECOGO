@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 import { Order, OrderStatus, Product, Customer, PaymentMethod, OrderItem } from '../types';
 import { storageService } from '../services/storageService';
 import { parseOrderText } from '../services/geminiService';
+import { differenceInDays } from 'date-fns';
 
 const OrderForm: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
@@ -26,7 +27,15 @@ const OrderForm: React.FC = () => {
   const [isListening, setIsListening] = useState(false);
   const [isProcessingAI, setIsProcessingAI] = useState(false);
 
+  // Quick Add Product Modal State
+  const [showQuickAddProduct, setShowQuickAddProduct] = useState(false);
+  const [newProdName, setNewProdName] = useState('');
+  const [newProdPrice, setNewProdPrice] = useState(0);
+  const [newProdImportPrice, setNewProdImportPrice] = useState(0); // NEW
+
+  // Added customerId to state
   const [customerInfo, setCustomerInfo] = useState({
+    customerId: '', // NEW
     customerName: '',
     customerPhone: '',
     address: '',
@@ -133,7 +142,13 @@ const OrderForm: React.FC = () => {
     recognition.onerror = (event: any) => {
         console.error("Speech error", event.error);
         setIsListening(false);
-        toast.error("Không nghe rõ, vui lòng thử lại.");
+        if (event.error === 'not-allowed') {
+            toast.error("Quyền truy cập Micro bị chặn. Vui lòng cho phép trong cài đặt trình duyệt.");
+        } else if (event.error === 'no-speech') {
+            toast('Không nghe thấy gì...', { icon: '🔇' });
+        } else {
+            toast.error("Lỗi giọng nói: " + event.error);
+        }
     };
 
     recognition.onresult = async (event: any) => {
@@ -147,11 +162,18 @@ const OrderForm: React.FC = () => {
 
   const processOrderText = async (text: string) => {
       setIsProcessingAI(true);
-      const loadingToast = toast.loading("AI đang phân tích đơn hàng...");
+      const loadingToast = toast.loading("AI đang phân tích...");
       
       try {
-          const result = await parseOrderText(text);
+          // Pass products and customers to Gemini for context-aware parsing
+          const result = await parseOrderText(text, products, customers);
           
+          // Auto detect returning customer logic if possible
+          if (result.customerName) {
+             const matched = customers.find(c => c.name.toLowerCase() === result.customerName.toLowerCase());
+             if (matched) handleCustomerSelect(matched);
+          }
+
           setCustomerInfo(prev => ({
               ...prev,
               customerName: result.customerName || prev.customerName,
@@ -160,12 +182,38 @@ const OrderForm: React.FC = () => {
               notes: result.notes || prev.notes
           }));
 
-          // Parse items is tricky because AI returns a summary string usually.
-          // If the AI returns specific items structure, update items. 
-          // For now, we put the item string in the first row name if available
-          if (result.itemsString) {
-               // Simple split by comma logic for basic items, or just put all in one line
-               // Enhance: You could ask Gemini to return an array of items structure
+          // Handle Items with Fuzzy Match (Client Side Optimization)
+          if (result.parsedItems && result.parsedItems.length > 0) {
+              const newItems = result.parsedItems.map(pi => {
+                  // Fuzzy Match Logic
+                  let matchedProduct: Product | undefined;
+                  const searchName = pi.productName.toLowerCase();
+                  
+                  // 1. Exact match
+                  matchedProduct = products.find(p => p.name.toLowerCase() === searchName);
+                  
+                  // 2. Contains match
+                  if (!matchedProduct) {
+                      matchedProduct = products.find(p => p.name.toLowerCase().includes(searchName));
+                  }
+
+                  // 3. Reverse Contains match (Product name inside Search name)
+                  if (!matchedProduct) {
+                      matchedProduct = products.find(p => searchName.includes(p.name.toLowerCase()));
+                  }
+
+                  return {
+                      id: uuidv4(),
+                      name: matchedProduct ? matchedProduct.name : pi.productName,
+                      quantity: pi.quantity || 1,
+                      price: matchedProduct ? matchedProduct.defaultPrice : 0,
+                      productId: matchedProduct ? matchedProduct.id : undefined,
+                      importPrice: matchedProduct ? matchedProduct.importPrice : undefined // Capture import price
+                  };
+              });
+              setItems(newItems);
+          } else if (result.itemsString) {
+               // Fallback if AI didn't return array structure
                setItems([{ 
                    id: uuidv4(), 
                    name: result.itemsString, 
@@ -173,7 +221,6 @@ const OrderForm: React.FC = () => {
                    price: result.price || 0 
                }]);
           } else if (result.price && result.price > 0) {
-               // Update price of first item if detected
                setItems(prev => {
                    const newItems = [...prev];
                    if(newItems.length > 0) newItems[0].price = result.price;
@@ -221,6 +268,7 @@ const OrderForm: React.FC = () => {
         productId: product.id,
         name: product.name,
         price: product.defaultPrice,
+        importPrice: product.importPrice // Copy current import price for profit calculation
       };
       setItems(newItems);
       setActiveProductRow(null);
@@ -228,16 +276,33 @@ const OrderForm: React.FC = () => {
 
   const handleCustomerSelect = (customer: Customer) => {
     setCustomerInfo({
+      customerId: customer.id, // Explicitly set ID
       customerName: customer.name,
       customerPhone: customer.phone,
       address: customer.address,
       notes: customerInfo.notes
     });
     setShowCustomerSuggestions(false);
+    
+    // RETURNING CUSTOMER CHECK
+    if (customer.lastOrderDate) {
+        const daysDiff = differenceInDays(Date.now(), customer.lastOrderDate);
+        if (daysDiff > 30) {
+            toast((t) => (
+                <div className="flex items-center gap-2">
+                    <span className="text-xl">🎉</span>
+                    <div>
+                        <div className="font-bold">Khách quay lại!</div>
+                        <div className="text-xs">Đã {daysDiff} ngày chưa đặt hàng.</div>
+                    </div>
+                </div>
+            ), { duration: 4000, style: { background: '#ecfdf5', color: '#047857' } });
+        }
+    }
   };
 
   const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setCustomerInfo(prev => ({ ...prev, customerName: e.target.value }));
+    setCustomerInfo(prev => ({ ...prev, customerName: e.target.value, customerId: '' })); // Clear ID on name change to force re-match if new
     setShowCustomerSuggestions(true);
   };
 
@@ -258,9 +323,38 @@ const OrderForm: React.FC = () => {
   };
 
   const resetForm = () => {
-      setCustomerInfo({ customerName: '', customerPhone: '', address: '', notes: '' });
+      setCustomerInfo({ customerId: '', customerName: '', customerPhone: '', address: '', notes: '' });
       setItems([{ id: uuidv4(), name: '', quantity: 1, price: 0 }]);
       if (nameInputRef.current) nameInputRef.current.focus();
+  };
+
+  const handleQuickAddProduct = async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!newProdName) return;
+      
+      const newProduct: Product = {
+          id: uuidv4(),
+          name: newProdName,
+          defaultPrice: newProdPrice || 0,
+          importPrice: newProdImportPrice || 0, // NEW
+          defaultWeight: 1,
+          stockQuantity: 100, // Default generous stock
+          totalImported: 100,
+          lastImportDate: Date.now()
+      };
+      
+      await storageService.saveProduct(newProduct);
+      
+      // Auto select this new product for the current row
+      if (activeProductRow !== null) {
+          selectProductForItem(activeProductRow, newProduct);
+      }
+      
+      setShowQuickAddProduct(false);
+      setNewProdName('');
+      setNewProdPrice(0);
+      setNewProdImportPrice(0);
+      toast.success("Đã tạo và chọn sản phẩm mới!");
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -274,6 +368,7 @@ const OrderForm: React.FC = () => {
 
     const newOrder: Order = {
       id: uuidv4().slice(0, 8).toUpperCase(),
+      customerId: customerInfo.customerId, // Pass ID
       batchId: batchId,
       customerName: customerInfo.customerName,
       customerPhone: customerInfo.customerPhone,
@@ -318,7 +413,7 @@ const OrderForm: React.FC = () => {
             <div className="absolute inset-0 z-50 bg-white/60 backdrop-blur-sm flex items-center justify-center">
                 <div className="flex flex-col items-center">
                     <div className="w-12 h-12 border-4 border-eco-200 border-t-eco-600 rounded-full animate-spin"></div>
-                    <span className="mt-3 text-sm font-bold text-eco-800 animate-pulse">AI đang xử lý đơn hàng...</span>
+                    <span className="mt-3 text-sm font-bold text-eco-800 animate-pulse">AI đang phân tích & tra cứu...</span>
                 </div>
             </div>
         )}
@@ -518,28 +613,47 @@ const OrderForm: React.FC = () => {
                                     
                                     {/* Dropdown */}
                                     {activeProductRow === idx && (
-                                        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-100 rounded-xl shadow-xl z-50 max-h-56 overflow-y-auto animate-fade-in">
-                                            {availableProducts.length === 0 ? (
-                                                 <div className="p-3 text-xs text-gray-400 text-center italic">
-                                                    Kho không có sản phẩm này
-                                                 </div>
-                                            ) : (
-                                                availableProducts.map(p => (
-                                                    <div 
-                                                        key={p.id} 
-                                                        onMouseDown={() => selectProductForItem(idx, p)} // Use onMouseDown to trigger before blur
-                                                        className="px-3 py-2.5 hover:bg-eco-50 cursor-pointer flex justify-between items-center border-b border-gray-50 last:border-0 group/opt"
-                                                    >
-                                                        <div>
-                                                            <div className="text-sm font-bold text-gray-800 group-hover/opt:text-eco-700">{p.name}</div>
-                                                            <div className="text-[10px] text-gray-400">Tồn kho: <span className={p.stockQuantity < 5 ? 'text-red-500 font-bold' : ''}>{p.stockQuantity}</span></div>
+                                        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-100 rounded-xl shadow-xl z-50 max-h-56 overflow-y-auto animate-fade-in flex flex-col">
+                                            <div className="flex-grow overflow-y-auto max-h-44">
+                                                {availableProducts.length === 0 ? (
+                                                     <div className="p-3 text-xs text-gray-400 text-center italic">
+                                                        Kho không có sản phẩm này
+                                                     </div>
+                                                ) : (
+                                                    availableProducts.map(p => (
+                                                        <div 
+                                                            key={p.id} 
+                                                            onMouseDown={() => selectProductForItem(idx, p)} // Use onMouseDown to trigger before blur
+                                                            className="px-3 py-2.5 hover:bg-eco-50 cursor-pointer flex justify-between items-center border-b border-gray-50 last:border-0 group/opt"
+                                                        >
+                                                            <div>
+                                                                <div className="text-sm font-bold text-gray-800 group-hover/opt:text-eco-700">{p.name}</div>
+                                                                <div className="text-[10px] text-gray-400">Tồn kho: <span className={p.stockQuantity < 5 ? 'text-red-500 font-bold' : ''}>{p.stockQuantity}</span></div>
+                                                            </div>
+                                                            <div className="text-right">
+                                                                <div className="text-xs font-bold text-eco-600 bg-eco-50 px-2 py-1 rounded-md">
+                                                                    {new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}
+                                                                </div>
+                                                                {p.importPrice && p.importPrice > 0 && (
+                                                                    <div className="text-[9px] text-gray-300 mt-0.5">
+                                                                        V: {new Intl.NumberFormat('vi-VN').format(p.importPrice)}
+                                                                    </div>
+                                                                )}
+                                                            </div>
                                                         </div>
-                                                        <div className="text-xs font-bold text-eco-600 bg-eco-50 px-2 py-1 rounded-md">
-                                                            {new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}
-                                                        </div>
-                                                    </div>
-                                                ))
-                                            )}
+                                                    ))
+                                                )}
+                                            </div>
+                                            {/* Quick Add Product Trigger */}
+                                            <div 
+                                                onMouseDown={() => {
+                                                    setNewProdName(item.name || '');
+                                                    setShowQuickAddProduct(true);
+                                                }}
+                                                className="p-3 bg-gray-50 border-t border-gray-100 text-center text-xs font-bold text-blue-600 hover:bg-blue-50 cursor-pointer transition-colors"
+                                            >
+                                                <i className="fas fa-plus-circle mr-1"></i> Tạo nhanh sản phẩm mới
+                                            </div>
                                         </div>
                                     )}
                                  </div>
@@ -613,6 +727,55 @@ const OrderForm: React.FC = () => {
           </div>
         </form>
       </div>
+
+      {/* QUICK ADD PRODUCT MODAL */}
+      {showQuickAddProduct && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/60 backdrop-blur-sm p-4 animate-fade-in">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6">
+                <h3 className="text-lg font-bold text-gray-800 mb-4">Thêm nhanh sản phẩm</h3>
+                <form onSubmit={handleQuickAddProduct}>
+                    <div className="space-y-4">
+                        <div>
+                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Tên sản phẩm</label>
+                            <input 
+                                value={newProdName}
+                                onChange={e => setNewProdName(e.target.value)}
+                                className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:border-eco-500 font-bold text-gray-800"
+                                placeholder="Nhập tên..."
+                                autoFocus
+                            />
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Giá bán</label>
+                                <input 
+                                    type="number"
+                                    value={newProdPrice}
+                                    onChange={e => setNewProdPrice(Number(e.target.value))}
+                                    className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:border-eco-500 font-bold"
+                                    placeholder="0"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Giá nhập (Vốn)</label>
+                                <input 
+                                    type="number"
+                                    value={newProdImportPrice}
+                                    onChange={e => setNewProdImportPrice(Number(e.target.value))}
+                                    className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:border-eco-500 font-bold text-gray-600"
+                                    placeholder="0"
+                                />
+                            </div>
+                        </div>
+                    </div>
+                    <div className="flex gap-3 mt-6">
+                        <button type="button" onClick={() => setShowQuickAddProduct(false)} className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 rounded-xl font-bold text-gray-600">Hủy</button>
+                        <button type="submit" className="flex-1 py-3 bg-eco-600 hover:bg-eco-700 text-white rounded-xl font-bold shadow-lg">Lưu & Chọn</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+      )}
     </div>
   );
 };

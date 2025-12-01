@@ -19,10 +19,12 @@ export interface OrderItem {
   name: string;
   quantity: number;
   price: number;
+  importPrice?: number; // NEW: Cost price at the moment of sale
 }
 
 export interface Order {
   id: string;
+  customerId?: string; // NEW: Link directly to customer ID for 100% accuracy
   batchId: string;
   customerName: string;
   customerPhone: string;
@@ -43,7 +45,8 @@ export interface Order {
 export interface Product {
   id: string;
   name: string;
-  defaultPrice: number;
+  defaultPrice: number; // Selling Price
+  importPrice?: number; // NEW: Cost Price (Optional)
   defaultWeight: number; // kg per unit
   stockQuantity: number; // Current Stock
   totalImported?: number; // Total Imported History
@@ -59,13 +62,15 @@ export interface Customer {
   priorityScore?: number; // 1 is highest priority, 999 is normal
   totalOrders?: number;
   updatedAt?: number; // Timestamp for Delta Sync
+  isLegacy?: boolean; // NEW: Manually marked as "Old Customer" regardless of order count
 }
 
 export interface SmartParseResult {
   customerName: string;
   customerPhone: string;
   address: string;
-  itemsString: string; 
+  itemsString?: string; 
+  parsedItems?: { productName: string, quantity: number }[]; // Structured items
   price?: number;
   notes?: string;
   paymentMethod?: PaymentMethod;
@@ -87,4 +92,13 @@ export interface Notification {
   isRead: boolean;
   createdAt: number;
   relatedOrderId?: string;
+}
+
+// Interface for PDF Import Module
+export interface RawPDFImportData {
+  unit_price: number;      // e.g. 120 (means 120,000)
+  customer_name: string;
+  address: string;
+  phone?: string;
+  items_raw: string;       // e.g. "đỏ2 xanh1"
 }
