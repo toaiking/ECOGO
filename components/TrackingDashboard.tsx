@@ -245,13 +245,16 @@ const TrackingDashboard: React.FC = () => {
     recognition.onerror = (event: any) => {
         setIsListeningSearch(false);
         // Silent error or log
-        console.warn("Voice search error", String(event?.error));
+        const errorMsg = event?.error ? String(event.error) : 'Unknown';
+        console.warn("Voice search error", errorMsg);
     };
 
     recognition.onresult = (event: any) => {
-        const text = String(event.results[0][0].transcript);
-        setSearchTerm(text);
-        toast.success(`Đã tìm: "${text}"`);
+        const text = String(event.results?.[0]?.[0]?.transcript || '');
+        if (text) {
+            setSearchTerm(text);
+            toast.success(`Đã tìm: "${text}"`);
+        }
     };
 
     recognition.start();
