@@ -84,6 +84,11 @@ export interface BankConfig {
   sepayApiToken?: string; // Token SePay để check biến động
 }
 
+export interface ShopConfig {
+  shopName: string;
+  hotline: string;
+}
+
 export interface Notification {
   id: string;
   title: string;

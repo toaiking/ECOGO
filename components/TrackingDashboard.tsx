@@ -257,6 +257,8 @@ const TrackingDashboard: React.FC = () => {
   const handleRenameBatch = async () => {
       if (filterBatch.length !== 1) return;
       const oldName = filterBatch[0];
+      if (!oldName) return; // Ensure oldName is a valid string
+
       const newName = prompt(`Nhập tên mới cho lô: ${oldName}`, oldName);
       if (newName && newName !== oldName) {
           await storageService.renameBatch(oldName, newName);

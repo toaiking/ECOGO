@@ -28,7 +28,6 @@ const BANK_BIN_MAP: Record<string, string> = {
     'VCCB': '970454', 'VIETCAPITAL': '970454',
     'SCB': '970429',
     'EIB': '970431', 'EXIMBANK': '970431',
-    // Fallback common mappings
     'TIMO': '961023',
     'VIETMONEY': '970422', 
     'CAKE': '970432',
@@ -36,7 +35,6 @@ const BANK_BIN_MAP: Record<string, string> = {
     'CIMB': '422589'
 };
 
-/* CRC16-CCITT (0xFFFF) Implementation for EMVCo */
 const crc16 = (data: string): string => {
     let crc = 0xFFFF;
     for (let i = 0; i < data.length; i++) {
@@ -61,62 +59,49 @@ const removeAccents = (str: string): string => {
     return str.normalize('NFD')
               .replace(/[\u0300-\u036f]/g, '')
               .replace(/đ/g, 'd').replace(/Đ/g, 'D')
-              .replace(/[^a-zA-Z0-9 ]/g, ''); // Only alphanumeric allowed in VietQR content
+              .replace(/[^a-zA-Z0-9 ]/g, ''); 
 };
 
 const generateVietQRPayload = (bankId: string, accountNo: string, amount: number, content: string): string => {
-    // 1. Setup Data
-    const bin = BANK_BIN_MAP[bankId.toUpperCase()] || BANK_BIN_MAP['MB']; // Default to MB if unknown
-    const cleanContent = removeAccents(content).substring(0, 20); // Limit length
+    const bin = BANK_BIN_MAP[bankId.toUpperCase()] || BANK_BIN_MAP['MB']; 
+    const cleanContent = removeAccents(content).substring(0, 20); 
     
-    // 2. Build Consumer Account Information (Tag 38)
-    // GUID for VietQR: A000000727
     const guid = formatField('00', 'A000000727');
-    // Beneficiary Organization (Tag 01) -> BIN (00) + Account (01)
     const beneficiaryBank = formatField('00', bin) + formatField('01', accountNo);
     const consumerInfo = formatField('01', beneficiaryBank);
-    // Service Code (Tag 02): QRIBFTTA (Quick Transfer)
     const serviceCode = formatField('02', 'QRIBFTTA');
     
     const tag38Value = guid + consumerInfo + serviceCode;
 
-    // 3. Construct Full Payload
     let payload = '';
-    payload += formatField('00', '01'); // Payload Format Indicator
-    payload += formatField('01', '12'); // Point of Initiation Method (12 = Dynamic)
-    payload += formatField('38', tag38Value); // Merchant Account Information
-    payload += formatField('53', '704'); // Transaction Currency (VND)
-    payload += formatField('54', amount.toString()); // Transaction Amount
-    payload += formatField('58', 'VN'); // Country Code
+    payload += formatField('00', '01'); 
+    payload += formatField('01', '12'); 
+    payload += formatField('38', tag38Value); 
+    payload += formatField('53', '704'); 
+    payload += formatField('54', amount.toString()); 
+    payload += formatField('58', 'VN'); 
     
-    // Additional Data Field (Tag 62) - Reference Label
     const additionalData = formatField('08', cleanContent);
     payload += formatField('62', additionalData);
 
-    // 4. Add CRC (Tag 63)
-    payload += '6304'; // ID 63 + Length 04
+    payload += '6304'; 
     const crc = crc16(payload);
     return payload + crc;
 };
 
-// --- FONT CACHING SYSTEM ---
+// --- FONT CACHING ---
 let _fontCache: string | null = null;
 
 const fetchFont = async (): Promise<string | null> => {
     if (_fontCache) return _fontCache;
-
     try {
-        // Load font from CDN (Roboto Regular)
         const response = await fetch('https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/fonts/Roboto/Roboto-Regular.ttf');
         if (!response.ok) throw new Error("Failed to load font");
-        
         const blob = await response.blob();
-        
         return new Promise((resolve) => {
             const reader = new FileReader();
             reader.onloadend = () => {
                 const base64data = reader.result as string;
-                // Remove data:application/octet-stream;base64, prefix
                 const content = base64data.split(',')[1];
                 if (content) {
                     _fontCache = content;
@@ -125,14 +110,10 @@ const fetchFont = async (): Promise<string | null> => {
                     resolve(null);
                 }
             };
-            reader.onerror = () => {
-                 console.warn("FileReader failed to parse font");
-                 resolve(null);
-            };
+            reader.onerror = () => resolve(null);
             reader.readAsDataURL(blob);
         });
     } catch (e) {
-        console.warn("Could not load Vietnamese font, fallback to standard Helvetica.", e);
         return null;
     }
 };
@@ -148,17 +129,16 @@ const generateQRCode = async (text: string): Promise<string> => {
 const drawDashedLine = (doc: jsPDF, x1: number, y1: number, x2: number, y2: number) => {
     doc.setLineDashPattern([2, 2], 0);
     doc.line(x1, y1, x2, y2);
-    doc.setLineDashPattern([], 0); // Reset
+    doc.setLineDashPattern([], 0); 
 };
 
 export const pdfService = {
-    // --- MODE 1: COMPACT LIST (2 COLUMNS - ~50 orders/page) ---
+    // --- MODE 1: COMPACT LIST (HIGH DENSITY ~50 Orders/Page) ---
     generateCompactList: async (orders: Order[], batchId: string) => {
         const doc = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
         
         const binaryFont = await fetchFont();
         let fontName = 'helvetica';
-        
         if (binaryFont) {
             const fontFileName = 'Roboto.ttf';
             doc.addFileToVFS(fontFileName, binaryFont);
@@ -168,30 +148,26 @@ export const pdfService = {
             fontName = 'Roboto';
         }
 
-        const logoBase64 = storageService.getLogo();
-        
-        // --- PAGE CONFIG ---
-        const pageH = 297;
+        // --- CONFIG ---
         const pageW = 210;
-        const margin = 5;
-        const headerH = 25;
-        const footerH = 10;
+        const pageH = 297;
+        const margin = 4; // Minimal margin
+        const headerH = 15;
+        const footerH = 5;
         
-        // Column Config
-        const colGap = 5;
-        const colW = (pageW - (margin * 2) - colGap) / 2; // ~97.5mm
+        const colGap = 4;
+        const colW = (pageW - (margin * 2) - colGap) / 2; // ~99mm
         
-        // Content Config
         const startY = headerH;
         const contentH = pageH - headerH - footerH;
-        const rowH = 11; // 10mm height per order
-        const rowsPerCol = Math.floor(contentH / rowH); // ~26 rows
-        const ordersPerPage = rowsPerCol * 2; // ~52 orders
+        // 50 orders/page => 25 rows per column => 267mm / 25 = ~10.6mm
+        const rowH = 10.8; 
+        const rowsPerCol = Math.floor(contentH / rowH); // 25 rows
+        const ordersPerPage = rowsPerCol * 2; // 50 orders
 
         let totalAmount = 0;
         const itemSummary: Record<string, number> = {};
 
-        // Prepare Summary Data
         orders.forEach(o => {
             totalAmount += o.totalPrice;
             o.items.forEach(item => {
@@ -200,47 +176,41 @@ export const pdfService = {
             });
         });
 
-        // HELPER: Draw Header on New Page
         const drawHeader = (pageNo: number) => {
-            if (logoBase64) {
-                try { doc.addImage(logoBase64, 'PNG', margin, 5, 12, 12, undefined, 'FAST'); } catch(e){}
-            }
-            doc.setFontSize(14);
+            doc.setFontSize(12);
             doc.setFont(fontName, 'bold');
-            doc.text("DANH SÁCH GIAO HÀNG", pageW / 2, 10, { align: 'center' });
+            doc.text(`DANH SÁCH GIAO HÀNG - ${batchId}`, pageW / 2, 8, { align: 'center' });
             
-            doc.setFontSize(9);
-            doc.setFont(fontName, 'normal');
-            doc.text(`Lô: ${batchId} | ${new Date().toLocaleDateString('vi-VN')} | Trang ${pageNo}`, pageW / 2, 16, { align: 'center' });
-            
-            // Draw Column Headers
             doc.setFontSize(8);
+            doc.setFont(fontName, 'normal');
+            doc.text(`${new Date().toLocaleDateString('vi-VN')} | Trang ${pageNo} | Tổng SL: ${orders.length}`, pageW / 2, 12, { align: 'center' });
+            
+            // Draw Col Headers
+            doc.setFontSize(7);
             doc.setFont(fontName, 'bold');
             doc.setFillColor(230, 230, 230);
             
-            // Col 1 Header
-            doc.rect(margin, 20, colW, 5, 'F');
-            doc.text("#", margin + 2, 23.5);
-            doc.text("Khách / ĐC / Hàng", margin + 8, 23.5);
-            doc.text("Thu hộ", margin + colW - 2, 23.5, { align: 'right' });
+            // Col 1
+            doc.rect(margin, 13, colW, 4, 'F');
+            doc.text("STT", margin + 1, 15.5);
+            doc.text("KHÁCH / ĐỊA CHỈ / HÀNG", margin + 8, 15.5);
+            doc.text("THU HỘ", margin + colW - 1, 15.5, { align: 'right' });
 
-            // Col 2 Header
+            // Col 2
             const col2X = margin + colW + colGap;
-            doc.rect(col2X, 20, colW, 5, 'F');
-            doc.text("#", col2X + 2, 23.5);
-            doc.text("Khách / ĐC / Hàng", col2X + 8, 23.5);
-            doc.text("Thu hộ", col2X + colW - 2, 23.5, { align: 'right' });
+            doc.rect(col2X, 13, colW, 4, 'F');
+            doc.text("STT", col2X + 1, 15.5);
+            doc.text("KHÁCH / ĐỊA CHỈ / HÀNG", col2X + 8, 15.5);
+            doc.text("THU HỘ", col2X + colW - 1, 15.5, { align: 'right' });
         };
 
         let pageIndex = 1;
         drawHeader(pageIndex);
 
-        // --- RENDER LOOP ---
         for (let i = 0; i < orders.length; i++) {
             const o = orders[i];
-            
-            // Calculate Position
             const indexInPage = i % ordersPerPage;
+            
             if (i > 0 && indexInPage === 0) {
                 doc.addPage();
                 pageIndex++;
@@ -251,93 +221,126 @@ export const pdfService = {
             const rowIndex = indexInPage % rowsPerCol;
             
             const x = margin + (colIndex * (colW + colGap));
-            const y = startY + (rowIndex * rowH);
+            // Header is 15mm + 2mm spacing
+            const y = startY + 2 + (rowIndex * rowH);
 
-            // Draw Row Content
-            // 1. Index
-            doc.setFontSize(8);
+            // 1. Index (Left)
+            doc.setFontSize(7);
             doc.setFont(fontName, 'bold');
-            doc.text(`${i + 1}`, x + 2, y + 4);
+            doc.text(`${i + 1}`, x + 1, y + 3);
             
-            // 2. Customer Name (Bold)
+            // 2. Main Content (Middle)
+            const contentX = x + 8;
+            const maxContentW = colW - 25; // Space for content
+
+            // Line 1: Name + Phone
             doc.setFontSize(8);
-            doc.text(o.customerName, x + 8, y + 4);
-            
-            // Phone (Small next to name)
+            doc.text(o.customerName, contentX, y + 3);
             doc.setFont(fontName, 'normal');
             doc.setFontSize(7);
-            doc.text(` - ${o.customerPhone}`, x + 8 + doc.getTextWidth(o.customerName), y + 4);
+            doc.text(` - ${o.customerPhone}`, contentX + doc.getTextWidth(o.customerName), y + 3);
 
-            // 3. Address (Truncated line 1)
-            const addrWidth = colW - 35; // Space for address
-            const addr = o.address.length > 35 ? o.address.substring(0, 32) + "..." : o.address;
-            doc.text(addr, x + 8, y + 7);
-
-            // 4. Items (Line 2)
+            // Line 2: Items + Notes (Crucial line)
             doc.setFontSize(7);
-            const items = o.items.map(it => `${it.name}(${it.quantity})`).join(', ');
-            let itemStr = items;
-            if (doc.getTextWidth(items) > addrWidth) {
-                 // Simple truncate for compact view
-                 itemStr = items.substring(0, 50) + "...";
+            const itemStr = o.items.map(it => `${it.name}${it.quantity > 1 ? `(${it.quantity})` : ''}`).join(', ');
+            let fullText = itemStr;
+            if (o.notes) fullText += ` [${o.notes}]`;
+            
+            // Truncate to fit 1 line if possible, max 2 lines
+            // Simple truncation logic
+            if (doc.getTextWidth(fullText) > maxContentW) {
+                 const splitTitle = doc.splitTextToSize(fullText, maxContentW);
+                 doc.text(splitTitle[0] + (splitTitle.length > 1 ? '...' : ''), contentX, y + 6);
+            } else {
+                 doc.text(fullText, contentX, y + 6);
             }
-            doc.text(itemStr, x + 8, y + 10);
 
-            // 5. Money
-            doc.setFontSize(9);
+            // Line 3: Address (Small, Gray)
+            doc.setTextColor(80, 80, 80);
+            doc.setFontSize(6);
+            const addr = o.address.length > 50 ? o.address.substring(0, 48) + "..." : o.address;
+            doc.text(addr, contentX, y + 9);
+            doc.setTextColor(0, 0, 0);
+
+            // 3. Price (Right)
+            doc.setFontSize(8);
             doc.setFont(fontName, 'bold');
             const price = new Intl.NumberFormat('vi-VN').format(o.totalPrice);
-            doc.text(price, x + colW - 2, y + 5, { align: 'right' });
+            doc.text(price, x + colW - 1, y + 4, { align: 'right' });
             
-            // Payment Method
+            // Payment Status (Right Below Price)
             doc.setFontSize(6);
             doc.setFont(fontName, 'normal');
-            const method = o.paymentMethod === PaymentMethod.CASH ? 'TM' : (o.paymentVerified ? 'Đã CK' : 'Chờ CK');
-            doc.text(method, x + colW - 2, y + 9, { align: 'right' });
+            const method = o.paymentMethod === PaymentMethod.CASH ? 'Thu TM' : (o.paymentVerified ? 'Đã CK' : 'Chờ CK');
+            if (method !== 'Thu TM') doc.setTextColor(255, 255, 255); // Inverse badge for non-cod
+            
+            if (method !== 'Thu TM') {
+                 // Draw small pill background
+                 doc.setFillColor(0, 0, 0);
+                 const badgeW = doc.getTextWidth(method) + 2;
+                 doc.roundedRect(x + colW - 1 - badgeW, y + 6, badgeW, 3, 0.5, 0.5, 'F');
+                 doc.text(method, x + colW - 2, y + 8, { align: 'right' });
+                 doc.setTextColor(0, 0, 0); // Reset
+            } else {
+                 doc.text(method, x + colW - 1, y + 8, { align: 'right' });
+            }
 
             // Separator Line
-            doc.setDrawColor(240, 240, 240);
+            doc.setDrawColor(220, 220, 220);
             doc.line(x, y + rowH, x + colW, y + rowH);
         }
 
-        // --- SUMMARY PAGE ---
+        // --- SUMMARY SECTION (COMPACT GRID) ---
+        // We will print summary on the last page if space permits, or new page
+        // Use a 3-Column Grid for summary to save space
+        
         doc.addPage();
-        doc.setFontSize(14);
+        doc.setFontSize(12);
         doc.setFont(fontName, 'bold');
-        doc.text("TỔNG HỢP", pageW / 2, 15, { align: 'center' });
+        doc.text("TỔNG HỢP HÀNG HÓA", pageW / 2, 10, { align: 'center' });
         
-        doc.setFontSize(11);
-        doc.text(`Tổng đơn: ${orders.length}`, 20, 30);
-        doc.text(`Tổng tiền: ${new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(totalAmount)}`, 20, 38);
-
-        doc.text("HÀNG HÓA CẦN CHUẨN BỊ:", 20, 50);
         doc.setFontSize(10);
-        doc.setFont(fontName, 'normal');
+        doc.text(`Tổng giá trị đơn hàng: ${new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(totalAmount)}`, pageW / 2, 16, { align: 'center' });
+
+        const summaryStartY = 25;
+        const sumColW = (pageW - (margin * 2)) / 3; // 3 columns
+        const sumRowH = 6;
         
-        let sumY = 60;
         const sortedSummary = Object.entries(itemSummary).sort((a, b) => a[0].localeCompare(b[0]));
         
-        sortedSummary.forEach(([name, qty]) => {
-            if (sumY > 280) {
-                doc.addPage();
-                sumY = 20;
-            }
-            doc.text(name, 20, sumY);
-            doc.setLineDashPattern([1, 1], 0);
-            doc.line(100, sumY, 170, sumY);
-            doc.setLineDashPattern([], 0);
-            doc.setFont(fontName, 'bold');
-            doc.text(qty.toString(), 180, sumY, { align: 'right' });
+        doc.setFontSize(8);
+        doc.setLineWidth(0.1);
+        doc.setDrawColor(100, 100, 100);
+
+        sortedSummary.forEach((entry, idx) => {
+            const colIdx = idx % 3;
+            const rowIdx = Math.floor(idx / 3);
+            
+            const x = margin + (colIdx * sumColW);
+            const y = summaryStartY + (rowIdx * sumRowH);
+            
+            // Draw Box
+            doc.rect(x, y, sumColW - 2, sumRowH); // Gap between boxes
+            
+            // Item Name
             doc.setFont(fontName, 'normal');
-            sumY += 7;
+            let name = entry[0];
+            if (doc.getTextWidth(name) > sumColW - 15) {
+                name = name.substring(0, 20) + "..";
+            }
+            doc.text(name, x + 2, y + 4);
+            
+            // Qty (Bold, Right)
+            doc.setFont(fontName, 'bold');
+            doc.text(entry[1].toString(), x + sumColW - 4, y + 4, { align: 'right' });
         });
 
         const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-        doc.save(`DanhSach_${batchId}_${dateStr}.pdf`);
+        doc.save(`DS_${batchId}_${dateStr}.pdf`);
     },
 
-    // --- MODE 2: MODERN INVOICE GRID (8 TEM/A4) ---
-    // Updated Layout: Professional, Clean Grid, High Priority on Total & ID
+    // --- MODE 2: BLACK & WHITE INVOICE (8-UP) ---
+    // Focus: Negative Header, Clear cutting lines, Important info emphasis
     generateInvoiceBatch: async (orders: Order[], batchId: string) => {
         const doc = new jsPDF({
             orientation: 'p',
@@ -359,25 +362,23 @@ export const pdfService = {
             fontName = 'Roboto';
         }
 
-        const logoBase64 = storageService.getLogo();
         const bankConfig = await storageService.getBankConfig();
-
-        // BRAND COLORS
-        const COLOR_PRIMARY = [21, 128, 61]; // Eco Green #15803d
-        const COLOR_TEXT = [31, 41, 55];     // Gray 800
-        const COLOR_LIGHT = [107, 114, 128]; // Gray 500
+        const shopConfig = await storageService.getShopConfig();
+        const currentUser = storageService.getCurrentUser() || 'Admin';
+        
+        // CONFIG VARIABLES
+        const APP_NAME = (shopConfig?.shopName || "ECOGO LOGISTICS").toUpperCase(); 
+        const HOTLINE = shopConfig?.hotline ? `Hotline: ${shopConfig.hotline}` : `User: ${currentUser}`;
 
         const pageWidth = 210;
         const pageHeight = 297;
-        const marginLeft = 0; // Use almost full width, margins handled inside cell
-        const marginTop = 0;
         
         // Grid Config
         const cols = 2;
         const rows = 4;
         const cellWidth = pageWidth / cols; // 105mm
         const cellHeight = pageHeight / rows; // 74.25mm
-        const padding = 5; // Internal padding inside each invoice
+        const padding = 6; // Increased padding for safer cutting
 
         for (let i = 0; i < orders.length; i++) {
             const order = orders[i];
@@ -391,171 +392,161 @@ export const pdfService = {
             const colIndex = posInPage % 2;
             const rowIndex = Math.floor(posInPage / 2);
 
-            // Absolute Coords for this Cell
             const x = colIndex * cellWidth;
             const y = rowIndex * cellHeight;
 
-            // --- 1. CUTTING MARKS (Gray Dashed) ---
-            doc.setDrawColor(200, 200, 200);
+            // --- 1. CUTTING MARKS (Solid Black Corners, Dashed Sides) ---
+            doc.setDrawColor(150, 150, 150);
             doc.setLineWidth(0.1);
-            if (colIndex === 0) drawDashedLine(doc, x + cellWidth, y, x + cellWidth, y + cellHeight); // Vert
-            if (rowIndex < rows - 1) drawDashedLine(doc, x, y + cellHeight, x + cellWidth * 2, y + cellHeight); // Horz
+            if (colIndex === 0) drawDashedLine(doc, x + cellWidth, y + 2, x + cellWidth, y + cellHeight - 2); 
+            if (rowIndex < rows - 1) drawDashedLine(doc, x + 2, y + cellHeight, x + (cellWidth*2) - 2, y + cellHeight);
 
-            // Working Area (With Padding)
+            // Content Area
             const wx = x + padding;
             const wy = y + padding;
             const wWidth = cellWidth - (padding * 2);
-            const wHeight = cellHeight - (padding * 2);
 
-            // --- 2. HEADER BAR (Solid Green) ---
-            const headerH = 9;
-            doc.setFillColor(COLOR_PRIMARY[0], COLOR_PRIMARY[1], COLOR_PRIMARY[2]);
-            doc.rect(x, y, cellWidth, headerH + 2, 'F'); // Full width header strip + slight bleed
+            // --- 2. HEADER (NEGATIVE BLACK BAR) ---
+            const headerH = 10;
+            doc.setFillColor(0, 0, 0); // Black Background
+            doc.rect(wx, wy, wWidth, headerH, 'F'); 
 
-            // Logo & Brand Name
-            if (logoBase64) {
-                try {
-                    doc.addImage(logoBase64, 'PNG', wx, y + 1.5, 8, 8, undefined, 'FAST');
-                } catch (e) {}
-            }
+            // Text White
             doc.setTextColor(255, 255, 255);
-            doc.setFontSize(10);
+            doc.setFontSize(11);
             doc.setFont(fontName, 'bold');
-            doc.text("ECOGO LOGISTICS", wx + (logoBase64 ? 10 : 0), y + 7);
+            doc.text(APP_NAME, wx + 2, wy + 6.5);
             
-            // Right Header Text (Optional hotline/web)
-            doc.setFontSize(7);
+            doc.setFontSize(8);
             doc.setFont(fontName, 'normal');
-            doc.text("Hotline: 0909...", x + cellWidth - padding, y + 7, { align: 'right' });
+            doc.text(HOTLINE, wx + wWidth - 2, wy + 6.5, { align: 'right' });
 
-            // Reset Text Color
-            doc.setTextColor(COLOR_TEXT[0], COLOR_TEXT[1], COLOR_TEXT[2]);
+            doc.setTextColor(0, 0, 0); // Reset Black Text
 
-            // --- 3. METADATA BLOCK (Order ID & Date) ---
-            let cy = y + headerH + 6; // Current Y cursor
-            
-            // Order ID (Big & Bold)
+            // --- 3. SEQUENCE NUMBER (Visual Aid) ---
+            // Large number in top right corner below header
+            doc.setFontSize(16);
+            doc.setFont(fontName, 'bold');
+            doc.setTextColor(200, 200, 200); // Light Gray
+            const seqNo = `#${(i + 1).toString().padStart(2, '0')}`;
+            doc.text(seqNo, wx + wWidth - 2, wy + headerH + 7, { align: 'right' });
+            doc.setTextColor(0, 0, 0); // Reset
+
+            // --- 4. ORDER ID & DATE ---
+            let cy = wy + headerH + 5;
             doc.setFontSize(12);
             doc.setFont(fontName, 'bold');
             doc.text(`#${order.id}`, wx, cy);
-
-            // Date (Right aligned, lighter)
-            doc.setTextColor(COLOR_LIGHT[0], COLOR_LIGHT[1], COLOR_LIGHT[2]);
+            
             doc.setFontSize(8);
             doc.setFont(fontName, 'normal');
-            doc.text(new Date(order.createdAt).toLocaleDateString('vi-VN'), x + cellWidth - padding, cy, { align: 'right' });
-            
-            cy += 5;
+            doc.text(new Date(order.createdAt).toLocaleDateString('vi-VN'), wx, cy + 4);
 
-            // --- 4. CUSTOMER INFO ---
-            doc.setTextColor(COLOR_TEXT[0], COLOR_TEXT[1], COLOR_TEXT[2]);
-            // Name
+            cy += 8;
+
+            // --- 5. CUSTOMER (Boxed or distinct) ---
             doc.setFontSize(9);
             doc.setFont(fontName, 'bold');
-            doc.text(order.customerName, wx, cy);
+            doc.text(order.customerName.toUpperCase(), wx, cy);
             
-            // Phone
-            const nameWidth = doc.getTextWidth(order.customerName);
             doc.setFont(fontName, 'normal');
-            doc.setFontSize(9);
-            doc.text(` - ${order.customerPhone}`, wx + nameWidth, cy);
+            doc.text(order.customerPhone, wx + wWidth - 20, cy, { align: 'right' });
 
-            cy += 4.5;
-            // Address (Limit width)
+            cy += 4;
             doc.setFontSize(8);
-            doc.setTextColor(COLOR_LIGHT[0], COLOR_LIGHT[1], COLOR_LIGHT[2]);
             const addr = order.address.length > 55 ? order.address.substring(0, 52) + "..." : order.address;
-            doc.text(addr, wx, cy);
+            doc.text(`ĐC: ${addr}`, wx, cy);
 
-            // Divider Line
-            cy += 3;
-            doc.setDrawColor(220, 220, 220);
-            doc.setLineWidth(0.1);
-            doc.line(wx, cy, x + cellWidth - padding, cy);
-            
+            // Divider
+            cy += 2;
+            doc.setDrawColor(0, 0, 0);
+            doc.setLineWidth(0.2);
+            doc.line(wx, cy, wx + wWidth, cy);
             cy += 4;
 
-            // --- 5. ITEMS LIST ---
-            // Render max 3-4 items to fit
-            doc.setTextColor(COLOR_TEXT[0], COLOR_TEXT[1], COLOR_TEXT[2]);
+            // --- 6. ITEMS LIST ---
             doc.setFontSize(8);
-            
-            const MAX_ITEMS = 4;
+            const MAX_ITEMS = 3; 
             const itemsToShow = order.items.slice(0, MAX_ITEMS);
             
             itemsToShow.forEach(item => {
-                const name = item.name.length > 30 ? item.name.substring(0, 28) + ".." : item.name;
+                const name = item.name.length > 35 ? item.name.substring(0, 32) + ".." : item.name;
                 doc.text(name, wx, cy);
                 
-                // Qty & Price
-                const meta = `x${item.quantity}`;
                 doc.setFont(fontName, 'bold');
-                doc.text(meta, x + cellWidth - padding - 20, cy, { align: 'right' });
-                
-                // If needed, can show price per item, but usually total is enough for labels
-                // doc.text(formatMoney(item.price * item.quantity), x + cellWidth - padding, cy, { align: 'right' });
-                
+                doc.text(`x${item.quantity}`, wx + wWidth, cy, { align: 'right' });
                 doc.setFont(fontName, 'normal');
                 cy += 4;
             });
             
             if (order.items.length > MAX_ITEMS) {
                 doc.setFontSize(7);
-                doc.setTextColor(COLOR_LIGHT[0], COLOR_LIGHT[1], COLOR_LIGHT[2]);
-                doc.text(`...và ${order.items.length - MAX_ITEMS} sản phẩm khác`, wx, cy);
+                doc.text(`... (+${order.items.length - MAX_ITEMS} sản phẩm khác)`, wx, cy);
             }
 
-            // --- 6. FOOTER (Total & QR) ---
-            const footerY = y + cellHeight - padding;
-            
-            // QR Code (Bottom Left)
-            const qrSize = 16;
-            const qrX = wx;
-            const qrY = footerY - qrSize + 2;
+            // Note
+            if (order.notes) {
+                cy += 2;
+                doc.setFontSize(7);
+                doc.setFont(fontName, 'normal'); // Italic not always supported in PDF.js default fonts properly without loading Italic ttf
+                doc.text(`Ghi chú: ${order.notes}`, wx, cy);
+            }
 
+            // --- 7. FOOTER (TOTAL & QR) ---
+            const footerY = wy + cellHeight - (padding * 2); // Bottom of working area
+            
+            // QR Code (Left)
+            const qrSize = 14;
+            const qrY = footerY - qrSize;
+            
             if (bankConfig && bankConfig.accountNo && order.paymentMethod !== PaymentMethod.PAID) {
-                // Generate VietQR
                 const content = `DH ${order.id}`;
                 const qrString = generateVietQRPayload(bankConfig.bankId, bankConfig.accountNo, order.totalPrice, content);
                 const qrBase64 = await generateQRCode(qrString);
                 if (qrBase64) {
-                    doc.addImage(qrBase64, 'PNG', qrX, qrY, qrSize, qrSize);
+                    doc.addImage(qrBase64, 'PNG', wx, qrY, qrSize, qrSize);
+                    
+                    // --- CTA ARROW & TEXT ---
+                    const arrowX = wx + qrSize + 1;
+                    const arrowY = qrY + (qrSize / 2);
+
+                    doc.setFontSize(7);
+                    doc.setFont(fontName, 'bold');
+                    doc.setTextColor(0, 0, 0);
+                    
+                    // Text
+                    doc.text("QUÉT MÃ ĐỂ", arrowX + 5, arrowY - 1);
+                    doc.text("THANH TOÁN", arrowX + 5, arrowY + 2);
+
+                    // Draw Arrow pointing Left <----
+                    doc.setDrawColor(0, 0, 0);
+                    doc.setLineWidth(0.3);
+                    doc.line(arrowX + 4, arrowY, arrowX, arrowY); // Shaft
+                    doc.line(arrowX + 1.5, arrowY - 1.5, arrowX, arrowY); // Top wing
+                    doc.line(arrowX + 1.5, arrowY + 1.5, arrowX, arrowY); // Bottom wing
                 }
-                doc.setFontSize(6);
-                doc.text("Quét để TT", qrX + (qrSize/2), qrY + qrSize + 2, { align: 'center' });
             } else if (order.paymentMethod === PaymentMethod.PAID) {
-                // Paid Badge
-                doc.setDrawColor(21, 128, 61); // Green
-                doc.roundedRect(qrX, footerY - 10, 25, 8, 1, 1, 'D');
-                doc.setTextColor(21, 128, 61);
-                doc.setFontSize(8);
+                // STAMP "PAID"
+                doc.setDrawColor(0, 0, 0);
+                doc.setLineWidth(0.5);
+                doc.rect(wx, qrY + 4, 25, 8);
+                doc.setFontSize(10);
                 doc.setFont(fontName, 'bold');
-                doc.text("ĐÃ THANH TOÁN", qrX + 12.5, footerY - 5, { align: 'center' });
-            } else {
-                // COD Badge
-                doc.setDrawColor(100, 100, 100); 
-                doc.roundedRect(qrX, footerY - 10, 20, 8, 1, 1, 'D');
-                doc.setTextColor(100, 100, 100);
-                doc.setFontSize(8);
-                doc.setFont(fontName, 'bold');
-                doc.text("COD", qrX + 10, footerY - 5, { align: 'center' });
+                doc.text("ĐÃ TT", wx + 12.5, qrY + 9, { align: 'center' });
             }
 
-            // TOTAL (Bottom Right - HUGE)
-            doc.setTextColor(COLOR_PRIMARY[0], COLOR_PRIMARY[1], COLOR_PRIMARY[2]); // Green
+            // TOTAL (Right - Very Big)
             doc.setFontSize(16);
             doc.setFont(fontName, 'bold');
             const totalStr = `${new Intl.NumberFormat('vi-VN').format(order.totalPrice)}đ`;
-            doc.text(totalStr, x + cellWidth - padding, footerY - 4, { align: 'right' });
+            doc.text(totalStr, wx + wWidth, footerY - 6, { align: 'right' });
             
-            // Label "Tổng cộng"
-            doc.setTextColor(COLOR_LIGHT[0], COLOR_LIGHT[1], COLOR_LIGHT[2]);
-            doc.setFontSize(7);
+            doc.setFontSize(8);
             doc.setFont(fontName, 'normal');
-            doc.text("TỔNG CỘNG", x + cellWidth - padding, footerY - 11, { align: 'right' });
+            doc.text("TỔNG THANH TOÁN", wx + wWidth, footerY - 13, { align: 'right' });
         }
 
         const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-        doc.save(`HoaDon8Up_${batchId}_${dateStr}.pdf`);
+        doc.save(`HoaDonBW_${batchId}_${dateStr}.pdf`);
     }
 };
