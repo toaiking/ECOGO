@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { BankConfig } from '../types';
+import { BankConfig, ShopConfig } from '../types';
 import { storageService } from '../services/storageService';
 import { dataImportService } from '../services/dataImportService';
 import toast from 'react-hot-toast';
@@ -31,6 +31,10 @@ const SettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
       accountName: '',
       template: 'compact2'
   });
+  const [shopConfig, setShopConfig] = useState<ShopConfig>({
+      shopName: 'ECOGO LOGISTICS',
+      hotline: ''
+  });
   const [testResult, setTestResult] = useState<string>('');
   const [isRunningTest, setIsRunningTest] = useState(false);
   
@@ -51,6 +55,9 @@ const SettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
           const load = async () => {
               const saved = await storageService.getBankConfig();
               if (saved) setConfig(saved);
+              
+              const savedShop = await storageService.getShopConfig();
+              if (savedShop) setShopConfig(savedShop);
               
               // Load tags
               const tags = storageService.getQuickTags();
@@ -74,6 +81,7 @@ const SettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
   const handleSave = async (e: React.FormEvent) => {
       e.preventDefault();
       await storageService.saveBankConfig(config);
+      await storageService.saveShopConfig(shopConfig);
       await storageService.saveQuickTags(quickTags);
       toast.success("Đã lưu tất cả cài đặt!");
       onClose();
@@ -128,8 +136,8 @@ const SettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
               const result = await storageService.generatePerformanceData(10000);
               setTestResult(`Hoàn tất! Tạo ${result.count} khách trong ${result.duration}ms.`);
               toast.success(`Stress test OK: ${result.duration}ms`);
-          } catch (e) {
-              setTestResult('Lỗi: ' + e);
+          } catch (e: any) {
+              setTestResult('Lỗi: ' + (e?.message || e));
           } finally {
               setIsRunningTest(false);
           }
@@ -144,8 +152,8 @@ const SettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
               const count = await storageService.markAllCustomersAsOld();
               setTestResult(`Đã cập nhật xong ${count} khách hàng.`);
               toast.success(`Xong! ${count} khách hàng đã thành Khách Cũ.`);
-          } catch (e) {
-              setTestResult('Lỗi: ' + e);
+          } catch (e: any) {
+              setTestResult('Lỗi: ' + (e?.message || e));
           } finally {
               setIsRunningTest(false);
           }
@@ -226,65 +234,88 @@ const SettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
         <div className="overflow-y-auto p-6 space-y-6">
             <form onSubmit={handleSave} className="space-y-4">
                 
-                {/* Logo Section */}
-                <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider">Thương hiệu & Logo</h4>
-                <div className="flex items-center gap-4 p-3 bg-gray-50 rounded-xl border border-gray-100">
-                    <div className="w-16 h-16 bg-white rounded-lg flex items-center justify-center border border-gray-200 overflow-hidden relative">
-                        {logo ? (
-                            <img src={logo} alt="Logo" className="w-full h-full object-contain" />
-                        ) : (
-                            <i className="fas fa-image text-gray-300 text-2xl"></i>
-                        )}
+                {/* Branding Section */}
+                <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider">Thông tin Cửa hàng</h4>
+                <div className="space-y-3 bg-gray-50 p-3 rounded-xl border border-gray-100">
+                    <div>
+                        <label className="block text-xs font-bold text-gray-500 mb-1">Tên Shop / Header Hóa đơn</label>
+                        <input 
+                            value={shopConfig.shopName}
+                            onChange={e => setShopConfig({...shopConfig, shopName: e.target.value})}
+                            className="w-full p-2.5 bg-white border border-gray-200 rounded-lg outline-none focus:border-eco-500 font-bold text-gray-800 uppercase"
+                            placeholder="ECOGO LOGISTICS"
+                        />
                     </div>
-                    <div className="flex-grow">
-                        <label className="block text-xs font-bold text-blue-600 mb-2 cursor-pointer hover:underline">
-                            <input type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
-                            <i className="fas fa-upload mr-1"></i> Tải ảnh lên
-                        </label>
-                        {logo && (
-                            <button type="button" onClick={handleRemoveLogo} className="text-xs font-bold text-red-500 hover:text-red-600">
-                                <i className="fas fa-trash mr-1"></i> Xóa Logo
-                            </button>
-                        )}
+                    <div>
+                        <label className="block text-xs font-bold text-gray-500 mb-1">Hotline (In trên hóa đơn)</label>
+                        <input 
+                            value={shopConfig.hotline}
+                            onChange={e => setShopConfig({...shopConfig, hotline: e.target.value})}
+                            className="w-full p-2.5 bg-white border border-gray-200 rounded-lg outline-none focus:border-eco-500 font-medium"
+                            placeholder="0912..."
+                        />
+                    </div>
+                    
+                    <div className="flex items-center gap-4 pt-2 border-t border-gray-200 mt-2">
+                        <div className="w-12 h-12 bg-white rounded-lg flex items-center justify-center border border-gray-200 overflow-hidden relative flex-shrink-0">
+                            {logo ? (
+                                <img src={logo} alt="Logo" className="w-full h-full object-contain" />
+                            ) : (
+                                <i className="fas fa-image text-gray-300"></i>
+                            )}
+                        </div>
+                        <div className="flex-grow">
+                            <label className="block text-xs font-bold text-blue-600 mb-1 cursor-pointer hover:underline">
+                                <input type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
+                                <i className="fas fa-upload mr-1"></i> Đổi Logo
+                            </label>
+                            {logo && (
+                                <button type="button" onClick={handleRemoveLogo} className="text-xs font-bold text-red-500 hover:text-red-600">
+                                    <i className="fas fa-trash mr-1"></i> Xóa
+                                </button>
+                            )}
+                        </div>
                     </div>
                 </div>
 
                 {/* Bank Section */}
                 <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider pt-2">Ngân hàng & Thanh toán</h4>
-                <div>
-                    <label className="block text-xs font-bold text-gray-500 mb-1">Ngân hàng</label>
-                    <select 
-                        value={config.bankId}
-                        onChange={e => setConfig({...config, bankId: e.target.value})}
-                        className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:border-eco-500 font-medium"
-                    >
-                        {BANKS.map(b => (
-                            <option key={b.id} value={b.id}>{b.name} ({b.id})</option>
-                        ))}
-                    </select>
-                </div>
-                
-                <div>
-                    <label className="block text-xs font-bold text-gray-500 mb-1">Số tài khoản</label>
-                    <input 
-                        type="text"
-                        value={config.accountNo}
-                        onChange={e => setConfig({...config, accountNo: e.target.value})}
-                        placeholder="VD: 0912345678"
-                        required
-                        className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:border-eco-500 font-bold tracking-wide"
-                    />
-                </div>
+                <div className="space-y-3">
+                    <div>
+                        <label className="block text-xs font-bold text-gray-500 mb-1">Ngân hàng</label>
+                        <select 
+                            value={config.bankId}
+                            onChange={e => setConfig({...config, bankId: e.target.value})}
+                            className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:border-eco-500 font-medium"
+                        >
+                            {BANKS.map(b => (
+                                <option key={b.id} value={b.id}>{b.name} ({b.id})</option>
+                            ))}
+                        </select>
+                    </div>
+                    
+                    <div>
+                        <label className="block text-xs font-bold text-gray-500 mb-1">Số tài khoản</label>
+                        <input 
+                            type="text"
+                            value={config.accountNo}
+                            onChange={e => setConfig({...config, accountNo: e.target.value})}
+                            placeholder="VD: 0912345678"
+                            required
+                            className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:border-eco-500 font-bold tracking-wide"
+                        />
+                    </div>
 
-                <div>
-                    <label className="block text-xs font-bold text-gray-500 mb-1">Tên chủ tài khoản (Viết hoa)</label>
-                    <input 
-                        type="text"
-                        value={config.accountName}
-                        onChange={e => setConfig({...config, accountName: e.target.value.toUpperCase()})}
-                        placeholder="NGUYEN VAN A"
-                        className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:border-eco-500 font-bold uppercase"
-                    />
+                    <div>
+                        <label className="block text-xs font-bold text-gray-500 mb-1">Tên chủ tài khoản (Viết hoa)</label>
+                        <input 
+                            type="text"
+                            value={config.accountName}
+                            onChange={e => setConfig({...config, accountName: e.target.value.toUpperCase()})}
+                            placeholder="NGUYEN VAN A"
+                            className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:border-eco-500 font-bold uppercase"
+                        />
+                    </div>
                 </div>
 
                 {/* Quick Tags Section */}

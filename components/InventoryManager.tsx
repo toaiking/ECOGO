@@ -1,13 +1,14 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import toast from 'react-hot-toast';
-import { Product } from '../types';
+import { Product, Order, OrderStatus } from '../types';
 import { storageService } from '../services/storageService';
 import ConfirmModal from './ConfirmModal';
 
 const InventoryManager: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]); 
   const [filteredProducts, setFilteredProducts] = useState<Product[]>([]);
   
   // Filters
@@ -23,32 +24,26 @@ const InventoryManager: React.FC = () => {
   
   const [editingId, setEditingId] = useState<string | null>(null);
 
-  // Delete Modal State
+  // Modals
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
-
-  // Sync Confirmation State
   const [showSyncConfirm, setShowSyncConfirm] = useState(false);
   const [pendingProductUpdate, setPendingProductUpdate] = useState<Product | null>(null);
 
   useEffect(() => {
-    const unsubscribe = storageService.subscribeProducts((data) => {
-        setProducts(data);
-    });
+    const unsubProducts = storageService.subscribeProducts(setProducts);
+    const unsubOrders = storageService.subscribeOrders(setOrders); 
     return () => {
-        if (typeof unsubscribe === 'function') unsubscribe();
+        if (typeof unsubProducts === 'function') unsubProducts();
+        if (typeof unsubOrders === 'function') unsubOrders();
     };
   }, []);
 
   useEffect(() => {
     let result = products;
-    
-    // Filter by name
     if (searchTerm) {
       result = result.filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase()));
     }
-
-    // Filter by Import Date
     if (filterDate) {
       const selectedTime = new Date(filterDate).setHours(0,0,0,0);
       result = result.filter(p => {
@@ -56,7 +51,6 @@ const InventoryManager: React.FC = () => {
         return prodTime === selectedTime;
       });
     }
-
     setFilteredProducts(result);
   }, [products, searchTerm, filterDate]);
 
@@ -73,24 +67,25 @@ const InventoryManager: React.FC = () => {
       importPrice: Number(formData.importPrice) || 0,
       defaultWeight: 1, 
       stockQuantity: qty,
-      totalImported: qty, // Note: In edit mode this resets total imported if changed here, simplify for now
+      totalImported: qty, 
       lastImportDate: Date.now(),
     };
 
-    // If editing existing product, preserve some original fields if not explicitly handled
     if (editingId) {
         const original = products.find(p => p.id === editingId);
         if (original) {
-            productData.totalImported = original.totalImported; // Keep history
-            // If user explicitly changed stock in form, use it, else keep original or calculate diff
-            // Here we assume form input overrides stock
+            const oldTotal = Number(original.totalImported) || 0;
+            // Nếu người dùng chủ động sửa stockQuantity, ta cập nhật lại totalImported nếu stock > total (Logic nhập hàng thêm)
+            // Tuy nhiên ở đây giữ nguyên logic cũ là totalImported ghi nhận lịch sử nhập
+            // Để đơn giản: Nếu nhập hàng (qty > oldStock), ta cộng dồn vào totalImported.
+            // Nhưng đây là form Edit trực tiếp, nên ta chỉ đảm bảo total >= stock
+            productData.totalImported = qty > oldTotal ? qty : oldTotal;
         }
     }
 
     await storageService.saveProduct(productData);
     
     if (editingId) {
-        // If updating, ask to sync to pending orders
         setPendingProductUpdate(productData);
         setShowSyncConfirm(true);
     } else {
@@ -113,7 +108,6 @@ const InventoryManager: React.FC = () => {
           importPrice: product.importPrice,
           stockQuantity: product.stockQuantity
       });
-      // Scroll to top to see form
       window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -151,8 +145,8 @@ const InventoryManager: React.FC = () => {
   };
 
   const handleQuickUpdateStock = async (product: Product, change: number) => {
-      const currentStock = product.stockQuantity || 0;
-      const currentImported = product.totalImported || currentStock; 
+      const currentStock = Number(product.stockQuantity) || 0;
+      const currentImported = Number(product.totalImported) || currentStock; 
 
       const newStock = Math.max(0, currentStock + change);
       const newImported = change > 0 ? currentImported + change : currentImported;
@@ -250,7 +244,7 @@ const InventoryManager: React.FC = () => {
                             placeholder="Tìm nhanh..." 
                             value={searchTerm}
                             onChange={e => setSearchTerm(e.target.value)}
-                            className="w-full sm:w-60 pl-9 pr-3 py-2 bg-gray-50 border-transparent focus:bg-white focus:ring-2 focus:ring-eco-100 rounded-lg text-sm outline-none transition-all"
+                            className="w-full sm:w-48 pl-9 pr-3 py-2 bg-gray-50 border-transparent focus:bg-white focus:ring-2 focus:ring-eco-100 rounded-lg text-sm outline-none transition-all"
                         />
                     </div>
                 </div>
@@ -273,9 +267,11 @@ const InventoryManager: React.FC = () => {
                     </thead>
                     <tbody className="divide-y divide-gray-50">
                         {filteredProducts.map(p => {
-                          const totalImported = p.totalImported || p.stockQuantity || 1;
-                          const percent = Math.min(100, (p.stockQuantity / totalImported) * 100);
-                          const isLowStock = p.stockQuantity < 5;
+                          const stock = Number(p.stockQuantity) || 0;
+                          const totalImported = Math.max(Number(p.totalImported) || 0, stock);
+                          const safeTotal = totalImported > 0 ? totalImported : 1;
+                          const percent = Math.min(100, (stock / safeTotal) * 100);
+                          const isLowStock = stock < 5;
                           
                           return (
                             <tr key={p.id} className="group hover:bg-gray-50/80 transition-colors">
@@ -302,10 +298,9 @@ const InventoryManager: React.FC = () => {
                                     <div className="max-w-[180px] mx-auto">
                                         <div className="flex justify-between items-end mb-1">
                                             <span className="text-[10px] font-bold text-gray-400 uppercase">Còn lại</span>
-                                            <span className={`text-sm font-bold ${isLowStock ? 'text-red-500' : 'text-gray-900'}`}>{p.stockQuantity}/{totalImported}</span>
+                                            <span className={`text-sm font-bold ${isLowStock ? 'text-red-500' : 'text-gray-900'}`}>{stock}/{totalImported}</span>
                                         </div>
                                         
-                                        {/* Minimalist Progress Bar */}
                                         <div className="w-full bg-gray-100 rounded-full h-1.5 overflow-hidden mb-3">
                                             <div 
                                                 className={`h-full rounded-full transition-all duration-500 ${isLowStock ? 'bg-red-500' : 'bg-eco-500'}`} 
@@ -313,7 +308,6 @@ const InventoryManager: React.FC = () => {
                                             ></div>
                                         </div>
                                         
-                                        {/* Subtle Controls */}
                                         <div className="flex items-center justify-between opacity-40 group-hover:opacity-100 transition-opacity duration-200">
                                             <button onClick={() => handleQuickUpdateStock(p, -1)} className="w-6 h-6 rounded hover:bg-red-50 hover:text-red-600 flex items-center justify-center transition-colors">
                                                 <i className="fas fa-minus text-[10px]"></i>
@@ -353,7 +347,7 @@ const InventoryManager: React.FC = () => {
         </div>
       </div>
 
-      {/* Delete Confirmation Modal */}
+      {/* EXISTING CONFIRM MODALS */}
       <ConfirmModal 
         isOpen={showDeleteConfirm}
         title="Xóa sản phẩm?"
@@ -363,8 +357,6 @@ const InventoryManager: React.FC = () => {
         confirmLabel="Xóa ngay"
         isDanger={true}
       />
-
-      {/* SYNC CONFIRMATION MODAL */}
       <ConfirmModal 
         isOpen={showSyncConfirm}
         title="Đồng bộ thay đổi?"

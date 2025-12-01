@@ -32,30 +32,38 @@ export const parseOrderText = async (
 ): Promise<SmartParseResult> => {
   const ai = getClient();
   
-  // Prepare Context Data (Limit to avoid token overflow if lists are huge, 
-  // but for small business < 1000 items/customers this is fine for Flash models)
+  // Prepare Context Data (Limit to avoid token overflow)
   const productContext = products.map(p => `"${p.name}"`).join(', ');
   const customerContext = customers.slice(0, 200).map(c => `"${c.name}" (${c.phone})`).join(', ');
 
   const prompt = `
-    You are an intelligent order parser for a logistics app.
+    You are an intelligent order parser for a logistics app (Vietnamese context).
+    The input text is a raw chat log copied from Facebook Messenger, Zalo, TikTok Shop, or SMS.
     
     CONTEXT DATA:
-    1. VALID PRODUCT NAMES IN WAREHOUSE: [${productContext}]
+    1. VALID PRODUCT NAMES: [${productContext}]
     2. EXISTING CUSTOMERS: [${customerContext}]
 
     INPUT TEXT: "${text}"
 
     INSTRUCTIONS:
-    1. **Customer**: Match the input name/phone to the "Existing Customers" list. 
-       - If a match is found, use that exact Name and Phone. 
-       - If not found, extract the name/phone from input text as is.
-       - "Address" is the delivery location.
-    2. **Items**: Extract items and quantities. 
-       - CRITICAL: Try to match the item name EXACTLY to one in the "Valid Product Names" list. 
-       - Example: Input "2 bao gạo", Valid List "Gạo ST25" -> Return "Gạo ST25".
-       - Return a list of items.
-    3. **Payment**: Detect if "CK", "chuyển khoản" (TRANSFER) or "đã thanh toán" (PAID). Default is CASH.
+    1. **Noise Filtering (Aggressive)**: 
+       - Ignore timestamps: "10:30", "Yesterday", "Hôm qua", "Hôm nay", "Mon", "Tue", "Vừa xong".
+       - Ignore status labels: "Sent", "Seen", "Delivered", "Đã gửi", "Đã xem", "Đã nhận", "Hoạt động...".
+       - Ignore headers: "You sent", "You:", "Customer:", "Shop:", "Bạn đã gửi", "Trả lời".
+    2. **Customer Extraction**: 
+       - Name: Identify capitalized names (e.g., "Nguyen Van A", "Chị Lan"). Check "EXISTING CUSTOMERS" for matches.
+       - Phone: Extract Vietnamese phone numbers (09x, 03x, 07x...). Remove dots/spaces (e.g., 0912.345.678 -> 0912345678).
+       - Address: Identify address markers: "số", "ngõ", "ngách", "đường", "p", "phường", "q", "quận", "tp", "thôn", "xã".
+       - NOTE: If an existing customer matches the Phone/Name, prefer their stored data.
+    3. **Items Extraction**: 
+       - Fuzzy match input text to "VALID PRODUCT NAMES".
+       - Handle quantities like "2 cái", "x2", "2kg", "lấy 2", "cho 2".
+       - If no match in valid list, extract the raw item text.
+    4. **Payment Detection**: 
+       - "ck", "chuyển khoản", "banking" -> TRANSFER.
+       - "đã tt", "đã thanh toán" -> PAID.
+       - Default -> CASH.
 
     OUTPUT JSON SCHEMA:
   `;
@@ -81,7 +89,7 @@ export const parseOrderText = async (
               }
             }
           },
-          itemsString: { type: Type.STRING, description: "Fallback summary string" },
+          itemsString: { type: Type.STRING, description: "Fallback summary string if array is empty" },
           notes: { type: Type.STRING },
           paymentMethod: { type: Type.STRING, enum: ["CASH", "TRANSFER", "PAID"] }
         },
@@ -92,7 +100,6 @@ export const parseOrderText = async (
 
   if (response.text) {
     const raw = JSON.parse(response.text);
-    // map string to enum just in case
     let method = PaymentMethod.CASH;
     if (raw.paymentMethod === 'TRANSFER') method = PaymentMethod.TRANSFER;
     if (raw.paymentMethod === 'PAID') method = PaymentMethod.PAID;
@@ -103,9 +110,7 @@ export const parseOrderText = async (
 };
 
 export const generateDeliveryMessage = async (order: Order): Promise<string> => {
-  // Tối ưu hóa: Sử dụng Template String xử lý nội bộ thay vì gọi AI
-  // Giúp tốc độ phản hồi là tức thì (Real-time)
-  
+  // Template tin nhắn ngắn gọn, đầy đủ
   let statusText = "";
   switch(order.status) {
       case OrderStatus.PENDING: statusText = "đang chờ xử lý"; break;
@@ -115,7 +120,6 @@ export const generateDeliveryMessage = async (order: Order): Promise<string> => 
       case OrderStatus.CANCELLED: statusText = "đã hủy"; break;
   }
 
-  // Tóm tắt hàng hóa: Gạo ST25 (x2), Nước mắm
   const itemsList = order.items.map(i => `${i.name}${i.quantity > 1 ? ` (${i.quantity})` : ''}`).join(", ");
   
   const priceFormatted = new Intl.NumberFormat('vi-VN').format(order.totalPrice);
@@ -123,7 +127,6 @@ export const generateDeliveryMessage = async (order: Order): Promise<string> => 
     ? `Thu: ${priceFormatted}đ` 
     : "Đã thanh toán";
 
-  // Template tin nhắn ngắn gọn, đầy đủ
   return `Chào ${order.customerName}, đơn ${itemsList} ${statusText}. ${paymentText}. Cảm ơn!`;
 };
 

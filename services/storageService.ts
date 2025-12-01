@@ -1,5 +1,5 @@
 
-import { Order, OrderStatus, Product, Customer, BankConfig, Notification } from '../types';
+import { Order, OrderStatus, Product, Customer, BankConfig, Notification, ShopConfig } from '../types';
 import { db } from '../firebaseConfig';
 import { v4 as uuidv4 } from 'uuid';
 import { 
@@ -26,6 +26,7 @@ const PRODUCT_KEY = 'ecogo_products_v1';
 const CUSTOMER_KEY = 'ecogo_customers_v1';
 const USER_KEY = 'ecogo_current_user';
 const BANK_KEY = 'ecogo_bank_config';
+const SHOP_KEY = 'ecogo_shop_config';
 const NOTIF_KEY = 'ecogo_notifications_v1';
 const TAGS_KEY = 'ecogo_quick_tags';
 const QUOTA_KEY = 'ecogo_quota_status';
@@ -282,6 +283,30 @@ export const storageService = {
           } catch (e) { console.warn("Fetch tags failed", e); }
       }
       return storageService.getQuickTags();
+  },
+
+  // --- SHOP CONFIG ---
+  saveShopConfig: async (config: ShopConfig) => {
+      localStorage.setItem(SHOP_KEY, JSON.stringify(config));
+      await safeCloudOp(() => setDoc(doc(db, "settings", "shopConfig"), sanitize(config)));
+  },
+
+  getShopConfig: async (): Promise<ShopConfig | null> => {
+      const localData = localStorage.getItem(SHOP_KEY);
+      if (localData) return JSON.parse(localData);
+      
+      let config: ShopConfig | null = null;
+      if (isOnline()) {
+          try {
+            const snap = await getDoc(doc(db, "settings", "shopConfig"));
+            if (snap.exists()) {
+                config = snap.data() as ShopConfig;
+            }
+          } catch(e) { console.warn("Fetch shop config failed", e); }
+      }
+      
+      if (config) { localStorage.setItem(SHOP_KEY, JSON.stringify(config)); }
+      return config;
   },
 
   // --- BANK CONFIG ---

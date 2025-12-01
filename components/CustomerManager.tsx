@@ -13,7 +13,7 @@ const CustomerManager: React.FC = () => {
   // Defer search term processing to keep input responsive
   const deferredSearchTerm = useDeferredValue(searchTerm);
 
-  const [formData, setFormData] = useState<Partial<Customer>>({ name: '', phone: '', address: '', priorityScore: 999 });
+  const [formData, setFormData] = useState<Partial<Customer>>({ name: '', phone: '', address: '', priorityScore: 999, socialLink: '' });
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -33,8 +33,8 @@ const CustomerManager: React.FC = () => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   
-  // Increased row height to accommodate mobile card layout (was 50)
-  const ROW_HEIGHT = 90; 
+  // Increased row height to accommodate mobile card layout
+  const ROW_HEIGHT = 100; 
   const CONTAINER_HEIGHT = 600; 
   const BUFFER = 5; 
 
@@ -112,11 +112,12 @@ const CustomerManager: React.FC = () => {
         phone: cleanPhone, 
         address: formData.address || '', 
         lastOrderDate: Date.now(), 
-        priorityScore: formData.priorityScore || 999 
+        priorityScore: formData.priorityScore || 999,
+        socialLink: formData.socialLink || ''
     };
     
     await storageService.upsertCustomer(newCustomer);
-    setFormData({ name: '', phone: '', address: '', priorityScore: 999 });
+    setFormData({ name: '', phone: '', address: '', priorityScore: 999, socialLink: '' });
     toast.success('Đã lưu khách hàng');
   };
 
@@ -141,7 +142,8 @@ const CustomerManager: React.FC = () => {
                               phone: p,
                               address: c.address || '',
                               lastOrderDate: Date.now(),
-                              priorityScore: (c.priorityScore || c.priority) ? Number(c.priorityScore || c.priority) : 999
+                              priorityScore: (c.priorityScore || c.priority) ? Number(c.priorityScore || c.priority) : 999,
+                              socialLink: c.socialLink || ''
                             };
                         }).filter(c => c.name);
                     } else {
@@ -273,6 +275,10 @@ const CustomerManager: React.FC = () => {
                       <input value={formData.phone} onChange={e => setFormData({ ...formData, phone: e.target.value })} className="w-full p-2.5 bg-gray-50 border-transparent focus:bg-white focus:border-eco-500 border rounded-lg outline-none transition-all text-sm" placeholder="Không bắt buộc" />
                   </div>
                   <div>
+                      <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1 block">Link Facebook / Zalo</label>
+                      <input value={formData.socialLink} onChange={e => setFormData({ ...formData, socialLink: e.target.value })} className="w-full p-2.5 bg-gray-50 border-transparent focus:bg-white focus:border-eco-500 border rounded-lg outline-none transition-all text-sm text-blue-600" placeholder="https://..." />
+                  </div>
+                  <div>
                       <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1 block">Địa chỉ</label>
                       <textarea value={formData.address} onChange={e => setFormData({ ...formData, address: e.target.value })} className="w-full p-2.5 bg-gray-50 border-transparent focus:bg-white focus:border-eco-500 border rounded-lg outline-none transition-all resize-none text-sm" rows={2} placeholder="Số nhà, đường, quận..." />
                   </div>
@@ -368,7 +374,7 @@ const CustomerManager: React.FC = () => {
                 </div>
                 
                 {/* TABLE HEADER (Sticky - Only on Desktop) */}
-                <div className="hidden sm:grid bg-gray-100 border-b border-gray-200 grid-cols-[80px_1fr_120px_1fr_40px] gap-4 px-4 py-3 text-gray-500 font-bold uppercase text-[10px] tracking-wider select-none shadow-sm z-10">
+                <div className="hidden sm:grid bg-gray-100 border-b border-gray-200 grid-cols-[60px_1fr_120px_1fr_40px] gap-4 px-4 py-3 text-gray-500 font-bold uppercase text-[10px] tracking-wider select-none shadow-sm z-10">
                     <div className="text-center" title="Số ưu tiên lộ trình">Ưu tiên</div>
                     <div>Khách hàng</div>
                     <div>Liên hệ</div>
@@ -393,7 +399,7 @@ const CustomerManager: React.FC = () => {
                             {visibleCustomers.map((c, index) => (
                                 <div 
                                     key={c.id} 
-                                    className="absolute left-0 right-0 px-4 border-b border-gray-100 hover:bg-blue-50/50 transition-colors group flex flex-col justify-center sm:grid sm:grid-cols-[80px_1fr_120px_1fr_40px] sm:gap-4 sm:items-center bg-white"
+                                    className="absolute left-0 right-0 px-4 border-b border-gray-100 hover:bg-blue-50/50 transition-colors group flex flex-col justify-center sm:grid sm:grid-cols-[60px_1fr_120px_1fr_40px] sm:gap-4 sm:items-center bg-white"
                                     style={{ top: topPadding + index * ROW_HEIGHT, height: ROW_HEIGHT }}
                                 >
                                     {/* --- MOBILE VIEW: TOP ROW (Name + Priority) --- */}
@@ -432,7 +438,7 @@ const CustomerManager: React.FC = () => {
                                     </div>
 
                                     {/* --- MOBILE VIEW: BOTTOM ROW (Phone Button) --- */}
-                                    <div className="sm:order-3 sm:col-start-3">
+                                    <div className="sm:order-3 sm:col-start-3 flex items-center gap-2">
                                         {c.phone ? (
                                             <a 
                                                 href={`tel:${c.phone}`}
@@ -444,6 +450,23 @@ const CustomerManager: React.FC = () => {
                                         ) : (
                                             <span className="text-xs text-gray-300 italic">No phone</span>
                                         )}
+                                        
+                                        {/* Social Link Input */}
+                                        <div className="relative flex-grow sm:flex-grow-0 sm:w-8">
+                                            <input 
+                                                className={`w-full sm:w-8 sm:h-8 rounded-full border border-gray-200 text-xs px-2 sm:px-0 sm:text-center outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-200 transition-all ${c.socialLink ? 'text-blue-600 bg-blue-50 border-blue-200' : 'text-gray-400 bg-gray-50'}`}
+                                                placeholder={c.socialLink ? "Link..." : "+Link"}
+                                                defaultValue={c.socialLink}
+                                                title={c.socialLink || "Dán link Facebook"}
+                                                onBlur={(e) => handleInlineUpdate(c, 'socialLink', e.target.value)}
+                                                onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+                                            />
+                                            {c.socialLink && (
+                                                <a href={c.socialLink} target="_blank" rel="noopener noreferrer" className="absolute right-2 top-1/2 -translate-y-1/2 sm:hidden text-blue-500">
+                                                    <i className="fas fa-external-link-alt"></i>
+                                                </a>
+                                            )}
+                                        </div>
                                     </div>
                                     
                                     {/* Delete Button (Desktop: Col 5) */}

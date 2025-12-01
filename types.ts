@@ -63,6 +63,7 @@ export interface Customer {
   totalOrders?: number;
   updatedAt?: number; // Timestamp for Delta Sync
   isLegacy?: boolean; // NEW: Manually marked as "Old Customer" regardless of order count
+  socialLink?: string; // NEW: Link to Facebook/Zalo/Messenger conversation
 }
 
 export interface SmartParseResult {
@@ -82,6 +83,11 @@ export interface BankConfig {
   accountName: string;  // Tên chủ tài khoản
   template: string;     // compact2 (mặc định)
   sepayApiToken?: string; // Token SePay để check biến động
+}
+
+export interface ShopConfig {
+  shopName: string;
+  hotline: string;
 }
 
 export interface Notification {
