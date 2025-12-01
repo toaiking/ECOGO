@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState, useMemo, useRef, useDeferredValue } from 'react';
 import toast from 'react-hot-toast';
 import { v4 as uuidv4 } from 'uuid';
@@ -246,7 +245,7 @@ const TrackingDashboard: React.FC = () => {
     recognition.onerror = (event: any) => {
         setIsListeningSearch(false);
         // Silent error or log
-        console.warn("Voice search error", event?.error);
+        console.warn("Voice search error", String(event?.error));
     };
 
     recognition.onresult = (event: any) => {
