@@ -18,7 +18,8 @@ import {
   limit,
   getDoc,
   where,
-  Timestamp
+  Timestamp,
+  increment
 } from "firebase/firestore";
 
 const ORDER_KEY = 'ecogo_orders_v3'; 
@@ -1054,6 +1055,39 @@ export const storageService = {
                   createdAt: Date.now(),
                   relatedOrderId: orderId
               });
+          }
+      }
+  },
+
+  incrementReminderCount: async (orderIds: string[]) => {
+      if (!orderIds || orderIds.length === 0) return;
+      
+      const list = _memoryOrders || [];
+      
+      // Update local first
+      orderIds.forEach(id => {
+          const idx = list.findIndex(o => o.id === id);
+          if (idx >= 0) {
+              const current = list[idx].reminderCount || 0;
+              list[idx] = { ...list[idx], reminderCount: current + 1 };
+          }
+      });
+      
+      _memoryOrders = list;
+      localStorage.setItem(ORDER_KEY, JSON.stringify(list));
+      window.dispatchEvent(new Event('storage_' + ORDER_KEY));
+
+      // Batch update Cloud
+      if (isOnline()) {
+          const batch = writeBatch(db);
+          orderIds.forEach(id => {
+               const ref = doc(db, "orders", id);
+               batch.update(ref, { reminderCount: increment(1) });
+          });
+          try {
+              await batch.commit();
+          } catch(e) {
+              console.error("Failed to increment reminders", e);
           }
       }
   },
