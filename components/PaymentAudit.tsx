@@ -18,6 +18,10 @@ const PaymentAudit: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [bankConfig, setBankConfig] = useState<any>(null);
   
+  // Filters
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedBatch, setSelectedBatch] = useState('ALL');
+  
   // Confirmation State
   const [showConfirm, setShowConfirm] = useState(false);
   const [targetIds, setTargetIds] = useState<string[]>([]);
@@ -50,15 +54,34 @@ const PaymentAudit: React.FC = () => {
     };
   }, []);
 
-  const totalAmount = orders.reduce((sum, o) => sum + o.totalPrice, 0);
+  const batches = useMemo(() => {
+    const batchSet = new Set<string>();
+    orders.forEach(o => { if (o.batchId) batchSet.add(o.batchId); });
+    return Array.from(batchSet).sort();
+  }, [orders]);
+
+  // --- FILTERING LOGIC ---
+  const filteredOrders = useMemo(() => {
+    return orders.filter(o => {
+        const matchSearch = searchTerm === '' || 
+             o.customerName.toLowerCase().includes(searchTerm.toLowerCase()) || 
+             o.customerPhone.includes(searchTerm) || 
+             o.id.includes(searchTerm.toUpperCase());
+             
+        const matchBatch = selectedBatch === 'ALL' || o.batchId === selectedBatch;
+        
+        return matchSearch && matchBatch;
+    });
+  }, [orders, searchTerm, selectedBatch]);
+
+  const totalAmount = filteredOrders.reduce((sum, o) => sum + o.totalPrice, 0);
 
   // --- GROUPING LOGIC ---
   const customerGroups = useMemo(() => {
       const groups: Record<string, CustomerDebtGroup> = {};
       
-      orders.forEach(o => {
+      filteredOrders.forEach(o => {
           // Group key priority: CustomerID -> Phone -> Name
-          // We prioritize ID to ensure correct grouping even if phone varies slightly
           const key = o.customerId || (o.customerPhone && o.customerPhone.length > 5 
               ? o.customerPhone 
               : o.customerName);
@@ -79,7 +102,7 @@ const PaymentAudit: React.FC = () => {
       });
 
       return Object.values(groups).sort((a, b) => b.totalAmount - a.totalAmount);
-  }, [orders]);
+  }, [filteredOrders]);
 
   // --- HANDLERS ---
 
@@ -98,8 +121,6 @@ const PaymentAudit: React.FC = () => {
 
   const executeConfirm = async () => {
     if (targetIds.length > 0) {
-      // We need to pass customer name for notification context. 
-      // Just pick the name from the first order found.
       const firstOrder = orders.find(o => o.id === targetIds[0]);
       
       const promises = targetIds.map(id => 
@@ -124,10 +145,8 @@ const PaymentAudit: React.FC = () => {
     const toastId = toast.loading("Đang tạo mã QR...");
 
     try {
-        // VietQR QuickLink
         const url = `https://img.vietqr.io/image/${bankConfig.bankId}-${bankConfig.accountNo}-${bankConfig.template || 'compact2'}.png?amount=${amount}&addInfo=${encodeURIComponent(content)}&accountName=${encodeURIComponent(bankConfig.accountName)}`;
 
-        // Fetch image to blob
         const response = await fetch(url);
         const blob = await response.blob();
         const file = new File([blob], `QR-${Date.now()}.png`, { type: "image/png" });
@@ -160,8 +179,6 @@ const PaymentAudit: React.FC = () => {
   };
 
   const handleShareGroupQR = (group: CustomerDebtGroup) => {
-      // Content: "TT <TEN> <SL> DON" -> "TT ANH NAM 3 DON"
-      // Remove accents for banking compatibility
       const safeName = group.customerName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9 ]/g, '').toUpperCase();
       const words = safeName.split(' ');
       const shortName = words.length > 2 ? `${words[0]} ${words[words.length-1]}` : safeName;
@@ -198,35 +215,63 @@ const PaymentAudit: React.FC = () => {
             <div className="text-right bg-white/10 p-4 rounded-xl border border-white/20 min-w-[200px]">
             <div className="text-xs text-blue-200 uppercase font-bold">Tổng chờ thu</div>
             <div className="text-3xl font-black">{new Intl.NumberFormat('vi-VN').format(totalAmount)}<span className="text-sm font-normal text-blue-200 ml-1">đ</span></div>
-            <div className="text-xs font-bold bg-white/20 inline-block px-2 py-0.5 rounded mt-1">{orders.length} đơn hàng</div>
+            <div className="text-xs font-bold bg-white/20 inline-block px-2 py-0.5 rounded mt-1">{filteredOrders.length} đơn hàng</div>
             </div>
         </div>
         
-        {/* TABS */}
-        <div className="mt-6 flex bg-blue-900/30 p-1 rounded-xl w-full md:w-auto self-start inline-flex">
-            <button 
-                onClick={() => setViewMode('SINGLE')}
-                className={`flex-1 md:flex-none px-6 py-2 rounded-lg text-sm font-bold transition-all ${viewMode === 'SINGLE' ? 'bg-white text-blue-700 shadow-md' : 'text-blue-200 hover:bg-white/10'}`}
-            >
-                Theo Đơn Lẻ
-            </button>
-            <button 
-                onClick={() => setViewMode('CUSTOMER')}
-                className={`flex-1 md:flex-none px-6 py-2 rounded-lg text-sm font-bold transition-all ${viewMode === 'CUSTOMER' ? 'bg-white text-blue-700 shadow-md' : 'text-blue-200 hover:bg-white/10'}`}
-            >
-                Gộp Theo Khách ({customerGroups.length})
-            </button>
+        {/* TABS & FILTERS */}
+        <div className="mt-6 flex flex-col md:flex-row gap-3">
+             <div className="flex bg-blue-900/30 p-1 rounded-xl w-full md:w-auto inline-flex">
+                <button 
+                    onClick={() => setViewMode('SINGLE')}
+                    className={`flex-1 md:flex-none px-6 py-2 rounded-lg text-sm font-bold transition-all ${viewMode === 'SINGLE' ? 'bg-white text-blue-700 shadow-md' : 'text-blue-200 hover:bg-white/10'}`}
+                >
+                    Theo Đơn Lẻ
+                </button>
+                <button 
+                    onClick={() => setViewMode('CUSTOMER')}
+                    className={`flex-1 md:flex-none px-6 py-2 rounded-lg text-sm font-bold transition-all ${viewMode === 'CUSTOMER' ? 'bg-white text-blue-700 shadow-md' : 'text-blue-200 hover:bg-white/10'}`}
+                >
+                    Gộp Theo Khách ({customerGroups.length})
+                </button>
+            </div>
+
+            {/* SEARCH & BATCH FILTER */}
+            <div className="flex-grow flex gap-2">
+                 <div className="relative flex-grow">
+                     <i className="fas fa-search absolute left-3 top-3 text-blue-200 text-xs"></i>
+                     <input 
+                         value={searchTerm}
+                         onChange={e => setSearchTerm(e.target.value)}
+                         placeholder="Tìm tên, SĐT, Mã đơn..."
+                         className="w-full pl-9 pr-3 py-2.5 bg-blue-900/30 border border-blue-500/30 rounded-xl text-sm text-white placeholder-blue-300 focus:bg-blue-900/50 outline-none transition-all"
+                     />
+                 </div>
+                 {batches.length > 0 && (
+                     <div className="relative min-w-[120px]">
+                         <select 
+                             value={selectedBatch}
+                             onChange={e => setSelectedBatch(e.target.value)}
+                             className="w-full appearance-none pl-3 pr-8 py-2.5 bg-blue-900/30 border border-blue-500/30 rounded-xl text-sm text-white font-bold focus:bg-blue-900/50 outline-none"
+                         >
+                             <option value="ALL">Lô: Tất cả</option>
+                             {batches.map(b => <option key={b} value={b}>{b}</option>)}
+                         </select>
+                         <i className="fas fa-chevron-down absolute right-3 top-3.5 text-blue-200 text-xs pointer-events-none"></i>
+                     </div>
+                 )}
+            </div>
         </div>
       </div>
 
       {/* VIEW CONTENT */}
-      {orders.length === 0 ? (
+      {filteredOrders.length === 0 ? (
            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-10 flex flex-col items-center justify-center text-center">
              <div className="w-20 h-20 bg-green-50 rounded-full flex items-center justify-center mb-4">
                 <i className="fas fa-check text-3xl text-green-500"></i>
              </div>
              <p className="font-bold text-gray-600">Tuyệt vời! Không có công nợ tồn đọng.</p>
-             <p className="text-sm text-gray-400">Tất cả đơn chuyển khoản đã được xác nhận.</p>
+             <p className="text-sm text-gray-400">Tất cả đơn chuyển khoản đã được xác nhận (Hoặc không khớp bộ lọc).</p>
            </div>
       ) : (
           <>
@@ -237,37 +282,43 @@ const PaymentAudit: React.FC = () => {
                         <table className="w-full text-left border-collapse">
                         <thead>
                             <tr className="bg-gray-50 text-gray-500 text-[10px] font-bold uppercase tracking-wider border-b border-gray-100">
-                            <th className="p-4">Đơn hàng</th>
+                            <th className="p-4">Đơn hàng / Hàng hóa</th>
                             <th className="p-4">Khách hàng</th>
                             <th className="p-4 text-right">Số tiền</th>
                             <th className="p-4 text-center">Thao tác</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-50">
-                            {orders.map(order => (
+                            {filteredOrders.map(order => (
                             <tr key={order.id} className="hover:bg-blue-50/30 transition-colors group">
-                                <td className="p-4">
-                                <div className="font-bold text-gray-800 text-sm">#{order.id}</div>
-                                <div className="text-xs text-gray-400">{new Date(order.createdAt).toLocaleDateString('vi-VN')}</div>
-                                {order.batchId && <div className="mt-1 inline-block text-[9px] bg-gray-100 text-gray-500 px-1.5 rounded border border-gray-200">{order.batchId}</div>}
+                                <td className="p-4 align-top">
+                                    <div className="flex items-center gap-2 mb-1">
+                                        <div className="font-bold text-gray-800 text-sm">#{order.id}</div>
+                                        {order.batchId && <div className="text-[9px] bg-gray-100 text-gray-500 px-1.5 rounded border border-gray-200">{order.batchId}</div>}
+                                    </div>
+                                    <div className="text-xs text-gray-400 mb-1">{new Date(order.createdAt).toLocaleDateString('vi-VN')}</div>
+                                    {/* Item Details */}
+                                    <div className="text-xs text-gray-600 font-medium bg-gray-50 p-1.5 rounded border border-gray-100 mt-1">
+                                        {order.items.map(i => `${i.name} (x${i.quantity})`).join(', ')}
+                                    </div>
                                 </td>
-                                <td className="p-4">
-                                <div className="font-bold text-gray-800 text-sm">{order.customerName}</div>
-                                <div className="text-xs text-gray-500 font-mono">{order.customerPhone}</div>
+                                <td className="p-4 align-top">
+                                    <div className="font-bold text-gray-800 text-sm">{order.customerName}</div>
+                                    <div className="text-xs text-gray-500 font-mono">{order.customerPhone}</div>
                                 </td>
-                                <td className="p-4 text-right">
-                                <div className="font-black text-blue-600 text-base">{new Intl.NumberFormat('vi-VN').format(order.totalPrice)}đ</div>
-                                <div className="text-[10px] text-gray-400">Chuyển khoản</div>
+                                <td className="p-4 text-right align-top">
+                                    <div className="font-black text-blue-600 text-base">{new Intl.NumberFormat('vi-VN').format(order.totalPrice)}đ</div>
+                                    <div className="text-[10px] text-gray-400">Chuyển khoản</div>
                                 </td>
-                                <td className="p-4">
+                                <td className="p-4 align-top">
                                 <div className="flex items-center justify-center gap-2">
                                     <button 
                                         onClick={() => handleConfirmSingle(order.id, order.customerName)}
-                                        className="bg-green-100 hover:bg-green-200 text-green-700 p-2 rounded-lg transition-colors flex flex-col items-center min-w-[60px]"
-                                        title="Xác nhận"
+                                        className="bg-green-100 hover:bg-green-200 text-green-700 p-2 rounded-lg transition-colors flex flex-col items-center min-w-[70px] border border-green-200"
+                                        title="Xác nhận tiền đã về tài khoản"
                                     >
                                         <i className="fas fa-check-circle text-lg mb-1"></i>
-                                        <span className="text-[9px] font-bold uppercase">Đã nhận</span>
+                                        <span className="text-[9px] font-bold uppercase">Xác nhận<br/>Tiền về</span>
                                     </button>
 
                                     <button 
@@ -277,7 +328,7 @@ const PaymentAudit: React.FC = () => {
                                         title="QR Code"
                                     >
                                         {isSharing ? <i className="fas fa-spinner fa-spin text-lg mb-1"></i> : <i className="fas fa-qrcode text-lg mb-1"></i>}
-                                        <span className="text-[9px] font-bold uppercase">Gửi QR</span>
+                                        <span className="text-[9px] font-bold uppercase mt-2">Gửi QR</span>
                                     </button>
 
                                     <button 
@@ -286,7 +337,7 @@ const PaymentAudit: React.FC = () => {
                                         title="SMS"
                                     >
                                         <i className="fas fa-comment-dots text-lg mb-1"></i>
-                                        <span className="text-[9px] font-bold uppercase">SMS</span>
+                                        <span className="text-[9px] font-bold uppercase mt-2">SMS</span>
                                     </button>
                                 </div>
                                 </td>
@@ -320,15 +371,20 @@ const PaymentAudit: React.FC = () => {
 
                             {/* Order List (Collapsed view) */}
                             <div className="p-4 bg-white flex-grow">
-                                <div className="space-y-2 mb-4">
+                                <div className="space-y-3 mb-4">
                                     {group.orders.map(o => (
-                                        <div key={o.id} className="flex justify-between items-center text-sm border-b border-dashed border-gray-100 last:border-0 pb-1 last:pb-0">
-                                            <div>
-                                                <span className="font-bold text-gray-700 mr-2">#{o.id}</span>
-                                                <span className="text-gray-500 text-xs">{new Date(o.createdAt).toLocaleDateString('vi-VN', {day:'2-digit', month:'2-digit'})}</span>
+                                        <div key={o.id} className="border-b border-dashed border-gray-100 last:border-0 pb-2 last:pb-0">
+                                            <div className="flex justify-between items-center text-sm mb-1">
+                                                <div>
+                                                    <span className="font-bold text-gray-700 mr-2">#{o.id}</span>
+                                                    <span className="text-gray-500 text-xs">{new Date(o.createdAt).toLocaleDateString('vi-VN', {day:'2-digit', month:'2-digit'})}</span>
+                                                </div>
+                                                <div className="font-medium text-gray-800">
+                                                    {new Intl.NumberFormat('vi-VN').format(o.totalPrice)}đ
+                                                </div>
                                             </div>
-                                            <div className="font-medium text-gray-800">
-                                                {new Intl.NumberFormat('vi-VN').format(o.totalPrice)}đ
+                                            <div className="text-xs text-gray-500 italic">
+                                                {o.items.map(i => `${i.name} (x${i.quantity})`).join(', ')}
                                             </div>
                                         </div>
                                     ))}
@@ -341,7 +397,7 @@ const PaymentAudit: React.FC = () => {
                                     onClick={() => handleConfirmGroup(group)}
                                     className="bg-green-600 hover:bg-green-700 text-white py-2 rounded-lg font-bold text-xs flex items-center justify-center gap-1 shadow-sm active:scale-95 transition-all"
                                 >
-                                    <i className="fas fa-check-double"></i> Thu Hết
+                                    <i className="fas fa-check-double"></i> Xác nhận Tiền về
                                 </button>
                                 <button 
                                     onClick={() => handleShareGroupQR(group)}
@@ -352,7 +408,6 @@ const PaymentAudit: React.FC = () => {
                                 </button>
                                 <button 
                                     onClick={() => {
-                                        // Generate content like "TT ANH NAM 3 DON"
                                         const safeName = group.customerName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9 ]/g, '').toUpperCase().split(' ').slice(0, 2).join(' ');
                                         const desc = `TT ${safeName} ${group.orders.length} DON`;
                                         handleSMS(group.customerPhone, group.customerName, group.totalAmount, desc);

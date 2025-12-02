@@ -63,6 +63,7 @@ export interface Customer {
   totalOrders?: number;
   updatedAt?: number; // Timestamp for Delta Sync
   isLegacy?: boolean; // NEW: Manually marked as "Old Customer" regardless of order count
+  socialLink?: string; // NEW: Link to Facebook/Zalo/Messenger conversation
 }
 
 export interface SmartParseResult {

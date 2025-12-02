@@ -206,6 +206,18 @@ export const OrderCard: React.FC<Props> = ({
     printWindow.document.write(`<html><head><title>Phiếu Giao Hàng</title><style>body{font-family:sans-serif;padding:20px;font-size:13px}table{width:100%;border-collapse:collapse}th{text-align:left;background:#f0f0f0;padding:8px;border-bottom:2px solid #ddd}</style></head><body><h2>PHIẾU GIAO HÀNG #${order.id}</h2><div>Khách: <b>${order.customerName}</b> - ${order.customerPhone}</div><div>ĐC: ${order.address}</div><br/><table><thead><tr><th>Sản phẩm</th><th>SL</th><th>Đơn giá</th><th>Thành tiền</th></tr></thead><tbody>${itemsStr}<tr><td colspan="3" style="text-align:right;font-weight:bold;padding-top:10px">TỔNG:</td><td style="font-weight:bold;padding-top:10px">${new Intl.NumberFormat('vi-VN').format(order.totalPrice)}đ</td></tr></tbody></table></body></html>`);
     printWindow.document.close(); printWindow.print();
   };
+  
+  // NEW: Handle Messenger Click
+  const handleMessengerClick = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (customerData?.socialLink) {
+          window.open(customerData.socialLink, '_blank');
+      } else if (order.customerPhone) {
+          // If no specific link, try to search facebook by phone or just open messenger main page
+          // Searching by phone on FB is restricted now, so we just open the search page
+          window.open(`https://www.facebook.com/search/top?q=${order.customerPhone}`, '_blank');
+      }
+  };
 
   const config = statusConfig[order.status];
   const isCompleted = order.status === OrderStatus.DELIVERED || order.status === OrderStatus.CANCELLED;
@@ -350,6 +362,15 @@ export const OrderCard: React.FC<Props> = ({
                     {isCompleted && order.deliveryProof && (<button onClick={() => setShowImageModal(true)} className="px-2 py-1 bg-green-50 text-green-700 text-[10px] font-bold rounded border border-green-100 flex items-center gap-1"><i className="fas fa-image"></i> Ảnh</button>)}
                 </div>
                 <div className="flex items-center gap-1.5 text-gray-400">
+                    {/* MESSENGER BUTTON */}
+                    <button 
+                        onClick={handleMessengerClick} 
+                        className={`w-7 h-7 flex items-center justify-center rounded-full border transition-colors ${customerData?.socialLink ? 'bg-blue-50 text-blue-600 border-blue-200 shadow-sm' : 'border-gray-100 hover:bg-blue-50 hover:text-blue-500 hover:border-blue-100'}`} 
+                        title={customerData?.socialLink ? "Mở hội thoại Messenger/Zalo đã lưu" : "Tìm khách trên Facebook"}
+                    >
+                        <i className="fab fa-facebook-messenger text-xs"></i>
+                    </button>
+                    
                     <a href={`tel:${order.customerPhone}`} className="w-7 h-7 flex items-center justify-center rounded-full border border-gray-100 hover:bg-green-50 hover:text-green-600 hover:border-green-200 transition-colors"><i className="fas fa-phone text-xs"></i></a>
                     <a href={`https://zalo.me/${order.customerPhone}`} target="_blank" className="w-7 h-7 flex items-center justify-center rounded-full border border-gray-100 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 transition-colors font-bold text-[9px]">Z</a>
                     <button onClick={() => sendSMS()} className="w-7 h-7 flex items-center justify-center rounded-full border border-gray-100 hover:bg-yellow-50 hover:text-yellow-600 hover:border-yellow-200 transition-colors"><i className="fas fa-comment-dots text-xs"></i></button>

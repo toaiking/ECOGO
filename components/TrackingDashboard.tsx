@@ -1,3 +1,4 @@
+
 import React, { useEffect, useState, useMemo, useRef, useDeferredValue } from 'react';
 import toast from 'react-hot-toast';
 import { v4 as uuidv4 } from 'uuid';
@@ -7,6 +8,7 @@ import { pdfService } from '../services/pdfService';
 import { reconciliationService, ReconciliationResult } from '../services/reconciliationService';
 import { OrderCard } from './OrderCard';
 import ConfirmModal from './ConfirmModal';
+import RoutePlannerModal from './RoutePlannerModal'; // IMPORT NEW MODAL
 
 type SortOption = 'NEWEST' | 'ROUTE' | 'STATUS';
 
@@ -59,6 +61,13 @@ const TrackingDashboard: React.FC = () => {
   const [showReconcileModal, setShowReconcileModal] = useState(false);
   const [reconcileResult, setReconcileResult] = useState<ReconciliationResult | null>(null);
   const [isReconciling, setIsReconciling] = useState(false);
+
+  // Stats Modal
+  const [showStatsModal, setShowStatsModal] = useState(false);
+  const [selectedStatsBatch, setSelectedStatsBatch] = useState<string>('');
+
+  // Route Planner Modal
+  const [showRoutePlanner, setShowRoutePlanner] = useState(false);
 
   // QR Modal State (Lifted up to fix z-index issues)
   const [qrState, setQrState] = useState<{ isOpen: boolean, url: string, order: Order | null }>({ isOpen: false, url: '', order: null });
@@ -114,6 +123,13 @@ const TrackingDashboard: React.FC = () => {
     return Array.from(batchActivity.entries()).sort((a, b) => b[1] - a[1]).map(entry => entry[0]).slice(0, 50);
   }, [orders]);
 
+  // Set default selected batch for stats
+  useEffect(() => {
+      if (batches.length > 0 && !selectedStatsBatch) {
+          setSelectedStatsBatch(batches[0]);
+      }
+  }, [batches, selectedStatsBatch]);
+
   const users = useMemo(() => {
       const userSet = new Set<string>();
       orders.forEach(o => { if (o.lastUpdatedBy) userSet.add(o.lastUpdatedBy); });
@@ -157,6 +173,59 @@ const TrackingDashboard: React.FC = () => {
     return result;
   }, [orders, filterStatus, filterBatch, filterUser, deferredSearchTerm, sortBy]);
 
+  // --- STATS DATA CALCULATION ---
+  const batchStatsData = useMemo(() => {
+      if (!selectedStatsBatch) return [];
+
+      const statsMap = new Map<string, { 
+          name: string, 
+          qtyOrdered: number, 
+          productInfo?: Product 
+      }>();
+
+      // 1. Sum up Ordered Qty
+      orders.filter(o => o.batchId === selectedStatsBatch && o.status !== OrderStatus.CANCELLED).forEach(o => {
+          o.items.forEach(item => {
+              const name = item.name.trim();
+              if (name) {
+                  const current = statsMap.get(name) || { name, qtyOrdered: 0 };
+                  current.qtyOrdered += item.quantity;
+                  statsMap.set(name, current);
+              }
+          });
+      });
+
+      // 2. Attach Inventory Data (Fuzzy Match)
+      const result = Array.from(statsMap.values()).map(item => {
+          const normName = normalizeString(item.name);
+          const product = products.find(p => normalizeString(p.name) === normName) || 
+                          products.find(p => normalizeString(p.name).includes(normName));
+          return { ...item, productInfo: product };
+      });
+
+      // 3. Sort by Name
+      return result.sort((a, b) => a.name.localeCompare(b.name));
+  }, [orders, products, selectedStatsBatch]);
+
+  const handleShareStats = () => {
+      let text = `📦 TK LÔ: ${selectedStatsBatch}\n----------------\n`;
+      text += `MẶT HÀNG | ĐẶT | KHO | DƯ\n`;
+      batchStatsData.forEach(item => {
+          const imported = item.productInfo?.totalImported || 0;
+          const balance = imported - item.qtyOrdered;
+          text += `${item.name}: ${item.qtyOrdered} | ${imported} | ${balance > 0 ? '+' : ''}${balance}\n`;
+      });
+      text += `----------------\nEcoGo Logistics`;
+      
+      if (navigator.share) {
+          navigator.share({ title: `TK ${selectedStatsBatch}`, text }).catch(console.error);
+      } else {
+          navigator.clipboard.writeText(text);
+          toast.success("Đã copy thống kê!");
+      }
+  };
+  // -----------------------------
+
   const handleLoadMore = () => {
       setVisibleCount(prev => prev + 20);
   };
@@ -193,8 +262,40 @@ const TrackingDashboard: React.FC = () => {
 
   const executeBulkDelete = async () => {
       if (selectedOrderIds.size === 0) return;
-      await storageService.deleteOrdersBatch(Array.from(selectedOrderIds));
-      toast.success(`Đã xóa ${selectedOrderIds.size} đơn hàng`);
+      
+      // Explicitly cast to string[] to resolve type inference issues
+      const ids = Array.from(selectedOrderIds) as string[];
+      const restorationMap = new Map<string, number>();
+
+      // 1. Calculate totals to restore from selected orders
+      ids.forEach(id => {
+          const order = orders.find(o => o.id === id);
+          if (order) {
+              order.items.forEach(item => {
+                  if (item.productId) {
+                      const current = restorationMap.get(item.productId) || 0;
+                      restorationMap.set(item.productId, current + (Number(item.quantity) || 0));
+                  }
+              });
+          }
+      });
+
+      // 2. Update Products Stock (Only iterate unique products to update)
+      for (const [prodId, qty] of restorationMap.entries()) {
+          const product = products.find(p => p.id === prodId);
+          if (product) {
+               const currentStock = Number(product.stockQuantity) || 0;
+               await storageService.saveProduct({
+                   ...product,
+                   stockQuantity: currentStock + qty
+               });
+          }
+      }
+
+      // 3. Delete Orders
+      await storageService.deleteOrdersBatch(ids);
+      
+      toast.success(`Đã xóa ${ids.length} đơn hàng & Hoàn kho`);
       clearSelection();
       setShowBulkDeleteConfirm(false);
   };
@@ -217,7 +318,8 @@ const TrackingDashboard: React.FC = () => {
   const executeBulkStatusUpdate = async (status: OrderStatus) => {
       if (selectedOrderIds.size === 0) return;
       
-      const ids = Array.from(selectedOrderIds);
+      // Explicitly cast to string[] to resolve type inference issues
+      const ids = Array.from(selectedOrderIds) as string[];
       const promises = ids.map(id => storageService.updateStatus(id, status));
       
       await Promise.all(promises);
@@ -244,13 +346,13 @@ const TrackingDashboard: React.FC = () => {
     recognition.onend = () => setIsListeningSearch(false);
     recognition.onerror = (event: any) => {
         setIsListeningSearch(false);
-        // Silent error or log
-        const errorMsg = event?.error ? String(event.error) : 'Unknown';
+        const errorMsg = event?.error ? String(event.error) : "Lỗi giọng nói";
         console.warn("Voice search error", errorMsg);
     };
 
     recognition.onresult = (event: any) => {
-        const text = String(event.results?.[0]?.[0]?.transcript || '');
+        const transcript = event.results?.[0]?.[0]?.transcript;
+        const text = transcript ? String(transcript) : '';
         if (text) {
             setSearchTerm(text);
             toast.success(`Đã tìm: "${text}"`);
@@ -262,29 +364,51 @@ const TrackingDashboard: React.FC = () => {
 
   const handleRenameBatch = async () => {
       if (filterBatch.length !== 1) return;
-      const oldName = filterBatch[0] as string;
-      if (!oldName) return; // Ensure oldName is a valid string
+      const oldName = String(filterBatch[0]);
+      if (!oldName || oldName === 'undefined') return; 
 
       const newName = prompt(`Nhập tên mới cho lô: ${oldName}`, oldName);
       if (newName && newName !== oldName) {
           await storageService.renameBatch(oldName, newName);
           toast.success(`Đã đổi tên lô thành: ${newName}`);
-          // Update filter immediately so the view doesn't break
           setFilterBatch([newName]);
       }
   };
 
   const handleUpdate = (updatedOrder: Order) => {};
   const handleDeleteClick = (id: string) => { setDeleteId(id); setShowDeleteConfirm(true); };
+  
   const confirmDelete = async () => { 
       if (deleteId) { 
           const id = deleteId as string;
           const orderToDelete = orders.find(o => o.id === id);
-          await storageService.deleteOrder(id, orderToDelete ? { name: orderToDelete.customerName, address: orderToDelete.address } : undefined); 
-          toast.success('Đã xóa đơn hàng'); 
-          setShowDeleteConfirm(false); setDeleteId(null); 
+          
+          if (orderToDelete) {
+               // RESTORE STOCK LOGIC
+               for (const item of orderToDelete.items) {
+                   if (item.productId) {
+                       const product = products.find(p => p.id === item.productId);
+                       if (product) {
+                           const currentStock = Number(product.stockQuantity) || 0;
+                           const restoreQty = Number(item.quantity) || 0;
+                           // Update product stock back
+                           await storageService.saveProduct({
+                               ...product,
+                               stockQuantity: currentStock + restoreQty
+                           });
+                       }
+                   }
+               }
+
+               await storageService.deleteOrder(id, { name: orderToDelete.customerName, address: orderToDelete.address }); 
+          }
+          
+          toast.success('Đã xóa đơn & Hoàn kho'); 
+          setShowDeleteConfirm(false); 
+          setDeleteId(null); 
       } 
   };
+  
   const handleEdit = (order: Order) => { setEditingOrder(JSON.parse(JSON.stringify(order))); setActiveEditProductRow(null); };
   const saveEdit = async (e: React.FormEvent) => { e.preventDefault(); if (editingOrder) { await storageService.updateOrderDetails(editingOrder); setEditingOrder(null); toast.success('Đã lưu thay đổi'); } };
   const updateEditItem = (index: number, field: keyof OrderItem, value: any) => { if (!editingOrder) return; const newItems = [...editingOrder.items]; newItems[index] = { ...newItems[index], [field]: value }; if (field === 'name') newItems[index].productId = undefined; const newTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0); setEditingOrder({ ...editingOrder, items: newItems, totalPrice: newTotal }); };
@@ -302,12 +426,36 @@ const TrackingDashboard: React.FC = () => {
               toast.success(`Đã sắp xếp ${count} đơn theo ưu tiên!`); 
           } catch (e: any) {
               console.error(e);
+              // Ensure error is string
               const errorMessage = e instanceof Error ? e.message : String(e);
               toast.error(`Lỗi sắp xếp: ${errorMessage}`);
           } finally {
               setIsSorting(false);
           }
       }, 50);
+  };
+  
+  // -- HANDLE SMART ROUTE SORT --
+  const handleSmartRouteSort = async (sortedOrders: Order[]) => {
+      // Re-assign indexes based on the smart sort result
+      const reindexed = sortedOrders.map((o, idx) => ({ ...o, orderIndex: idx }));
+      
+      // Save locally & cloud
+      await storageService.saveOrdersList(reindexed);
+      
+      // Update local state to reflect change immediately
+      setOrders(prev => {
+          const orderMap = new Map(prev.map(o => [o.id, o]));
+          // Merge sorted logic with existing data
+          reindexed.forEach(ro => {
+              if(orderMap.has(ro.id)) {
+                  orderMap.set(ro.id, ro);
+              }
+          });
+          return Array.from(orderMap.values());
+      });
+      
+      setSortBy('ROUTE');
   };
   
   const saveReorderedList = async (newSortedList: Order[]) => { 
@@ -376,6 +524,7 @@ const TrackingDashboard: React.FC = () => {
           if (isSelectionMode) clearSelection();
       } catch (e: any) {
           console.error(e);
+          // Ensure error is string
           const errorMessage = e instanceof Error ? e.message : String(e);
           toast.error(`Lỗi tạo PDF: ${errorMessage}`);
       } finally { setIsPrinting(false); setOrdersToPrint([]); }
@@ -395,6 +544,7 @@ const TrackingDashboard: React.FC = () => {
           if (result.matchedOrders.length === 0) { toast('Không tìm thấy giao dịch nào khớp.', { icon: '🔍' }); } else { toast.success(`Tìm thấy ${result.matchedOrders.length} giao dịch khớp!`); }
       } catch (error: any) {
           console.error(error);
+          // Ensure error is string
           const errorMessage = error instanceof Error ? error.message : String(error);
           toast.error(`Lỗi đọc file PDF: ${errorMessage}`);
       } finally { setIsReconciling(false); }
@@ -454,7 +604,27 @@ const TrackingDashboard: React.FC = () => {
       }
   };
 
-  const toggleFilter = (type: 'STATUS' | 'BATCH', value: any) => { if (type === 'STATUS') setFilterStatus(prev => prev.includes(value) ? prev.filter(s => s !== value) : [...prev, value]); if (type === 'BATCH') setFilterBatch(prev => prev.includes(value) ? prev.filter(b => b !== value) : [...prev, value]); };
+  const toggleFilter = (type: 'STATUS' | 'BATCH', value: any) => { 
+      if (type === 'STATUS') {
+          const statusValue = value as OrderStatus;
+          setFilterStatus(prev => {
+              if (prev.includes(statusValue)) {
+                  return prev.filter(s => s !== statusValue);
+              }
+              return [...prev, statusValue];
+          });
+      }
+      if (type === 'BATCH') {
+          const batchValue = String(value);
+          setFilterBatch(prev => {
+              if (prev.includes(batchValue)) {
+                  return prev.filter(b => b !== batchValue);
+              }
+              return [...prev, batchValue];
+          });
+      }
+  };
+  
   const getLabel = (type: 'STATUS' | 'BATCH') => { if (type === 'STATUS') return filterStatus.length === 0 ? 'Trạng thái' : (filterStatus.length === 1 ? statusLabels[filterStatus[0]] : `Đã chọn (${filterStatus.length})`); if (type === 'BATCH') return filterBatch.length === 0 ? 'Lô: Tất cả' : (filterBatch.length === 1 ? filterBatch[0] : `Lô (${filterBatch.length})`); return ''; };
   const openDropdown = (type: 'STATUS' | 'BATCH') => { const ref = type === 'STATUS' ? statusDropdownBtnRef : batchDropdownBtnRef; if (ref.current) { const rect = ref.current.getBoundingClientRect(); setDropdownPos({ top: rect.bottom + 4, left: rect.left, width: Math.max(rect.width, 160) }); setActiveDropdown(activeDropdown === type ? null : type); } };
 
@@ -481,8 +651,12 @@ const TrackingDashboard: React.FC = () => {
                 </div>
                 <button onClick={() => setIsCompactMode(!isCompactMode)} className={`w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg border transition-all ${isCompactMode ? 'bg-eco-100 text-eco-700 border-eco-200' : 'bg-white text-gray-400 border-gray-200'}`}><i className={`fas ${isCompactMode ? 'fa-list' : 'fa-th-large'}`}></i></button>
                 <button onClick={handleBatchPrintClick} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-white text-gray-500 hover:text-blue-600 border border-gray-200" title="In Lô Hàng"><i className="fas fa-print"></i></button>
+                
+                {/* NEW: SMART ROUTE BUTTON */}
+                <button onClick={() => setShowRoutePlanner(true)} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-white text-gray-500 hover:text-blue-600 border border-gray-200" title="Lập Lộ Trình"><i className="fas fa-map-marked-alt"></i></button>
+                
+                <button onClick={() => setShowStatsModal(true)} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-white text-gray-500 hover:text-purple-600 border border-gray-200" title="Thống kê Lô"><i className="fas fa-cubes"></i></button>
                 <button onClick={() => setShowReconcileModal(true)} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-white text-gray-500 hover:text-green-600 border border-gray-200" title="Đối soát Ngân hàng"><i className="fas fa-file-invoice-dollar"></i></button>
-                <button onClick={copyRouteToClipboard} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-white text-gray-500 hover:text-eco-600 border border-gray-200"><i className="fas fa-map-marked-alt"></i></button>
              </div>
              <div className={`grid transition-[grid-template-rows] duration-300 ease-out ${isHeaderVisible ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}><div className="overflow-hidden"><div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
                 <div className="relative flex-1 min-w-[100px] flex items-center gap-1">
@@ -538,6 +712,106 @@ const TrackingDashboard: React.FC = () => {
              </div>
         </div>
       )}
+
+      {/* STATS MODAL */}
+      {showStatsModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/60 backdrop-blur-sm p-4 animate-fade-in">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden flex flex-col max-h-[85vh]">
+                <div className="p-5 border-b border-gray-100 flex flex-col gap-3 bg-gray-50">
+                    <div className="flex justify-between items-center">
+                        <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                            <i className="fas fa-cubes text-purple-600"></i> Thống kê Lô
+                        </h3>
+                        <button onClick={() => setShowStatsModal(false)} className="text-gray-400 hover:text-gray-600"><i className="fas fa-times"></i></button>
+                    </div>
+                    
+                    <select 
+                        value={selectedStatsBatch}
+                        onChange={(e) => setSelectedStatsBatch(e.target.value)}
+                        className="w-full p-2.5 bg-white border border-gray-200 rounded-lg text-sm font-bold text-gray-700 outline-none focus:border-purple-500"
+                    >
+                        {batches.length === 0 && <option value="">Không có lô nào</option>}
+                        {batches.map(b => (
+                            <option key={b} value={b}>{b}</option>
+                        ))}
+                    </select>
+                </div>
+                
+                <div className="flex-grow overflow-y-auto p-0">
+                    <table className="w-full text-left text-sm border-collapse">
+                        <thead className="bg-gray-100 text-gray-500 text-[10px] font-bold uppercase sticky top-0 z-10 shadow-sm">
+                            <tr>
+                                <th className="p-3 pl-4">Sản phẩm</th>
+                                <th className="p-3 text-center">SL Đặt</th>
+                                <th className="p-3 text-center bg-blue-50/50">Tổng Nhập</th>
+                                <th className="p-3 text-center">Tồn Kho</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-50">
+                            {batchStatsData.length === 0 ? (
+                                <tr><td colSpan={4} className="p-8 text-center text-gray-400">Chọn lô để xem dữ liệu</td></tr>
+                            ) : (
+                                batchStatsData.map((item, idx) => {
+                                    const totalImported = item.productInfo?.totalImported || 0;
+                                    const stock = item.productInfo?.stockQuantity || 0;
+                                    const estimatedRemaining = totalImported - item.qtyOrdered;
+                                    const isOversold = estimatedRemaining < 0;
+
+                                    return (
+                                        <tr key={idx} className="hover:bg-gray-50 transition-colors">
+                                            <td className="p-3 pl-4">
+                                                <div className="font-bold text-gray-800">{item.name}</div>
+                                                {item.productInfo && (
+                                                    <div className="text-[10px] text-gray-400 flex items-center gap-1">
+                                                        <i className="fas fa-tag"></i> {new Intl.NumberFormat('vi-VN').format(item.productInfo.defaultPrice)}đ
+                                                    </div>
+                                                )}
+                                            </td>
+                                            <td className="p-3 text-center">
+                                                <span className="font-black text-gray-800 bg-gray-100 px-2 py-1 rounded-md">{item.qtyOrdered}</span>
+                                            </td>
+                                            <td className="p-3 text-center bg-blue-50/30">
+                                                <div className="font-bold text-blue-600">{totalImported}</div>
+                                                {/* Calculated Balance */}
+                                                <div className={`text-[10px] font-bold mt-1 ${isOversold ? 'text-red-500' : 'text-green-600'}`}>
+                                                    (Dư: {estimatedRemaining})
+                                                </div>
+                                            </td>
+                                            <td className="p-3 text-center">
+                                                <span className={`font-bold ${stock < 5 ? 'text-red-500' : 'text-gray-600'}`}>
+                                                    {stock}
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    );
+                                })
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+
+                <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-between items-center">
+                    <div className="text-xs text-gray-500 font-medium">
+                        Tổng SP: <span className="font-bold text-gray-800">{batchStatsData.length}</span>
+                    </div>
+                    <button 
+                        onClick={handleShareStats}
+                        className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-lg shadow-purple-200 transition-all active:scale-95 flex items-center gap-2"
+                    >
+                        <i className="fas fa-share-alt"></i> Copy / Chia sẻ
+                    </button>
+                </div>
+            </div>
+          </div>
+      )}
+
+      {/* ROUTE PLANNER MODAL */}
+      <RoutePlannerModal 
+          isOpen={showRoutePlanner}
+          onClose={() => setShowRoutePlanner(false)}
+          orders={filteredOrders}
+          onApplySort={handleSmartRouteSort}
+      />
 
       {/* RECONCILIATION MODAL */}
       {showReconcileModal && (
@@ -829,6 +1103,26 @@ const TrackingDashboard: React.FC = () => {
               </div>
           </div>
       )}
+
+      {/* CONFIRM MODALS */}
+      <ConfirmModal 
+        isOpen={showDeleteConfirm}
+        title="Xóa đơn hàng?"
+        message="Đơn hàng sẽ bị xóa vĩnh viễn và hàng hóa sẽ được hoàn lại kho."
+        onConfirm={confirmDelete}
+        onCancel={() => setShowDeleteConfirm(false)}
+        confirmLabel="Xóa"
+        isDanger={true}
+      />
+      <ConfirmModal 
+        isOpen={showBulkDeleteConfirm}
+        title={`Xóa ${selectedOrderIds.size} đơn hàng?`}
+        message="Các đơn hàng này sẽ bị xóa vĩnh viễn và hàng hóa sẽ được hoàn lại kho. Hành động này không thể hoàn tác."
+        onConfirm={executeBulkDelete}
+        onCancel={() => setShowBulkDeleteConfirm(false)}
+        confirmLabel="Xóa Vĩnh Viễn"
+        isDanger={true}
+      />
     </div>
   );
 };

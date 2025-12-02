@@ -160,9 +160,23 @@ const OrderForm: React.FC = () => {
     recognition.start();
   };
 
+  const handlePasteFromMessenger = async () => {
+      try {
+          const text = await navigator.clipboard.readText();
+          if (!text || text.trim().length === 0) {
+              toast.error("Clipboard trống! Hãy copy đoạn chat trước.");
+              return;
+          }
+          toast.success("Đã lấy nội dung từ Clipboard");
+          await processOrderText(text);
+      } catch (err) {
+          toast.error("Không thể đọc Clipboard. Vui lòng cấp quyền.");
+      }
+  };
+
   const processOrderText = async (text: string) => {
       setIsProcessingAI(true);
-      const loadingToast = toast.loading("AI đang phân tích...");
+      const loadingToast = toast.loading("AI đang đọc đoạn chat...");
       
       try {
           // Pass products and customers to Gemini for context-aware parsing
@@ -366,6 +380,29 @@ const OrderForm: React.FC = () => {
       return;
     }
 
+    // 1. DEDUCT STOCK
+    for (const item of validItems) {
+        if (item.productId) {
+            const product = products.find(p => p.id === item.productId);
+            if (product) {
+                const currentStock = Number(product.stockQuantity) || 0;
+                // If totalImported is missing (old data), assume it matches stock to initialize it properly
+                const currentTotalImported = Number(product.totalImported) || currentStock; 
+                
+                const deductQty = Number(item.quantity) || 0;
+                const newStock = Math.max(0, currentStock - deductQty);
+                
+                // Update product in storage, explicitly setting totalImported so it doesn't get lost or reset
+                await storageService.saveProduct({
+                    ...product,
+                    stockQuantity: newStock,
+                    totalImported: currentTotalImported
+                });
+            }
+        }
+    }
+
+    // 2. CREATE ORDER
     const newOrder: Order = {
       id: uuidv4().slice(0, 8).toUpperCase(),
       customerId: customerInfo.customerId, // Pass ID
@@ -386,7 +423,7 @@ const OrderForm: React.FC = () => {
 
     await storageService.saveOrder(newOrder);
     
-    toast.success('Lên đơn thành công!');
+    toast.success('Lên đơn thành công & Đã trừ kho!');
     resetForm();
   };
 
@@ -413,7 +450,7 @@ const OrderForm: React.FC = () => {
             <div className="absolute inset-0 z-50 bg-white/60 backdrop-blur-sm flex items-center justify-center">
                 <div className="flex flex-col items-center">
                     <div className="w-12 h-12 border-4 border-eco-200 border-t-eco-600 rounded-full animate-spin"></div>
-                    <span className="mt-3 text-sm font-bold text-eco-800 animate-pulse">AI đang phân tích & tra cứu...</span>
+                    <span className="mt-3 text-sm font-bold text-eco-800 animate-pulse">AI đang đọc đoạn chat...</span>
                 </div>
             </div>
         )}
@@ -426,11 +463,21 @@ const OrderForm: React.FC = () => {
              </div>
              <div>
                 <h2 className="text-lg font-black text-gray-800 leading-tight">Tạo Đơn Hàng</h2>
-                <p className="text-xs text-gray-500 font-medium">Nhập thông tin hoặc dùng giọng nói</p>
+                <p className="text-xs text-gray-500 font-medium">Nhập thông tin hoặc dùng AI</p>
              </div>
           </div>
           
           <div className="flex items-center gap-3">
+              {/* MESSENGER PASTE BUTTON */}
+              <button 
+                onClick={handlePasteFromMessenger}
+                className="flex items-center gap-2 px-4 py-1.5 rounded-xl border border-blue-100 bg-blue-50 text-blue-600 hover:bg-blue-100 hover:border-blue-200 transition-all group"
+                title="Dán đoạn chat từ Messenger"
+              >
+                  <i className="fab fa-facebook-messenger group-hover:scale-110 transition-transform"></i>
+                  <span className="text-xs font-bold hidden sm:inline">Dán từ Messenger</span>
+              </button>
+
               {/* VOICE INPUT BUTTON */}
               <button 
                 onClick={handleVoiceInput}
@@ -443,7 +490,7 @@ const OrderForm: React.FC = () => {
                 title="Nhập bằng giọng nói (AI)"
               >
                   <i className={`fas ${isListening ? 'fa-microphone-slash' : 'fa-microphone'}`}></i>
-                  <span className="text-xs font-bold hidden sm:inline">{isListening ? 'Đang nghe...' : 'Nhập Voice'}</span>
+                  <span className="text-xs font-bold hidden sm:inline">{isListening ? 'Đang nghe...' : 'Voice'}</span>
               </button>
 
               {/* BATCH SELECTOR */}
