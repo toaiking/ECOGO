@@ -159,6 +159,21 @@ const SettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
           }
       }
   };
+
+  const handleFixDuplicates = async () => {
+      setIsRunningTest(true);
+      setTestResult('Đang phân tích và tách khách hàng...');
+      try {
+          const count = await storageService.fixDuplicateCustomerIds();
+          setTestResult(`Hoàn tất! Đã tách thành công ${count} khách hàng bị trùng ID.`);
+          toast.success(`Xong! Đã sửa lỗi ${count} khách hàng.`);
+      } catch (e: any) {
+          setTestResult('Lỗi: ' + (e?.message || e));
+          toast.error("Lỗi khi sửa dữ liệu");
+      } finally {
+          setIsRunningTest(false);
+      }
+  };
   
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
@@ -401,6 +416,14 @@ const SettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
                         className="w-full py-2 bg-blue-100 hover:bg-blue-200 text-blue-800 rounded-lg font-bold text-xs transition-colors"
                     >
                         Đánh dấu tất cả là Khách cũ
+                    </button>
+
+                    <button 
+                        onClick={handleFixDuplicates} 
+                        disabled={isRunningTest}
+                        className="w-full py-2 bg-orange-100 hover:bg-orange-200 text-orange-800 rounded-lg font-bold text-xs transition-colors"
+                    >
+                        Phân tách Khách trùng ID
                     </button>
 
                     <button 

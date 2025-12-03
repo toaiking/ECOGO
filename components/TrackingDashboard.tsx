@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState, useMemo, useRef, useDeferredValue } from 'react';
 import toast from 'react-hot-toast';
 import { v4 as uuidv4 } from 'uuid';
@@ -8,6 +7,7 @@ import { pdfService } from '../services/pdfService';
 import { reconciliationService, ReconciliationResult } from '../services/reconciliationService';
 import { OrderCard } from './OrderCard';
 import ConfirmModal from './ConfirmModal';
+import RoutePlannerModal from './RoutePlannerModal'; // IMPORT NEW MODAL
 
 type SortOption = 'NEWEST' | 'ROUTE' | 'STATUS';
 
@@ -64,6 +64,12 @@ const TrackingDashboard: React.FC = () => {
   // Stats Modal
   const [showStatsModal, setShowStatsModal] = useState(false);
   const [selectedStatsBatch, setSelectedStatsBatch] = useState<string>('');
+
+  // Route Planner Modal
+  const [showRoutePlanner, setShowRoutePlanner] = useState(false);
+  
+  // Move Batch Modal (New)
+  const [moveBatchData, setMoveBatchData] = useState<{isOpen: boolean, targetBatch: string}>({ isOpen: false, targetBatch: '' });
 
   // QR Modal State (Lifted up to fix z-index issues)
   const [qrState, setQrState] = useState<{ isOpen: boolean, url: string, order: Order | null }>({ isOpen: false, url: '', order: null });
@@ -258,8 +264,40 @@ const TrackingDashboard: React.FC = () => {
 
   const executeBulkDelete = async () => {
       if (selectedOrderIds.size === 0) return;
-      await storageService.deleteOrdersBatch(Array.from(selectedOrderIds));
-      toast.success(`Đã xóa ${selectedOrderIds.size} đơn hàng`);
+      
+      // Explicitly cast to string[] to resolve type inference issues
+      const ids = Array.from(selectedOrderIds) as string[];
+      const restorationMap = new Map<string, number>();
+
+      // 1. Calculate totals to restore from selected orders
+      ids.forEach(id => {
+          const order = orders.find(o => o.id === id);
+          if (order) {
+              order.items.forEach(item => {
+                  if (item.productId) {
+                      const current = restorationMap.get(item.productId) || 0;
+                      restorationMap.set(item.productId, current + (Number(item.quantity) || 0));
+                  }
+              });
+          }
+      });
+
+      // 2. Update Products Stock (Only iterate unique products to update)
+      for (const [prodId, qty] of restorationMap.entries()) {
+          const product = products.find(p => p.id === prodId);
+          if (product) {
+               const currentStock = Number(product.stockQuantity) || 0;
+               await storageService.saveProduct({
+                   ...product,
+                   stockQuantity: currentStock + qty
+               });
+          }
+      }
+
+      // 3. Delete Orders
+      await storageService.deleteOrdersBatch(ids);
+      
+      toast.success(`Đã xóa ${ids.length} đơn hàng & Hoàn kho`);
       clearSelection();
       setShowBulkDeleteConfirm(false);
   };
@@ -282,12 +320,37 @@ const TrackingDashboard: React.FC = () => {
   const executeBulkStatusUpdate = async (status: OrderStatus) => {
       if (selectedOrderIds.size === 0) return;
       
-      const ids = Array.from(selectedOrderIds);
+      // Explicitly cast to string[] to resolve type inference issues
+      const ids = Array.from(selectedOrderIds) as string[];
       const promises = ids.map(id => storageService.updateStatus(id, status));
       
       await Promise.all(promises);
       toast.success(`Đã cập nhật ${ids.length} đơn sang ${statusLabels[status]}`);
       setShowBulkStatusModal(false);
+      clearSelection();
+  };
+
+  const handleBulkMoveBatch = () => {
+      if (selectedOrderIds.size === 0) return;
+      setMoveBatchData({ isOpen: true, targetBatch: '' });
+  };
+  
+  const handleSingleMoveBatch = (order: Order) => {
+      setIsSelectionMode(true);
+      setSelectedOrderIds(new Set([order.id]));
+      setMoveBatchData({ isOpen: true, targetBatch: order.batchId || '' });
+  };
+  
+  const confirmMoveBatch = async () => {
+      if (!moveBatchData.targetBatch.trim()) {
+          toast.error("Vui lòng nhập tên lô hàng");
+          return;
+      }
+      const ids = Array.from(selectedOrderIds) as string[];
+      await storageService.moveOrdersBatch(ids, moveBatchData.targetBatch);
+      toast.success(`Đã chuyển ${ids.length} đơn sang lô: ${moveBatchData.targetBatch}`);
+      
+      setMoveBatchData({ isOpen: false, targetBatch: '' });
       clearSelection();
   };
 
@@ -328,13 +391,12 @@ const TrackingDashboard: React.FC = () => {
   const handleRenameBatch = async () => {
       if (filterBatch.length !== 1) return;
       const oldName = String(filterBatch[0]);
-      if (!oldName || oldName === 'undefined') return; // Ensure oldName is a valid string
+      if (!oldName || oldName === 'undefined') return; 
 
       const newName = prompt(`Nhập tên mới cho lô: ${oldName}`, oldName);
       if (newName && newName !== oldName) {
           await storageService.renameBatch(oldName, newName);
           toast.success(`Đã đổi tên lô thành: ${newName}`);
-          // Update filter immediately so the view doesn't break
           setFilterBatch([newName]);
       }
   };
@@ -397,6 +459,29 @@ const TrackingDashboard: React.FC = () => {
               setIsSorting(false);
           }
       }, 50);
+  };
+  
+  // -- HANDLE SMART ROUTE SORT --
+  const handleSmartRouteSort = async (sortedOrders: Order[]) => {
+      // Re-assign indexes based on the smart sort result
+      const reindexed = sortedOrders.map((o, idx) => ({ ...o, orderIndex: idx }));
+      
+      // Save locally & cloud
+      await storageService.saveOrdersList(reindexed);
+      
+      // Update local state to reflect change immediately
+      setOrders(prev => {
+          const orderMap = new Map(prev.map(o => [o.id, o]));
+          // Merge sorted logic with existing data
+          reindexed.forEach(ro => {
+              if(orderMap.has(ro.id)) {
+                  orderMap.set(ro.id, ro);
+              }
+          });
+          return Array.from(orderMap.values());
+      });
+      
+      setSortBy('ROUTE');
   };
   
   const saveReorderedList = async (newSortedList: Order[]) => { 
@@ -545,7 +630,27 @@ const TrackingDashboard: React.FC = () => {
       }
   };
 
-  const toggleFilter = (type: 'STATUS' | 'BATCH', value: any) => { if (type === 'STATUS') setFilterStatus(prev => prev.includes(value) ? prev.filter(s => s !== value) : [...prev, value]); if (type === 'BATCH') setFilterBatch(prev => prev.includes(value) ? prev.filter(b => b !== value) : [...prev, value]); };
+  const toggleFilter = (type: 'STATUS' | 'BATCH', value: any) => { 
+      if (type === 'STATUS') {
+          const statusValue = value as OrderStatus;
+          setFilterStatus(prev => {
+              if (prev.includes(statusValue)) {
+                  return prev.filter(s => s !== statusValue);
+              }
+              return [...prev, statusValue];
+          });
+      }
+      if (type === 'BATCH') {
+          const batchValue = String(value);
+          setFilterBatch(prev => {
+              if (prev.includes(batchValue)) {
+                  return prev.filter(b => b !== batchValue);
+              }
+              return [...prev, batchValue];
+          });
+      }
+  };
+  
   const getLabel = (type: 'STATUS' | 'BATCH') => { if (type === 'STATUS') return filterStatus.length === 0 ? 'Trạng thái' : (filterStatus.length === 1 ? statusLabels[filterStatus[0]] : `Đã chọn (${filterStatus.length})`); if (type === 'BATCH') return filterBatch.length === 0 ? 'Lô: Tất cả' : (filterBatch.length === 1 ? filterBatch[0] : `Lô (${filterBatch.length})`); return ''; };
   const openDropdown = (type: 'STATUS' | 'BATCH') => { const ref = type === 'STATUS' ? statusDropdownBtnRef : batchDropdownBtnRef; if (ref.current) { const rect = ref.current.getBoundingClientRect(); setDropdownPos({ top: rect.bottom + 4, left: rect.left, width: Math.max(rect.width, 160) }); setActiveDropdown(activeDropdown === type ? null : type); } };
 
@@ -555,7 +660,7 @@ const TrackingDashboard: React.FC = () => {
          <div className="bg-white border-b border-gray-200 p-2 shadow-sm">
              <div className="flex gap-2 items-center mb-2">
                 <div className="relative flex-grow">
-                    <i className="fas fa-search absolute left-3 top-2.5 text-gray-400 text-sm"></i>
+                    <i className="fas fa-search absolute left-3 top-2.5 text-gray-400 text-xs"></i>
                     <input 
                         placeholder="Tìm tên, sđt, địa chỉ..." 
                         value={searchTerm} 
@@ -572,6 +677,10 @@ const TrackingDashboard: React.FC = () => {
                 </div>
                 <button onClick={() => setIsCompactMode(!isCompactMode)} className={`w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg border transition-all ${isCompactMode ? 'bg-eco-100 text-eco-700 border-eco-200' : 'bg-white text-gray-400 border-gray-200'}`}><i className={`fas ${isCompactMode ? 'fa-list' : 'fa-th-large'}`}></i></button>
                 <button onClick={handleBatchPrintClick} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-white text-gray-500 hover:text-blue-600 border border-gray-200" title="In Lô Hàng"><i className="fas fa-print"></i></button>
+                
+                {/* NEW: SMART ROUTE BUTTON */}
+                <button onClick={() => setShowRoutePlanner(true)} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-white text-gray-500 hover:text-blue-600 border border-gray-200" title="Lập Lộ Trình"><i className="fas fa-map-marked-alt"></i></button>
+                
                 <button onClick={() => setShowStatsModal(true)} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-white text-gray-500 hover:text-purple-600 border border-gray-200" title="Thống kê Lô"><i className="fas fa-cubes"></i></button>
                 <button onClick={() => setShowReconcileModal(true)} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-white text-gray-500 hover:text-green-600 border border-gray-200" title="Đối soát Ngân hàng"><i className="fas fa-file-invoice-dollar"></i></button>
              </div>
@@ -628,6 +737,51 @@ const TrackingDashboard: React.FC = () => {
                  <span className="font-bold text-gray-800">Đang tạo PDF...</span>
              </div>
         </div>
+      )}
+      
+      {/* MOVE BATCH MODAL */}
+      {moveBatchData.isOpen && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-gray-900/60 backdrop-blur-sm p-4 animate-fade-in">
+              <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden">
+                  <div className="p-5 bg-gray-50 border-b border-gray-100">
+                      <h3 className="font-bold text-gray-800">Chuyển {selectedOrderIds.size} đơn hàng</h3>
+                      <p className="text-xs text-gray-500 mt-1">Chọn lô hàng mới để chuyển đến</p>
+                  </div>
+                  <div className="p-4 space-y-4">
+                      <div>
+                          <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Nhập tên Lô mới</label>
+                          <input 
+                              value={moveBatchData.targetBatch}
+                              onChange={e => setMoveBatchData({...moveBatchData, targetBatch: e.target.value})}
+                              placeholder="VD: Lô-Sáng-Mai"
+                              className="w-full p-3 bg-white border border-gray-300 focus:border-purple-500 rounded-xl outline-none font-bold text-gray-800"
+                              autoFocus
+                          />
+                      </div>
+                      
+                      {batches.length > 0 && (
+                          <div>
+                              <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Hoặc chọn lô có sẵn</label>
+                              <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
+                                  {batches.map(b => (
+                                      <button 
+                                          key={b}
+                                          onClick={() => setMoveBatchData({...moveBatchData, targetBatch: b})}
+                                          className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${moveBatchData.targetBatch === b ? 'bg-purple-100 text-purple-700 border-purple-300' : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'}`}
+                                      >
+                                          {b}
+                                      </button>
+                                  ))}
+                              </div>
+                          </div>
+                      )}
+                  </div>
+                  <div className="p-4 bg-gray-50 border-t border-gray-100 flex gap-3">
+                      <button onClick={() => setMoveBatchData({isOpen: false, targetBatch: ''})} className="flex-1 py-2.5 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold rounded-xl text-sm transition-colors">Hủy</button>
+                      <button onClick={confirmMoveBatch} className="flex-1 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl text-sm shadow-lg transition-transform active:scale-95">Chuyển Ngay</button>
+                  </div>
+              </div>
+          </div>
       )}
 
       {/* STATS MODAL */}
@@ -721,6 +875,14 @@ const TrackingDashboard: React.FC = () => {
             </div>
           </div>
       )}
+
+      {/* ROUTE PLANNER MODAL */}
+      <RoutePlannerModal 
+          isOpen={showRoutePlanner}
+          onClose={() => setShowRoutePlanner(false)}
+          orders={filteredOrders}
+          onApplySort={handleSmartRouteSort}
+      />
 
       {/* RECONCILIATION MODAL */}
       {showReconcileModal && (
@@ -932,6 +1094,10 @@ const TrackingDashboard: React.FC = () => {
                       <i className="fas fa-exchange-alt mb-0.5 text-lg"></i>
                       <span className="text-[9px] font-bold">Status</span>
                   </button>
+                  <button onClick={handleBulkMoveBatch} className="flex flex-col items-center justify-center w-14 h-12 rounded-xl text-indigo-600 hover:bg-indigo-50 transition-colors active:scale-95">
+                      <i className="fas fa-dolly mb-0.5 text-lg"></i>
+                      <span className="text-[9px] font-bold">Chuyển Lô</span>
+                  </button>
                   <button onClick={executeBulkSplit} className="flex flex-col items-center justify-center w-14 h-12 rounded-xl text-orange-600 hover:bg-orange-50 transition-colors active:scale-95">
                       <i className="fas fa-history mb-0.5 text-lg"></i>
                       <span className="text-[9px] font-bold">Giao sau</span>
@@ -975,6 +1141,7 @@ const TrackingDashboard: React.FC = () => {
                         onToggleSelect={toggleSelectOrder}
                         onLongPress={handleLongPress}
                         onShowQR={handleShowQR}
+                        onMoveBatch={handleSingleMoveBatch}
                     /></div></div>
             );
         }))}
@@ -1012,6 +1179,26 @@ const TrackingDashboard: React.FC = () => {
               </div>
           </div>
       )}
+
+      {/* CONFIRM MODALS */}
+      <ConfirmModal 
+        isOpen={showDeleteConfirm}
+        title="Xóa đơn hàng?"
+        message="Đơn hàng sẽ bị xóa vĩnh viễn và hàng hóa sẽ được hoàn lại kho."
+        onConfirm={confirmDelete}
+        onCancel={() => setShowDeleteConfirm(false)}
+        confirmLabel="Xóa"
+        isDanger={true}
+      />
+      <ConfirmModal 
+        isOpen={showBulkDeleteConfirm}
+        title={`Xóa ${selectedOrderIds.size} đơn hàng?`}
+        message="Các đơn hàng này sẽ bị xóa vĩnh viễn và hàng hóa sẽ được hoàn lại kho. Hành động này không thể hoàn tác."
+        onConfirm={executeBulkDelete}
+        onCancel={() => setShowBulkDeleteConfirm(false)}
+        confirmLabel="Xóa Vĩnh Viễn"
+        isDanger={true}
+      />
     </div>
   );
 };

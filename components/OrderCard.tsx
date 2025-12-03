@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { Order, OrderStatus, PaymentMethod, Customer } from '../types';
@@ -29,6 +28,9 @@ interface Props {
   
   // QR Handler from Parent
   onShowQR?: (order: Order) => void;
+
+  // New Prop
+  onMoveBatch?: (order: Order) => void;
 }
 
 const statusConfig: Record<OrderStatus, { color: string; bg: string; label: string; icon: string }> = {
@@ -84,7 +86,7 @@ export const OrderCard: React.FC<Props> = ({
   isNewCustomer, onSplitBatch, priorityScore,
   customerData,
   isSelectionMode, isSelected, onToggleSelect, onLongPress,
-  onShowQR
+  onShowQR, onMoveBatch
 }) => {
   const [uploading, setUploading] = useState(false);
   const [showImageModal, setShowImageModal] = useState(false);
@@ -297,7 +299,19 @@ export const OrderCard: React.FC<Props> = ({
                                   <div className="flex items-center gap-1.5 pl-1 border-l border-gray-100">
                                       <a href={`tel:${order.customerPhone}`} onClick={(e)=>e.stopPropagation()} className="w-6 h-6 rounded-full bg-gray-100 hover:bg-green-100 text-gray-500 hover:text-green-600 flex items-center justify-center transition-colors"><i className="fas fa-phone text-[10px]"></i></a>
                                       {!isCompleted && (<button onClick={nextStatus} className={`w-6 h-6 rounded-full text-white flex items-center justify-center shadow-sm ${config.bg.replace('50', '500').replace('100', '500')}`}><i className="fas fa-arrow-right text-[10px]"></i></button>)}
-                                      <div className="relative" ref={actionMenuRef}><button onClick={(e) => { e.stopPropagation(); setShowActionMenu(!showActionMenu); }} className="w-6 h-6 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 flex items-center justify-center"><i className="fas fa-ellipsis-v text-[10px]"></i></button>{showActionMenu && (<div className="absolute bottom-full right-0 mb-1 bg-white shadow-xl border border-gray-100 rounded-lg p-1 min-w-[120px] z-20"><button onClick={() => { sendSMS(); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-blue-600 font-bold rounded"><i className="fas fa-comment-dots mr-2"></i>Nhắn tin</button><button onClick={() => { onEdit(order); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-gray-700 font-bold rounded"><i className="fas fa-edit mr-2"></i>Sửa đơn</button>{order.batchId && onSplitBatch && <button onClick={() => { onSplitBatch(order); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-orange-600 font-bold rounded"><i className="fas fa-history mr-2"></i>Giao sau</button>}<div className="border-t border-gray-50 my-1"></div><button onClick={() => { onDelete(order.id); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-red-50 text-xs text-red-600 font-bold rounded"><i className="fas fa-trash mr-2"></i>Xóa đơn</button></div>)}</div>
+                                      <div className="relative" ref={actionMenuRef}>
+                                          <button onClick={(e) => { e.stopPropagation(); setShowActionMenu(!showActionMenu); }} className="w-6 h-6 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 flex items-center justify-center"><i className="fas fa-ellipsis-v text-[10px]"></i></button>
+                                          {showActionMenu && (
+                                              <div className="absolute bottom-full right-0 mb-1 bg-white shadow-xl border border-gray-100 rounded-lg p-1 min-w-[130px] z-20">
+                                                  <button onClick={() => { sendSMS(); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-blue-600 font-bold rounded"><i className="fas fa-comment-dots mr-2"></i>Nhắn tin</button>
+                                                  <button onClick={() => { onEdit(order); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-gray-700 font-bold rounded"><i className="fas fa-edit mr-2"></i>Sửa đơn</button>
+                                                  {onMoveBatch && <button onClick={() => { onMoveBatch(order); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-purple-600 font-bold rounded"><i className="fas fa-dolly mr-2"></i>Chuyển lô</button>}
+                                                  {order.batchId && onSplitBatch && <button onClick={() => { onSplitBatch(order); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-orange-600 font-bold rounded"><i className="fas fa-history mr-2"></i>Giao sau</button>}
+                                                  <div className="border-t border-gray-50 my-1"></div>
+                                                  <button onClick={() => { onDelete(order.id); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-red-50 text-xs text-red-600 font-bold rounded"><i className="fas fa-trash mr-2"></i>Xóa đơn</button>
+                                              </div>
+                                          )}
+                                      </div>
                                   </div>
                              </div>
                         </div>
@@ -376,7 +390,18 @@ export const OrderCard: React.FC<Props> = ({
                     <button onClick={() => sendSMS()} className="w-7 h-7 flex items-center justify-center rounded-full border border-gray-100 hover:bg-yellow-50 hover:text-yellow-600 hover:border-yellow-200 transition-colors"><i className="fas fa-comment-dots text-xs"></i></button>
                     <div className="relative" ref={actionMenuRef}>
                         <button onClick={() => setShowActionMenu(!showActionMenu)} className="w-7 h-7 flex items-center justify-center rounded-full border border-transparent hover:bg-gray-100 hover:text-gray-600 transition-colors"><i className="fas fa-ellipsis-v text-xs"></i></button>
-                        {showActionMenu && (<div className="absolute bottom-full right-0 mb-1 bg-white shadow-xl border border-gray-200 rounded-lg p-1 min-w-[130px] z-20 animate-fade-in"><button onClick={() => { onEdit(order); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-blue-600 font-bold flex items-center gap-2 rounded"><i className="fas fa-edit"></i> Sửa đơn</button>{onSplitBatch && order.batchId && (<button onClick={() => { onSplitBatch(order); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-orange-600 flex items-center gap-2 rounded font-bold"><i className="fas fa-history"></i> Giao sau</button>)}<button onClick={() => { handlePrint(); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-gray-600 flex items-center gap-2 rounded"><i className="fas fa-print"></i> In phiếu</button>{order.deliveryProof && <button onClick={() => { handleShareProof(); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-purple-600 flex items-center gap-2 rounded"><i className="fas fa-share-alt"></i> Gửi ảnh</button>}<div className="border-t border-gray-100 my-1"></div>{order.deliveryProof && <button onClick={() => { handleDeletePhoto(); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-red-50 text-xs text-red-500 flex items-center gap-2 rounded"><i className="fas fa-image"></i> Xóa ảnh</button>}<button onClick={() => { onDelete(order.id); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-red-50 text-xs text-red-600 flex items-center gap-2 rounded"><i className="fas fa-trash"></i> Xóa đơn</button></div>)}
+                        {showActionMenu && (
+                            <div className="absolute bottom-full right-0 mb-1 bg-white shadow-xl border border-gray-200 rounded-lg p-1 min-w-[130px] z-20 animate-fade-in">
+                                <button onClick={() => { onEdit(order); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-blue-600 font-bold flex items-center gap-2 rounded"><i className="fas fa-edit"></i> Sửa đơn</button>
+                                {onMoveBatch && <button onClick={() => { onMoveBatch(order); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-purple-600 font-bold flex items-center gap-2 rounded"><i className="fas fa-dolly"></i> Chuyển lô</button>}
+                                {onSplitBatch && order.batchId && (<button onClick={() => { onSplitBatch(order); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-orange-600 flex items-center gap-2 rounded font-bold"><i className="fas fa-history"></i> Giao sau</button>)}
+                                <button onClick={() => { handlePrint(); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-gray-600 flex items-center gap-2 rounded"><i className="fas fa-print"></i> In phiếu</button>
+                                {order.deliveryProof && <button onClick={() => { handleShareProof(); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-purple-600 flex items-center gap-2 rounded"><i className="fas fa-share-alt"></i> Gửi ảnh</button>}
+                                <div className="border-t border-gray-100 my-1"></div>
+                                {order.deliveryProof && <button onClick={() => { handleDeletePhoto(); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-red-50 text-xs text-red-500 flex items-center gap-2 rounded"><i className="fas fa-image"></i> Xóa ảnh</button>}
+                                <button onClick={() => { onDelete(order.id); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-red-50 text-xs text-red-600 flex items-center gap-2 rounded"><i className="fas fa-trash"></i> Xóa đơn</button>
+                            </div>
+                        )}
                     </div>
                 </div>
             </div>

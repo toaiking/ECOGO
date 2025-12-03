@@ -40,6 +40,7 @@ export interface Order {
   orderIndex: number; 
   deliveryProof?: string;
   lastUpdatedBy?: string; // Tên người xử lý trạng thái cuối cùng
+  reminderCount?: number; // NEW: Number of times payment reminder sent
 }
 
 export interface Product {
