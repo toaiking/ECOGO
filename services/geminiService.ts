@@ -136,23 +136,26 @@ export const structureImportData = async (rawText: string): Promise<RawPDFImport
   
   const prompt = `
     You are a data extraction assistant. 
-    I will provide raw text extracted from a PDF/Excel file containing a list of orders.
+    I will provide raw text extracted from a PDF/Excel file containing a list of orders (Vietnamese).
     
-    Your task is to identify the table rows and extract them into a structured JSON array.
+    IMPORTANT: 
+    1. Vietnamese text extracted from PDF often has broken spaces or corrupted fonts (e.g., "K h á c h H à n g" or "N g u y ? n"). 
+       You MUST intelligently merge these characters to form correct Vietnamese words.
+    2. The input might be unstructured. Look for rows that contain Price, Name, Address, and Items.
     
     INPUT TEXT:
     ${rawText.substring(0, 30000)} 
     (Text truncated if too long)
 
     EXTRACTION RULES:
-    1. Look for rows that contain: Price (Money), Customer Name, Address, Phone (optional), Items/Quantity.
-    2. 'unit_price': Convert to number. If text is "120", it means 120.
-    3. 'customer_name': The name of the person.
-    4. 'address': The delivery address.
-    5. 'phone': Phone number (if available).
-    6. 'items_raw': The string describing items (e.g., "gạo 2 cá 1").
+    1. Look for rows representing distinct orders.
+    2. 'unit_price': Convert string like "120" to number 120. If "120.000", output 120. If price is missing or 0, return 0.
+    3. 'customer_name': Reconstruct the name if broken.
+    4. 'address': Reconstruct the address.
+    5. 'phone': Phone number if available.
+    6. 'items_raw': The string describing items (e.g., "gạo 2 cá 1"). Preserve quantity numbers.
     
-    Ignore header rows, footer rows, or summary lines.
+    Ignore headers/footers.
   `;
 
   const response = await ai.models.generateContent({

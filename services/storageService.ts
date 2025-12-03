@@ -1,4 +1,3 @@
-
 import { Order, OrderStatus, Product, Customer, BankConfig, Notification, ShopConfig } from '../types';
 import { db } from '../firebaseConfig';
 import { v4 as uuidv4 } from 'uuid';
@@ -1369,18 +1368,52 @@ export const storageService = {
       // Note: We don't clear from Cloud to keep audit trail, just local view
   },
 
+  // New Generic Batch Move
+  moveOrderToBatch: async (orderId: string, newBatchId: string) => {
+      const list = _memoryOrders || [];
+      const order = list.find(o => o.id === orderId);
+      if(!order) return;
+
+      const updated = { 
+          ...order, 
+          batchId: newBatchId
+      };
+      
+      await storageService.updateOrderDetails(updated);
+  },
+  
+  moveOrdersBatch: async (orderIds: string[], newBatchId: string) => {
+      // Reuse logic
+      for (const id of orderIds) {
+          await storageService.moveOrderToBatch(id, newBatchId);
+      }
+  },
+
   splitOrderToNextBatch: async (orderId: string, currentBatchId: string) => {
       const list = _memoryOrders || [];
       const order = list.find(o => o.id === orderId);
       if(!order) return;
 
-      // Logic to find next batch name? 
-      // Simplified: Just add suffix or date
-      // If current is LÔ-2023-10-27, next is LÔ-2023-10-28 or LÔ-2023-10-27-CA-2
-      const today = new Date();
-      today.setDate(today.getDate() + 1);
-      const nextDateStr = today.toISOString().slice(0, 10);
-      const nextBatchId = `LÔ-${nextDateStr}`;
+      // Logic chuyển lô: Thêm hậu tố S -> S1 -> S2...
+      let nextBatchId = currentBatchId || "LÔ-CHUNG"; // Fallback if empty
+
+      // Regex check: Ends with -S followed by digits? e.g., -S1, -S10
+      const sNumberMatch = nextBatchId.match(/-S(\d*)$/);
+
+      if (sNumberMatch) {
+          const numStr = sNumberMatch[1]; // "" or "1", "2"...
+          if (numStr === "") {
+              // Ends with -S -> -S1
+              nextBatchId = nextBatchId + "1";
+          } else {
+              // Ends with -S1 -> -S2
+              const num = parseInt(numStr, 10);
+              nextBatchId = nextBatchId.replace(/-S\d+$/, `-S${num + 1}`);
+          }
+      } else if (!nextBatchId.endsWith('-S')) {
+          // No -S suffix -> Add -S
+          nextBatchId = nextBatchId + '-S';
+      }
       
       const updated = { 
           ...order, 

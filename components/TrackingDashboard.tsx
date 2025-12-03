@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState, useMemo, useRef, useDeferredValue } from 'react';
 import toast from 'react-hot-toast';
 import { v4 as uuidv4 } from 'uuid';
@@ -68,6 +67,9 @@ const TrackingDashboard: React.FC = () => {
 
   // Route Planner Modal
   const [showRoutePlanner, setShowRoutePlanner] = useState(false);
+  
+  // Move Batch Modal (New)
+  const [moveBatchData, setMoveBatchData] = useState<{isOpen: boolean, targetBatch: string}>({ isOpen: false, targetBatch: '' });
 
   // QR Modal State (Lifted up to fix z-index issues)
   const [qrState, setQrState] = useState<{ isOpen: boolean, url: string, order: Order | null }>({ isOpen: false, url: '', order: null });
@@ -325,6 +327,30 @@ const TrackingDashboard: React.FC = () => {
       await Promise.all(promises);
       toast.success(`Đã cập nhật ${ids.length} đơn sang ${statusLabels[status]}`);
       setShowBulkStatusModal(false);
+      clearSelection();
+  };
+
+  const handleBulkMoveBatch = () => {
+      if (selectedOrderIds.size === 0) return;
+      setMoveBatchData({ isOpen: true, targetBatch: '' });
+  };
+  
+  const handleSingleMoveBatch = (order: Order) => {
+      setIsSelectionMode(true);
+      setSelectedOrderIds(new Set([order.id]));
+      setMoveBatchData({ isOpen: true, targetBatch: order.batchId || '' });
+  };
+  
+  const confirmMoveBatch = async () => {
+      if (!moveBatchData.targetBatch.trim()) {
+          toast.error("Vui lòng nhập tên lô hàng");
+          return;
+      }
+      const ids = Array.from(selectedOrderIds) as string[];
+      await storageService.moveOrdersBatch(ids, moveBatchData.targetBatch);
+      toast.success(`Đã chuyển ${ids.length} đơn sang lô: ${moveBatchData.targetBatch}`);
+      
+      setMoveBatchData({ isOpen: false, targetBatch: '' });
       clearSelection();
   };
 
@@ -634,7 +660,7 @@ const TrackingDashboard: React.FC = () => {
          <div className="bg-white border-b border-gray-200 p-2 shadow-sm">
              <div className="flex gap-2 items-center mb-2">
                 <div className="relative flex-grow">
-                    <i className="fas fa-search absolute left-3 top-2.5 text-gray-400 text-sm"></i>
+                    <i className="fas fa-search absolute left-3 top-2.5 text-gray-400 text-xs"></i>
                     <input 
                         placeholder="Tìm tên, sđt, địa chỉ..." 
                         value={searchTerm} 
@@ -711,6 +737,51 @@ const TrackingDashboard: React.FC = () => {
                  <span className="font-bold text-gray-800">Đang tạo PDF...</span>
              </div>
         </div>
+      )}
+      
+      {/* MOVE BATCH MODAL */}
+      {moveBatchData.isOpen && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-gray-900/60 backdrop-blur-sm p-4 animate-fade-in">
+              <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden">
+                  <div className="p-5 bg-gray-50 border-b border-gray-100">
+                      <h3 className="font-bold text-gray-800">Chuyển {selectedOrderIds.size} đơn hàng</h3>
+                      <p className="text-xs text-gray-500 mt-1">Chọn lô hàng mới để chuyển đến</p>
+                  </div>
+                  <div className="p-4 space-y-4">
+                      <div>
+                          <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Nhập tên Lô mới</label>
+                          <input 
+                              value={moveBatchData.targetBatch}
+                              onChange={e => setMoveBatchData({...moveBatchData, targetBatch: e.target.value})}
+                              placeholder="VD: Lô-Sáng-Mai"
+                              className="w-full p-3 bg-white border border-gray-300 focus:border-purple-500 rounded-xl outline-none font-bold text-gray-800"
+                              autoFocus
+                          />
+                      </div>
+                      
+                      {batches.length > 0 && (
+                          <div>
+                              <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Hoặc chọn lô có sẵn</label>
+                              <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
+                                  {batches.map(b => (
+                                      <button 
+                                          key={b}
+                                          onClick={() => setMoveBatchData({...moveBatchData, targetBatch: b})}
+                                          className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${moveBatchData.targetBatch === b ? 'bg-purple-100 text-purple-700 border-purple-300' : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'}`}
+                                      >
+                                          {b}
+                                      </button>
+                                  ))}
+                              </div>
+                          </div>
+                      )}
+                  </div>
+                  <div className="p-4 bg-gray-50 border-t border-gray-100 flex gap-3">
+                      <button onClick={() => setMoveBatchData({isOpen: false, targetBatch: ''})} className="flex-1 py-2.5 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold rounded-xl text-sm transition-colors">Hủy</button>
+                      <button onClick={confirmMoveBatch} className="flex-1 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl text-sm shadow-lg transition-transform active:scale-95">Chuyển Ngay</button>
+                  </div>
+              </div>
+          </div>
       )}
 
       {/* STATS MODAL */}
@@ -1023,6 +1094,10 @@ const TrackingDashboard: React.FC = () => {
                       <i className="fas fa-exchange-alt mb-0.5 text-lg"></i>
                       <span className="text-[9px] font-bold">Status</span>
                   </button>
+                  <button onClick={handleBulkMoveBatch} className="flex flex-col items-center justify-center w-14 h-12 rounded-xl text-indigo-600 hover:bg-indigo-50 transition-colors active:scale-95">
+                      <i className="fas fa-dolly mb-0.5 text-lg"></i>
+                      <span className="text-[9px] font-bold">Chuyển Lô</span>
+                  </button>
                   <button onClick={executeBulkSplit} className="flex flex-col items-center justify-center w-14 h-12 rounded-xl text-orange-600 hover:bg-orange-50 transition-colors active:scale-95">
                       <i className="fas fa-history mb-0.5 text-lg"></i>
                       <span className="text-[9px] font-bold">Giao sau</span>
@@ -1066,6 +1141,7 @@ const TrackingDashboard: React.FC = () => {
                         onToggleSelect={toggleSelectOrder}
                         onLongPress={handleLongPress}
                         onShowQR={handleShowQR}
+                        onMoveBatch={handleSingleMoveBatch}
                     /></div></div>
             );
         }))}
