@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import toast from 'react-hot-toast';
 import { Product, Order, OrderStatus } from '../types';
-import { storageService } from '../services/storageService';
+import { storageService, generateProductSku } from '../services/storageService';
 import ConfirmModal from './ConfirmModal';
 
 const InventoryManager: React.FC = () => {
@@ -60,36 +60,64 @@ const InventoryManager: React.FC = () => {
 
     const qty = Number(formData.stockQuantity) || 0;
     
+    // NEW LOGIC: Use Standardized SKU
+    let targetId = editingId;
+    let isMerge = false;
+    
+    if (!targetId) {
+        // Creating new product? Check if SKU exists
+        const sku = generateProductSku(formData.name);
+        const existing = storageService.getProductBySku(sku);
+        if (existing) {
+            // MERGE LOGIC
+            targetId = existing.id;
+            isMerge = true;
+            if (!window.confirm(`Sản phẩm "${existing.name}" đã tồn tại. Bạn có muốn cập nhật giá và cộng thêm số lượng không?`)) {
+                return;
+            }
+        } else {
+            targetId = sku;
+        }
+    }
+
+    // Calculate final stock
+    let finalStock = qty;
+    let finalTotalImported = qty;
+    
+    if (isMerge && targetId) {
+        const existing = storageService.getProductBySku(targetId);
+        if (existing) {
+            finalStock = (Number(existing.stockQuantity) || 0) + qty;
+            finalTotalImported = (Number(existing.totalImported) || 0) + qty;
+        }
+    } else if (editingId) {
+        // Editing existing product manually
+        // Assume user is setting absolute value
+         const original = products.find(p => p.id === editingId);
+         if (original) {
+             const oldTotal = Number(original.totalImported) || 0;
+             finalTotalImported = qty > oldTotal ? qty : oldTotal;
+         }
+    }
+
     const productData: Product = {
-      id: editingId || uuidv4(),
+      id: targetId || uuidv4(), // Should always have targetId by now
       name: formData.name,
       defaultPrice: Number(formData.defaultPrice) || 0,
       importPrice: Number(formData.importPrice) || 0,
       defaultWeight: 1, 
-      stockQuantity: qty,
-      totalImported: qty, 
+      stockQuantity: finalStock,
+      totalImported: finalTotalImported, 
       lastImportDate: Date.now(),
     };
 
-    if (editingId) {
-        const original = products.find(p => p.id === editingId);
-        if (original) {
-            const oldTotal = Number(original.totalImported) || 0;
-            // Nếu người dùng chủ động sửa stockQuantity, ta cập nhật lại totalImported nếu stock > total (Logic nhập hàng thêm)
-            // Tuy nhiên ở đây giữ nguyên logic cũ là totalImported ghi nhận lịch sử nhập
-            // Để đơn giản: Nếu nhập hàng (qty > oldStock), ta cộng dồn vào totalImported.
-            // Nhưng đây là form Edit trực tiếp, nên ta chỉ đảm bảo total >= stock
-            productData.totalImported = qty > oldTotal ? qty : oldTotal;
-        }
-    }
-
     await storageService.saveProduct(productData);
     
-    if (editingId) {
+    if (editingId && !isMerge) {
         setPendingProductUpdate(productData);
         setShowSyncConfirm(true);
     } else {
-        toast.success('Đã nhập kho thành công');
+        toast.success(isMerge ? 'Đã cập nhật & cộng dồn kho!' : 'Đã nhập kho thành công');
         resetForm();
     }
   };
@@ -207,7 +235,9 @@ const InventoryManager: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-eco-600 uppercase tracking-wider mb-2">Số lượng tồn kho</label>
+                <label className="block text-xs font-bold text-eco-600 uppercase tracking-wider mb-2">
+                    {editingId ? 'Số lượng tồn kho' : 'Số lượng nhập thêm'}
+                </label>
                 <input
                   type="number"
                   value={formData.stockQuantity}

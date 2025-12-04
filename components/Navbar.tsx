@@ -150,7 +150,7 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
             
             {/* Logo Area */}
             <div className="flex items-center space-x-3">
-              <NavLink to="/dashboard" className="w-9 h-9 bg-white rounded-xl shadow-md flex items-center justify-center text-eco-700 font-bold text-xl hover:rotate-12 transition-transform overflow-hidden">
+              <NavLink to="/dashboard" className="w-9 h-9 bg-white rounded-xl shadow-md flex items-center justify-center text-eco-700 font-bold text-xl hover:rotate-12 transition-transform overflow-hidden" aria-label="Trang chủ">
                 {logo ? <img src={logo} alt="Logo" className="w-full h-full object-cover" /> : <i className="fas fa-leaf"></i>}
               </NavLink>
               <div className="flex flex-col">
@@ -191,6 +191,7 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
                         onClick={toggleNotifications} 
                         className={`p-2 rounded-lg transition-colors relative ${showNotif ? 'bg-eco-900 text-white' : 'text-eco-200 hover:text-white'}`}
                         title="Thông báo"
+                        aria-label="Thông báo"
                     >
                         <i className="fas fa-bell"></i>
                         {unreadCount > 0 && (
@@ -206,14 +207,14 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
                 </div>
 
                 {isOnline && (
-                  <button onClick={handleSyncClick} className="p-2 text-eco-200 hover:text-white" title="Đồng bộ">
+                  <button onClick={handleSyncClick} className="p-2 text-eco-200 hover:text-white" title="Đồng bộ" aria-label="Đồng bộ">
                       <i className={`fas fa-cloud-upload-alt ${isSyncing ? 'animate-bounce' : ''}`}></i>
                   </button>
                 )}
-                <button onClick={() => setShowSettings(true)} className="p-2 text-eco-200 hover:text-white" title="Cài đặt">
+                <button onClick={() => setShowSettings(true)} className="p-2 text-eco-200 hover:text-white" title="Cài đặt" aria-label="Cài đặt">
                     <i className="fas fa-cog"></i>
                 </button>
-                <button onClick={onLogout} className="p-2 text-eco-200 hover:text-red-300" title="Đăng xuất">
+                <button onClick={onLogout} className="p-2 text-eco-200 hover:text-red-300" title="Đăng xuất" aria-label="Đăng xuất">
                     <i className="fas fa-sign-out-alt"></i>
                 </button>
             </div>
@@ -226,6 +227,7 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
                         ref={notifBtnRef}
                         onClick={toggleNotifications} 
                         className={`p-3 rounded-xl transition-all relative ${showNotif ? 'bg-eco-700 text-white' : 'text-eco-100'}`}
+                        aria-label="Thông báo"
                     >
                         <i className="fas fa-bell text-xl"></i>
                         {unreadCount > 0 && (
@@ -240,13 +242,13 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
                 </div>
 
                 {/* Priority Actions */}
-                <NavLink to="/order" className={({ isActive }) => mobileLinkClass(isActive)}>
+                <NavLink to="/order" className={({ isActive }) => mobileLinkClass(isActive)} aria-label="Tạo đơn">
                     <i className="fas fa-plus-circle text-xl"></i>
                 </NavLink>
-                <NavLink to="/tracking" className={({ isActive }) => mobileLinkClass(isActive)}>
+                <NavLink to="/tracking" className={({ isActive }) => mobileLinkClass(isActive)} aria-label="Theo dõi đơn">
                     <i className="fas fa-shipping-fast text-xl"></i>
                 </NavLink>
-                <NavLink to="/audit" className={({ isActive }) => mobileLinkClass(isActive)}>
+                <NavLink to="/audit" className={({ isActive }) => mobileLinkClass(isActive)} aria-label="Đối soát">
                     <i className="fas fa-file-invoice-dollar text-xl"></i>
                 </NavLink>
 
@@ -254,6 +256,7 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
                 <button 
                     onClick={(e) => { e.stopPropagation(); setIsMobileMenuOpen(!isMobileMenuOpen); }}
                     className={`p-3 rounded-xl transition-all ${isMobileMenuOpen ? 'bg-eco-700 text-white shadow-inner' : 'text-eco-100'}`}
+                    aria-label="Menu"
                 >
                     <i className="fas fa-bars text-xl"></i>
                 </button>
@@ -295,21 +298,21 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
                     </NavLink>
                     <hr className="my-2 border-gray-100" />
                     {isOnline && (
-                        <button onClick={handleSyncClick} className={menuItemClass}>
+                        <button onClick={handleSyncClick} className={menuItemClass} aria-label="Đồng bộ Cloud">
                             <i className={`fas fa-cloud-upload-alt w-6 text-center ${isSyncing ? 'text-blue-500' : 'text-gray-400'}`}></i> 
                             <span>Đồng bộ Cloud</span>
                         </button>
                     )}
-                    <button onClick={() => { setShowSettings(true); setIsMobileMenuOpen(false); }} className={menuItemClass}>
+                    <button onClick={() => { setShowSettings(true); setIsMobileMenuOpen(false); }} className={menuItemClass} aria-label="Cài đặt">
                         <i className="fas fa-cog w-6 text-center text-gray-400"></i> Cài đặt
                     </button>
                     {(installPrompt || isIOS) && (
-                        <button onClick={handleInstallClick} className={menuItemClass}>
+                        <button onClick={handleInstallClick} className={menuItemClass} aria-label="Cài đặt App">
                             <i className="fas fa-download w-6 text-center text-gray-400"></i> Cài đặt App
                         </button>
                     )}
                     <hr className="my-2 border-gray-100" />
-                    <button onClick={onLogout} className={`${menuItemClass} text-red-600 hover:bg-red-50`}>
+                    <button onClick={onLogout} className={`${menuItemClass} text-red-600 hover:bg-red-50`} aria-label="Đăng xuất">
                         <i className="fas fa-sign-out-alt w-6 text-center"></i> Đăng xuất
                     </button>
                 </div>

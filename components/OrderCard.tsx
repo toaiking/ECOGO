@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { Order, OrderStatus, PaymentMethod, Customer } from '../types';
@@ -15,6 +16,13 @@ interface Props {
   onTouchStart?: (e: React.TouchEvent<HTMLDivElement>) => void;
   onTouchMove?: (e: React.TouchEvent<HTMLDivElement>) => void;
   onTouchEnd?: (e: React.TouchEvent<HTMLDivElement>) => void;
+  
+  // Desktop Drag Events
+  onDragStart?: (e: React.DragEvent<HTMLDivElement>, index: number) => void;
+  onDragEnter?: (e: React.DragEvent<HTMLDivElement>, index: number) => void;
+  onDragEnd?: (e: React.DragEvent<HTMLDivElement>) => void;
+  onDragOver?: (e: React.DragEvent<HTMLDivElement>) => void;
+
   isNewCustomer?: boolean;
   onSplitBatch?: (order: Order) => void;
   priorityScore?: number;
@@ -67,7 +75,7 @@ const compressImage = (file: File): Promise<string> => {
     });
 };
 
-const CustomerBadge: React.FC<{ customer?: Customer, isNew?: boolean }> = ({ customer, isNew }) => {
+const CustomerBadge: React.FC<{ customer?: Customer, isNew?: boolean }> = React.memo(({ customer, isNew }) => {
     if (isNew || (customer && (customer.totalOrders || 0) <= 1 && !customer.isLegacy)) {
         return <span title="Khách Mới" className="text-sm leading-none ml-1">🌱</span>;
     }
@@ -77,12 +85,13 @@ const CustomerBadge: React.FC<{ customer?: Customer, isNew?: boolean }> = ({ cus
     if (count > 5) return <span title={`Khách Quen (${count} đơn)`} className="text-sm leading-none ml-1">🌟</span>;
     if (count > 2) return <span title={`Tiềm Năng (${count} đơn)`} className="text-sm leading-none ml-1">🚀</span>;
     return null;
-};
+});
 
 export const OrderCard: React.FC<Props> = ({ 
   order, onUpdate, onDelete, onEdit, 
   isSortMode, index, isCompactMode,
   onTouchStart, onTouchMove, onTouchEnd,
+  onDragStart, onDragEnter, onDragEnd, onDragOver,
   isNewCustomer, onSplitBatch, priorityScore,
   customerData,
   isSelectionMode, isSelected, onToggleSelect, onLongPress,
@@ -109,8 +118,8 @@ export const OrderCard: React.FC<Props> = ({
       return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const handleTouchStartInternal = (e: React.TouchEvent<HTMLDivElement>) => {
-      if (onTouchStart) onTouchStart(e);
+  // Long press logic for selection mode
+  const handleTouchStartSelection = (e: React.TouchEvent<HTMLDivElement>) => {
       if (isSortMode || isSelectionMode) return;
       
       startPos.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
@@ -125,8 +134,7 @@ export const OrderCard: React.FC<Props> = ({
       }, 500);
   };
 
-  const handleTouchMoveInternal = (e: React.TouchEvent<HTMLDivElement>) => {
-      if (onTouchMove) onTouchMove(e);
+  const handleTouchMoveSelection = (e: React.TouchEvent<HTMLDivElement>) => {
       if (startPos.current) {
           const moveX = Math.abs(e.touches[0].clientX - startPos.current.x);
           const moveY = Math.abs(e.touches[0].clientY - startPos.current.y);
@@ -136,8 +144,7 @@ export const OrderCard: React.FC<Props> = ({
       }
   };
 
-  const handleTouchEndInternal = (e: React.TouchEvent<HTMLDivElement>) => {
-      if (onTouchEnd) onTouchEnd(e);
+  const handleTouchEndSelection = (e: React.TouchEvent<HTMLDivElement>) => {
       if (longPressTimer.current) clearTimeout(longPressTimer.current);
       if (isLongPressing.current) e.preventDefault();
   };
@@ -209,14 +216,11 @@ export const OrderCard: React.FC<Props> = ({
     printWindow.document.close(); printWindow.print();
   };
   
-  // NEW: Handle Messenger Click
   const handleMessengerClick = (e: React.MouseEvent) => {
       e.stopPropagation();
       if (customerData?.socialLink) {
           window.open(customerData.socialLink, '_blank');
       } else if (order.customerPhone) {
-          // If no specific link, try to search facebook by phone or just open messenger main page
-          // Searching by phone on FB is restricted now, so we just open the search page
           window.open(`https://www.facebook.com/search/top?q=${order.customerPhone}`, '_blank');
       }
   };
@@ -225,22 +229,27 @@ export const OrderCard: React.FC<Props> = ({
   const isCompleted = order.status === OrderStatus.DELIVERED || order.status === OrderStatus.CANCELLED;
   
   const PaymentBadge = ({ compact = false }) => {
-    const showText = isCompleted || order.paymentVerified;
+    // STRICT RULE: Only show payment text badge if order is COMPLETED
+    const showText = isCompleted; 
+    
     if (!showText && !compact) {
-         return <button onClick={(e) => { e.stopPropagation(); requestQR(e); }} className="text-blue-600"><i className="fas fa-qrcode"></i></button>;
+         return <button onClick={(e) => { e.stopPropagation(); requestQR(e); }} className="text-blue-600" aria-label="Hiện mã QR"><i className="fas fa-qrcode"></i></button>;
     }
+    
+    // Hide completely in compact mode if not completed
+    if (!showText && compact) return null;
+
     const isTransfer = order.paymentMethod === PaymentMethod.TRANSFER;
     let text = '', style = '';
     if (order.paymentMethod === PaymentMethod.CASH) { text = 'Tiền mặt'; style = 'text-gray-500 bg-gray-50 border-gray-200'; }
     else if (order.paymentMethod === PaymentMethod.PAID) { text = 'Đã TT'; style = 'text-green-700 bg-green-50 border-green-100'; }
     else { text = order.paymentVerified ? 'Đã nhận' : 'Chờ CK'; style = order.paymentVerified ? 'text-green-700 bg-green-50 border-green-100 cursor-pointer' : 'text-blue-600 bg-blue-50 border-blue-100 cursor-pointer'; }
-    return (<div className="flex items-center gap-1" onClick={(e) => { if (isTransfer) { e.stopPropagation(); togglePaymentVerification(); } }}><span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${style}`}>{text}</span>{(!isCompleted && !order.paymentVerified) && <button onClick={requestQR} className="text-blue-600 ml-0.5"><i className="fas fa-qrcode text-[10px]"></i></button>}</div>);
+    return (<div className="flex items-center gap-1" onClick={(e) => { if (isTransfer) { e.stopPropagation(); togglePaymentVerification(); } }}><span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${style}`}>{text}</span>{(!isCompleted && !order.paymentVerified) && <button onClick={requestQR} className="text-blue-600 ml-0.5" aria-label="Hiện mã QR"><i className="fas fa-qrcode text-[10px]"></i></button>}</div>);
   };
 
   const CheckboxOverlay = () => { if (!isSelectionMode) return null; return (<div className={`absolute top-0 bottom-0 left-0 w-1.5 ${isSelected ? 'bg-eco-500' : 'bg-transparent'}`}></div>); }
 
   const SelectTrigger = () => {
-    // Mode Active: Always show
     if (isSelectionMode) {
         return (
             <div className={`w-5 h-5 rounded border flex items-center justify-center transition-all mr-3 flex-shrink-0 ${isSelected ? 'bg-eco-500 border-eco-500 text-white' : 'border-gray-300 bg-white'}`}>
@@ -248,7 +257,6 @@ export const OrderCard: React.FC<Props> = ({
             </div>
         );
     }
-    // Hover Trigger for Desktop
     return (
          <div 
             onClick={(e) => {
@@ -257,24 +265,53 @@ export const OrderCard: React.FC<Props> = ({
             }}
             className="w-5 h-5 rounded border border-gray-300 bg-white mr-3 flex-shrink-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer hover:border-eco-500 hover:bg-eco-50"
             title="Chọn đơn này"
+            aria-label="Chọn đơn hàng"
          >
              <i className="fas fa-check text-[10px] text-gray-300"></i>
          </div>
     );
   };
+  
+  // DRAG HANDLE COMPONENT
+  const DragHandle = () => {
+      if (!isSortMode) return null;
+      return (
+          <div 
+            className="absolute top-0 right-0 bottom-0 w-12 flex items-center justify-center cursor-move z-20 touch-none text-gray-300 hover:text-eco-600 hover:bg-eco-50 transition-colors"
+            onTouchStart={onTouchStart}
+            onTouchMove={onTouchMove}
+            onTouchEnd={onTouchEnd}
+            onDragStart={(e) => onDragStart && index !== undefined && onDragStart(e, index)}
+            onDragEnter={(e) => onDragEnter && index !== undefined && onDragEnter(e, index)}
+            onDragEnd={onDragEnd}
+            onDragOver={onDragOver}
+            draggable={true}
+          >
+             <i className="fas fa-grip-vertical text-lg"></i>
+          </div>
+      );
+  };
 
-  // --- COMPACT MODE ---
+  const paymentInfo = (() => {
+    if (order.paymentMethod === PaymentMethod.CASH) return { label: 'Tiền mặt', className: 'bg-gray-50 text-gray-600', isTransfer: false };
+    if (order.paymentMethod === PaymentMethod.PAID) return { label: 'Đã TT', className: 'bg-green-50 text-green-700', isTransfer: false };
+    if (order.paymentVerified) return { label: 'Đã nhận', className: 'bg-green-50 text-green-700', isTransfer: true };
+    return { label: 'Chờ CK', className: 'bg-blue-50 text-blue-600', isTransfer: true };
+  })();
+
   if (isCompactMode) {
       return (
           <>
           <div 
-            className={`relative border-b border-gray-100 p-3 bg-white hover:bg-gray-50 transition-colors cursor-pointer select-none group ${isSelected ? 'bg-eco-50' : ''}`}
+            className={`relative border-b border-gray-100 p-3 bg-white hover:bg-gray-50 transition-colors cursor-pointer select-none group ${isSelected ? 'bg-eco-50' : ''} ${isSortMode ? 'pr-12' : ''}`}
             onClick={handleCardClick}
-            onTouchStart={handleTouchStartInternal}
-            onTouchMove={handleTouchMoveInternal}
-            onTouchEnd={handleTouchEndInternal}
+            onTouchStart={handleTouchStartSelection}
+            onTouchMove={handleTouchMoveSelection}
+            onTouchEnd={handleTouchEndSelection}
           >
                <CheckboxOverlay />
+               <DragHandle />
+               
                <div className="flex items-start">
                    <SelectTrigger />
                    <div className={`w-1 self-stretch rounded-full mr-3 flex-shrink-0 ${config.bg.replace('50', '500').replace('100', '500')}`}></div>
@@ -297,10 +334,10 @@ export const OrderCard: React.FC<Props> = ({
                              <div className="flex items-center gap-2 flex-shrink-0">
                                   <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${config.bg} ${config.color}`}>{config.label}</span>
                                   <div className="flex items-center gap-1.5 pl-1 border-l border-gray-100">
-                                      <a href={`tel:${order.customerPhone}`} onClick={(e)=>e.stopPropagation()} className="w-6 h-6 rounded-full bg-gray-100 hover:bg-green-100 text-gray-500 hover:text-green-600 flex items-center justify-center transition-colors"><i className="fas fa-phone text-[10px]"></i></a>
-                                      {!isCompleted && (<button onClick={nextStatus} className={`w-6 h-6 rounded-full text-white flex items-center justify-center shadow-sm ${config.bg.replace('50', '500').replace('100', '500')}`}><i className="fas fa-arrow-right text-[10px]"></i></button>)}
+                                      <a href={`tel:${order.customerPhone}`} onClick={(e)=>e.stopPropagation()} className="w-6 h-6 rounded-full bg-gray-100 hover:bg-green-100 text-gray-500 hover:text-green-600 flex items-center justify-center transition-colors" aria-label="Gọi điện"><i className="fas fa-phone text-[10px]"></i></a>
+                                      {!isCompleted && (<button onClick={nextStatus} className={`w-6 h-6 rounded-full text-white flex items-center justify-center shadow-sm ${config.bg.replace('50', '500').replace('100', '500')}`} aria-label="Chuyển trạng thái tiếp theo"><i className="fas fa-arrow-right text-[10px]"></i></button>)}
                                       <div className="relative" ref={actionMenuRef}>
-                                          <button onClick={(e) => { e.stopPropagation(); setShowActionMenu(!showActionMenu); }} className="w-6 h-6 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 flex items-center justify-center"><i className="fas fa-ellipsis-v text-[10px]"></i></button>
+                                          <button onClick={(e) => { e.stopPropagation(); setShowActionMenu(!showActionMenu); }} className="w-6 h-6 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 flex items-center justify-center" aria-label="Menu hành động"><i className="fas fa-ellipsis-v text-[10px]"></i></button>
                                           {showActionMenu && (
                                               <div className="absolute bottom-full right-0 mb-1 bg-white shadow-xl border border-gray-100 rounded-lg p-1 min-w-[130px] z-20">
                                                   <button onClick={() => { sendSMS(); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-blue-600 font-bold rounded"><i className="fas fa-comment-dots mr-2"></i>Nhắn tin</button>
@@ -326,13 +363,13 @@ export const OrderCard: React.FC<Props> = ({
   // --- DETAIL MODE ---
   return (
     <div 
-        className={`relative bg-white rounded-xl border transition-all duration-200 select-none flex flex-col group ${isSortMode ? 'border-dashed border-2 border-gray-300' : isSelected ? 'border-eco-500 ring-1 ring-eco-500 bg-eco-50/10' : 'border-gray-200 shadow-sm hover:shadow-md'}`}
+        className={`relative bg-white rounded-xl border transition-all duration-200 select-none flex flex-col group ${isSortMode ? 'border-dashed border-2 border-gray-300 pr-10' : isSelected ? 'border-eco-500 ring-1 ring-eco-500 bg-eco-50/10' : 'border-gray-200 shadow-sm hover:shadow-md'}`}
         onClick={handleCardClick}
-        onTouchStart={handleTouchStartInternal}
-        onTouchMove={handleTouchMoveInternal}
-        onTouchEnd={handleTouchEndInternal}
+        onTouchStart={handleTouchStartSelection}
+        onTouchMove={handleTouchMoveSelection}
+        onTouchEnd={handleTouchEndSelection}
     >
-        {isSortMode && (<div className="absolute top-0 right-0 p-3 text-gray-300 z-10"><i className="fas fa-grip-vertical"></i></div>)}
+        <DragHandle />
         <div className="p-3 pb-2 flex items-start">
              <div className="pt-1">
                  <SelectTrigger />
@@ -347,10 +384,27 @@ export const OrderCard: React.FC<Props> = ({
                         <div className="text-sm font-black text-gray-900">{new Intl.NumberFormat('vi-VN').format(order.totalPrice)}<span className="text-[10px] text-gray-400 ml-0.5 font-normal">đ</span></div>
                     </div>
                 </div>
+                
                 <div className="flex justify-between items-center text-[10px]">
-                     <div className="flex gap-2">
-                         <span className={`px-1.5 py-0.5 rounded font-bold uppercase tracking-wide ${config.bg} ${config.color}`}>{config.label}</span>
-                         <PaymentBadge />
+                     {/* Unified Status & Payment Badge Pill */}
+                     <div className={`px-2.5 py-1.5 rounded-lg border border-black/5 shadow-sm font-bold uppercase flex items-center gap-2 ${config.bg} ${config.color}`}>
+                         <span>{config.label}</span>
+                         
+                         {/* Only show payment details if completed (Delivered/Cancelled) */}
+                         {isCompleted && (
+                            <>
+                                <span className="w-px h-3 bg-current opacity-20"></span>
+                                <div 
+                                    className={`flex items-center gap-1 ${paymentInfo.isTransfer ? 'cursor-pointer hover:opacity-75' : ''}`}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        if (paymentInfo.isTransfer) togglePaymentVerification();
+                                    }}
+                                >
+                                    {paymentInfo.label}
+                                </div>
+                            </>
+                         )}
                      </div>
                 </div>
              </div>
@@ -372,41 +426,62 @@ export const OrderCard: React.FC<Props> = ({
                 <div className="flex gap-2">
                     {order.status === OrderStatus.PENDING && (<button onClick={() => handleStatusChange(OrderStatus.PICKED_UP)} className="px-3 py-1.5 bg-gray-800 text-white text-[10px] font-bold rounded-lg hover:bg-black transition-colors shadow-sm">NHẬN ĐƠN</button>)}
                     {order.status === OrderStatus.PICKED_UP && (<button onClick={() => handleStatusChange(OrderStatus.IN_TRANSIT)} className="px-3 py-1.5 bg-blue-600 text-white text-[10px] font-bold rounded-lg hover:bg-blue-700 transition-colors shadow-sm shadow-blue-200">GIAO HÀNG</button>)}
-                    {order.status === OrderStatus.IN_TRANSIT && (<div className="flex gap-1"><button onClick={() => handleFinishOrder(PaymentMethod.CASH)} className="px-3 py-1.5 bg-emerald-600 text-white text-[10px] font-bold rounded-lg hover:bg-emerald-700 shadow-sm shadow-emerald-200">TM</button><button onClick={() => handleFinishOrder(PaymentMethod.TRANSFER)} className="px-3 py-1.5 bg-blue-600 text-white text-[10px] font-bold rounded-lg hover:bg-blue-700 shadow-sm shadow-blue-200">CK</button><label className="w-7 h-7 flex items-center justify-center border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50 text-gray-400 bg-white"><input type="file" accept="image/*" capture="environment" className="hidden" onChange={handlePhotoUpload} disabled={uploading} /><i className={`fas ${uploading ? 'fa-spinner fa-spin' : 'fa-camera'}`}></i></label></div>)}
-                    {isCompleted && order.deliveryProof && (<button onClick={() => setShowImageModal(true)} className="px-2 py-1 bg-green-50 text-green-700 text-[10px] font-bold rounded border border-green-100 flex items-center gap-1"><i className="fas fa-image"></i> Ảnh</button>)}
+                    {order.status === OrderStatus.IN_TRANSIT && (<div className="flex gap-1"><button onClick={(e) => { e.stopPropagation(); setShowCompactPaymentChoice(true); }} className="px-3 py-1.5 bg-green-600 text-white text-[10px] font-bold rounded-lg hover:bg-green-700 transition-colors shadow-sm shadow-green-200">HOÀN TẤT</button></div>)}
+                    {isCompleted && order.status !== OrderStatus.CANCELLED && (
+                        <div className="flex gap-2">
+                             {!order.deliveryProof ? (
+                                 <label className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg text-[10px] font-bold cursor-pointer transition-colors border border-gray-200 flex items-center gap-1">
+                                     <input type="file" accept="image/*" capture="environment" onChange={handlePhotoUpload} className="hidden" disabled={uploading} />
+                                     {uploading ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-camera"></i>} Ảnh
+                                 </label>
+                             ) : (
+                                 <div className="flex gap-1">
+                                     <button onClick={() => setShowImageModal(true)} className="px-3 py-1.5 bg-green-50 text-green-600 border border-green-200 rounded-lg text-[10px] font-bold hover:bg-green-100 transition-colors flex items-center gap-1"><i className="fas fa-image"></i> Xem</button>
+                                     <button onClick={handleShareProof} className="w-8 flex items-center justify-center bg-blue-50 text-blue-600 border border-blue-200 rounded-lg text-[10px] hover:bg-blue-100 transition-colors"><i className="fas fa-share-alt"></i></button>
+                                 </div>
+                             )}
+                        </div>
+                    )}
                 </div>
-                <div className="flex items-center gap-1.5 text-gray-400">
-                    {/* MESSENGER BUTTON */}
-                    <button 
-                        onClick={handleMessengerClick} 
-                        className={`w-7 h-7 flex items-center justify-center rounded-full border transition-colors ${customerData?.socialLink ? 'bg-blue-50 text-blue-600 border-blue-200 shadow-sm' : 'border-gray-100 hover:bg-blue-50 hover:text-blue-500 hover:border-blue-100'}`} 
-                        title={customerData?.socialLink ? "Mở hội thoại Messenger/Zalo đã lưu" : "Tìm khách trên Facebook"}
-                    >
-                        <i className="fab fa-facebook-messenger text-xs"></i>
-                    </button>
-                    
-                    <a href={`tel:${order.customerPhone}`} className="w-7 h-7 flex items-center justify-center rounded-full border border-gray-100 hover:bg-green-50 hover:text-green-600 hover:border-green-200 transition-colors"><i className="fas fa-phone text-xs"></i></a>
-                    <a href={`https://zalo.me/${order.customerPhone}`} target="_blank" className="w-7 h-7 flex items-center justify-center rounded-full border border-gray-100 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 transition-colors font-bold text-[9px]">Z</a>
-                    <button onClick={() => sendSMS()} className="w-7 h-7 flex items-center justify-center rounded-full border border-gray-100 hover:bg-yellow-50 hover:text-yellow-600 hover:border-yellow-200 transition-colors"><i className="fas fa-comment-dots text-xs"></i></button>
-                    <div className="relative" ref={actionMenuRef}>
-                        <button onClick={() => setShowActionMenu(!showActionMenu)} className="w-7 h-7 flex items-center justify-center rounded-full border border-transparent hover:bg-gray-100 hover:text-gray-600 transition-colors"><i className="fas fa-ellipsis-v text-xs"></i></button>
+                
+                <div className="flex items-center gap-2">
+                    <a href={`tel:${order.customerPhone}`} className="w-8 h-8 rounded-full bg-gray-100 hover:bg-green-100 text-gray-500 hover:text-green-600 flex items-center justify-center transition-colors" title="Gọi điện"><i className="fas fa-phone text-xs"></i></a>
+                    <button onClick={handleMessengerClick} className="w-8 h-8 rounded-full bg-blue-50 hover:bg-blue-100 text-blue-600 flex items-center justify-center transition-colors"><i className="fab fa-facebook-messenger text-xs"></i></button>
+                    <div className="relative">
+                        <button onClick={() => setShowActionMenu(!showActionMenu)} className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 flex items-center justify-center transition-colors"><i className="fas fa-ellipsis-v text-xs"></i></button>
                         {showActionMenu && (
-                            <div className="absolute bottom-full right-0 mb-1 bg-white shadow-xl border border-gray-200 rounded-lg p-1 min-w-[130px] z-20 animate-fade-in">
-                                <button onClick={() => { onEdit(order); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-blue-600 font-bold flex items-center gap-2 rounded"><i className="fas fa-edit"></i> Sửa đơn</button>
-                                {onMoveBatch && <button onClick={() => { onMoveBatch(order); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-purple-600 font-bold flex items-center gap-2 rounded"><i className="fas fa-dolly"></i> Chuyển lô</button>}
-                                {onSplitBatch && order.batchId && (<button onClick={() => { onSplitBatch(order); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-orange-600 flex items-center gap-2 rounded font-bold"><i className="fas fa-history"></i> Giao sau</button>)}
-                                <button onClick={() => { handlePrint(); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-gray-600 flex items-center gap-2 rounded"><i className="fas fa-print"></i> In phiếu</button>
-                                {order.deliveryProof && <button onClick={() => { handleShareProof(); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-xs text-purple-600 flex items-center gap-2 rounded"><i className="fas fa-share-alt"></i> Gửi ảnh</button>}
-                                <div className="border-t border-gray-100 my-1"></div>
-                                {order.deliveryProof && <button onClick={() => { handleDeletePhoto(); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-red-50 text-xs text-red-500 flex items-center gap-2 rounded"><i className="fas fa-image"></i> Xóa ảnh</button>}
-                                <button onClick={() => { onDelete(order.id); setShowActionMenu(false); }} className="w-full text-left px-3 py-2 hover:bg-red-50 text-xs text-red-600 flex items-center gap-2 rounded"><i className="fas fa-trash"></i> Xóa đơn</button>
+                            <div className="absolute bottom-full right-0 mb-2 bg-white shadow-xl border border-gray-100 rounded-xl p-1 min-w-[160px] z-20 animate-fade-in origin-bottom-right">
+                                <button onClick={() => { sendSMS(); setShowActionMenu(false); }} className="w-full text-left px-3 py-2.5 hover:bg-gray-50 text-xs text-blue-600 font-bold rounded-lg flex items-center gap-2"><i className="fas fa-comment-dots w-4"></i>Nhắn tin SMS</button>
+                                <button onClick={() => { onEdit(order); setShowActionMenu(false); }} className="w-full text-left px-3 py-2.5 hover:bg-gray-50 text-xs text-gray-700 font-bold rounded-lg flex items-center gap-2"><i className="fas fa-edit w-4"></i>Chỉnh sửa</button>
+                                <button onClick={() => { handlePrint(); setShowActionMenu(false); }} className="w-full text-left px-3 py-2.5 hover:bg-gray-50 text-xs text-gray-700 font-bold rounded-lg flex items-center gap-2"><i className="fas fa-print w-4"></i>In phiếu</button>
+                                {onMoveBatch && <button onClick={() => { onMoveBatch(order); setShowActionMenu(false); }} className="w-full text-left px-3 py-2.5 hover:bg-gray-50 text-xs text-purple-600 font-bold rounded-lg flex items-center gap-2"><i className="fas fa-dolly w-4"></i>Chuyển lô</button>}
+                                {order.batchId && onSplitBatch && <button onClick={() => { onSplitBatch(order); setShowActionMenu(false); }} className="w-full text-left px-3 py-2.5 hover:bg-gray-50 text-xs text-orange-600 font-bold rounded-lg flex items-center gap-2"><i className="fas fa-history w-4"></i>Giao sau (Tách lô)</button>}
+                                <div className="border-t border-gray-50 my-1"></div>
+                                {order.status !== OrderStatus.CANCELLED && <button onClick={() => { handleStatusChange(OrderStatus.CANCELLED); setShowActionMenu(false); }} className="w-full text-left px-3 py-2.5 hover:bg-gray-50 text-xs text-red-600 font-bold rounded-lg flex items-center gap-2"><i className="fas fa-ban w-4"></i>Hủy đơn</button>}
+                                <button onClick={() => { onDelete(order.id); setShowActionMenu(false); }} className="w-full text-left px-3 py-2.5 hover:bg-red-50 text-xs text-red-600 font-bold rounded-lg flex items-center gap-2"><i className="fas fa-trash-alt w-4"></i>Xóa vĩnh viễn</button>
                             </div>
                         )}
                     </div>
                 </div>
             </div>
         </div>
-        {showImageModal && order.deliveryProof && (<div className="fixed inset-0 z-[99999] bg-black/95 flex items-center justify-center p-4" onClick={() => setShowImageModal(false)}><img src={order.deliveryProof} className="max-w-full max-h-full object-contain rounded" onClick={e=>e.stopPropagation()} /><button onClick={() => setShowImageModal(false)} className="absolute top-4 right-4 text-white text-2xl"><i className="fas fa-times"></i></button></div>)}
+        
+        {/* IMAGE MODAL */}
+        {showImageModal && order.deliveryProof && (
+            <div className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4 animate-fade-in" onClick={(e) => { e.stopPropagation(); setShowImageModal(false); }}>
+                <div className="relative max-w-lg w-full" onClick={e => e.stopPropagation()}>
+                    <img src={order.deliveryProof} alt="Proof" className="w-full h-auto rounded-xl shadow-2xl" />
+                    <button onClick={() => setShowImageModal(false)} className="absolute -top-4 -right-4 w-8 h-8 bg-white rounded-full flex items-center justify-center shadow-lg"><i className="fas fa-times"></i></button>
+                    <div className="absolute bottom-4 left-0 right-0 flex justify-center gap-4">
+                        <button onClick={handleDeletePhoto} className="bg-red-600 text-white px-4 py-2 rounded-full text-xs font-bold shadow-lg">Xóa ảnh</button>
+                        <button onClick={handleShareProof} className="bg-blue-600 text-white px-4 py-2 rounded-full text-xs font-bold shadow-lg">Chia sẻ</button>
+                    </div>
+                </div>
+            </div>
+        )}
+        
+        {/* PAYMENT CHOICE MODAL (FULL) */}
+        {showCompactPaymentChoice && (<div className="fixed inset-0 z-[99999] bg-gray-900/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={(e) => { e.stopPropagation(); setShowCompactPaymentChoice(false); }}><div className="bg-white w-full max-w-xs rounded-xl shadow-2xl p-4" onClick={e => e.stopPropagation()}><h3 className="text-center font-bold text-gray-800 mb-3 text-sm uppercase">Hoàn tất đơn hàng</h3><div className="grid grid-cols-2 gap-3"><button onClick={(e) => { e.stopPropagation(); handleFinishOrder(PaymentMethod.CASH); }} className="p-3 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg text-center"><span className="block text-xl">💵</span><span className="text-xs font-bold text-emerald-700">TIỀN MẶT</span></button><button onClick={(e) => { e.stopPropagation(); handleFinishOrder(PaymentMethod.TRANSFER); }} className="p-3 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg text-center"><span className="block text-xl">💳</span><span className="text-xs font-bold text-blue-700">CHUYỂN KHOẢN</span></button></div></div></div>)}
     </div>
   );
-};
+}

@@ -1,6 +1,7 @@
+
 import { v4 as uuidv4 } from 'uuid';
 import { RawPDFImportData, Order, OrderStatus, PaymentMethod, Customer, Product, OrderItem } from '../types';
-import { storageService, normalizeString, normalizePhone } from './storageService';
+import { storageService, normalizeString, normalizePhone, generateProductSku } from './storageService';
 import { reconciliationService } from './reconciliationService';
 import { structureImportData } from './geminiService';
 
@@ -81,29 +82,49 @@ export const dataImportService = {
    * Nhận mảng dữ liệu thô, xử lý và lưu vào DB.
    */
   processImportData: async (rawData: RawPDFImportData[], batchName: string): Promise<string> => {
-    // A. Pre-fetch Data (Cache) to avoid N+1 queries
-    // Lưu ý: storageService hoạt động dựa trên local cache (_memory...) nên ta cần đảm bảo nó đã load.
-    // Trong App.tsx hoặc Navbar đã subscribe, nên cache khả năng cao đã có.
-    
-    // B. Loop & Process
     const ordersToSave: Order[] = [];
-    const productsToSave: Product[] = []; // Track new products to avoid duplicates in one batch
+    const productsToSave: Product[] = []; 
     
-    // Lấy danh sách sản phẩm hiện tại từ LocalStorage (để check trùng nhanh)
+    // Lấy danh sách sản phẩm hiện tại
     let currentProducts: Product[] = [];
     try {
         const pStr = localStorage.getItem('ecogo_products_v1');
         currentProducts = pStr ? JSON.parse(pStr) : [];
     } catch {}
 
-    const findProduct = (name: string): Product | undefined => {
-        const normName = normalizeString(name);
-        // Check in current DB list
-        let found = currentProducts.find(p => normalizeString(p.name) === normName || normalizeString(p.name).includes(normName));
-        if (found) return found;
-        // Check in newly created list (in this session)
-        found = productsToSave.find(p => normalizeString(p.name) === normName);
-        return found;
+    // Map để theo dõi sản phẩm mới tạo trong phiên import này (để tránh tạo trùng lặp trong cùng 1 file)
+    const sessionProductMap = new Map<string, Product>();
+
+    const getOrInitProduct = (name: string): Product => {
+        const sku = generateProductSku(name);
+        
+        // 1. Check newly created (in session)
+        if (sessionProductMap.has(sku)) {
+            return sessionProductMap.get(sku)!;
+        }
+
+        // 2. Check existing in DB
+        const existing = currentProducts.find(p => p.id === sku);
+        if (existing) {
+            // Found existing -> Return clone to update
+            const clone = { ...existing }; 
+            sessionProductMap.set(sku, clone);
+            return clone;
+        }
+
+        // 3. Create New
+        const newProd: Product = {
+            id: sku,
+            name: name,
+            defaultPrice: 0,
+            importPrice: 0, 
+            defaultWeight: 1,
+            stockQuantity: 0, // Init 0, will add later
+            totalImported: 0,
+            lastImportDate: Date.now()
+        };
+        sessionProductMap.set(sku, newProd);
+        return newProd;
     };
 
     let processedCount = 0;
@@ -136,22 +157,20 @@ export const dataImportService = {
         let calculatedTotal = 0;
 
         for (const item of parsedItems) {
-            let prod = findProduct(item.name);
+            const prod = getOrInitProduct(item.name);
             
-            if (!prod) {
-                // Create New Product
-                prod = {
-                    id: uuidv4(),
-                    name: item.name,
-                    defaultPrice: 0, // Chưa biết giá
-                    importPrice: 0, 
-                    defaultWeight: 1,
-                    stockQuantity: 50, 
-                    totalImported: 50,
-                    lastImportDate: Date.now()
-                };
-                productsToSave.push(prod);
-                currentProducts.push(prod);
+            // Logic: Cộng dồn tồn kho khi nhập
+            // Vì đây là Import hàng bán ra, nhưng trong context "nhập liệu từ PDF"
+            // thường PDF là danh sách đơn đã bán. 
+            // Tuy nhiên, logic ở InventoryManager là nhập kho.
+            // Ở đây ta cứ giả định sản phẩm này tồn tại để bán.
+            
+            // Nếu sản phẩm mới tạo (stock = 0), ta có thể set stock = quantity để tránh âm kho?
+            // Hoặc cứ để nó trừ kho khi bán.
+            // Để an toàn: Nếu sản phẩm mới tinh (totalImported=0), ta set stock = 50 mặc định
+            if (prod.totalImported === 0) {
+                 prod.stockQuantity = 50;
+                 prod.totalImported = 50;
             }
 
             const itemPrice = prod.defaultPrice || 0;
@@ -199,8 +218,8 @@ export const dataImportService = {
     }
 
     // C. Batch Save
-    // 1. Save Products
-    for (const p of productsToSave) {
+    // 1. Save Products (Iterate map)
+    for (const p of sessionProductMap.values()) {
         await storageService.saveProduct(p);
     }
 
@@ -209,6 +228,6 @@ export const dataImportService = {
         await storageService.saveOrder(o);
     }
 
-    return `Đã nhập thành công ${processedCount} đơn hàng vào lô "${batchName}". Tạo mới ${productsToSave.length} sản phẩm.`;
+    return `Đã nhập thành công ${processedCount} đơn hàng vào lô "${batchName}". Cập nhật/Tạo mới ${sessionProductMap.size} sản phẩm.`;
   }
 };

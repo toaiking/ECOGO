@@ -1,4 +1,5 @@
-import React, { useEffect, useState, useMemo, useRef, useDeferredValue } from 'react';
+
+import React, { useEffect, useState, useMemo, useRef, useDeferredValue, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import { v4 as uuidv4 } from 'uuid';
 import { Order, OrderStatus, PaymentMethod, OrderItem, Product, Customer } from '../types';
@@ -7,7 +8,7 @@ import { pdfService } from '../services/pdfService';
 import { reconciliationService, ReconciliationResult } from '../services/reconciliationService';
 import { OrderCard } from './OrderCard';
 import ConfirmModal from './ConfirmModal';
-import RoutePlannerModal from './RoutePlannerModal'; // IMPORT NEW MODAL
+import RoutePlannerModal from './RoutePlannerModal'; 
 
 type SortOption = 'NEWEST' | 'ROUTE' | 'STATUS';
 
@@ -18,7 +19,6 @@ const TrackingDashboard: React.FC = () => {
 
   const [filterStatus, setFilterStatus] = useState<OrderStatus[]>([]);
   const [filterBatch, setFilterBatch] = useState<string[]>([]); 
-  const [filterUser, setFilterUser] = useState<string>('ALL');
   const [searchTerm, setSearchTerm] = useState('');
   const deferredSearchTerm = useDeferredValue(searchTerm);
 
@@ -37,7 +37,6 @@ const TrackingDashboard: React.FC = () => {
   const batchDropdownBtnRef = useRef<HTMLButtonElement>(null);
   const [activeDropdown, setActiveDropdown] = useState<'STATUS' | 'BATCH' | null>(null);
   const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0, width: 0 });
-  const [isSorting, setIsSorting] = useState(false); 
 
   // Voice Search State
   const [isListeningSearch, setIsListeningSearch] = useState(false);
@@ -132,12 +131,6 @@ const TrackingDashboard: React.FC = () => {
       }
   }, [batches, selectedStatsBatch]);
 
-  const users = useMemo(() => {
-      const userSet = new Set<string>();
-      orders.forEach(o => { if (o.lastUpdatedBy) userSet.add(o.lastUpdatedBy); });
-      return Array.from(userSet).sort();
-  }, [orders]);
-
   const newCustomerMap = useMemo(() => {
       const map: Record<string, boolean> = {};
       orders.forEach(o => {
@@ -164,16 +157,22 @@ const TrackingDashboard: React.FC = () => {
     let result = orders.filter(o => {
       const statusMatch = filterStatus.length === 0 || filterStatus.includes(o.status);
       const batchMatch = filterBatch.length === 0 || (o.batchId && filterBatch.includes(o.batchId));
-      const userMatch = filterUser === 'ALL' || o.lastUpdatedBy === filterUser;
-      const searchLower = deferredSearchTerm.toLowerCase();
-      const searchMatch = !deferredSearchTerm || o.customerName.toLowerCase().includes(searchLower) || o.customerPhone.includes(searchLower) || o.address.toLowerCase().includes(searchLower);
-      return statusMatch && batchMatch && userMatch && searchMatch;
+      
+      if (!statusMatch || !batchMatch) return false;
+
+      if (!deferredSearchTerm) return true;
+
+      const term = normalizeString(deferredSearchTerm);
+      return normalizeString(o.customerName).includes(term) || 
+             normalizePhone(o.customerPhone).includes(term) || 
+             normalizeString(o.address).includes(term) ||
+             o.items.some(i => normalizeString(i.name).includes(term));
     });
     if (sortBy === 'NEWEST') return result.sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
     if (sortBy === 'STATUS') return result.sort((a, b) => a.status.localeCompare(b.status));
     if (sortBy === 'ROUTE') return result.sort((a, b) => (Number(a.orderIndex) || 0) - (Number(b.orderIndex) || 0));
     return result;
-  }, [orders, filterStatus, filterBatch, filterUser, deferredSearchTerm, sortBy]);
+  }, [orders, filterStatus, filterBatch, deferredSearchTerm, sortBy]);
 
   // --- STATS DATA CALCULATION ---
   const batchStatsData = useMemo(() => {
@@ -185,7 +184,6 @@ const TrackingDashboard: React.FC = () => {
           productInfo?: Product 
       }>();
 
-      // 1. Sum up Ordered Qty
       orders.filter(o => o.batchId === selectedStatsBatch && o.status !== OrderStatus.CANCELLED).forEach(o => {
           o.items.forEach(item => {
               const name = item.name.trim();
@@ -197,7 +195,6 @@ const TrackingDashboard: React.FC = () => {
           });
       });
 
-      // 2. Attach Inventory Data (Fuzzy Match)
       const result = Array.from(statsMap.values()).map(item => {
           const normName = normalizeString(item.name);
           const product = products.find(p => normalizeString(p.name) === normName) || 
@@ -205,7 +202,6 @@ const TrackingDashboard: React.FC = () => {
           return { ...item, productInfo: product };
       });
 
-      // 3. Sort by Name
       return result.sort((a, b) => a.name.localeCompare(b.name));
   }, [orders, products, selectedStatsBatch]);
 
@@ -226,36 +222,35 @@ const TrackingDashboard: React.FC = () => {
           toast.success("Đã copy thống kê!");
       }
   };
-  // -----------------------------
-
+  
   const handleLoadMore = () => {
       setVisibleCount(prev => prev + 20);
   };
   const visibleOrders = filteredOrders.slice(0, visibleCount);
 
   // --- SELECTION LOGIC ---
-  const handleLongPress = (id: string) => {
+  const handleLongPress = useCallback((id: string) => {
       setIsSelectionMode(true);
       setSelectedOrderIds(new Set([id]));
       if (navigator.vibrate) navigator.vibrate(50);
-  };
+  }, []);
 
-  const toggleSelectOrder = (id: string) => {
-      const newSet = new Set(selectedOrderIds);
-      if (newSet.has(id)) {
-          newSet.delete(id);
-      } else {
-          newSet.add(id);
-      }
-      setSelectedOrderIds(newSet);
-      
-      // Auto toggle mode based on selection count
-      if (newSet.size > 0 && !isSelectionMode) {
-          setIsSelectionMode(true);
-      } else if (newSet.size === 0) {
-          setIsSelectionMode(false);
-      }
-  };
+  const toggleSelectOrder = useCallback((id: string) => {
+      setSelectedOrderIds(prev => {
+          const newSet = new Set(prev);
+          if (newSet.has(id)) {
+              newSet.delete(id);
+          } else {
+              newSet.add(id);
+          }
+          if (newSet.size > 0 && !isSelectionMode) {
+            setIsSelectionMode(true);
+          } else if (newSet.size === 0) {
+            setIsSelectionMode(false);
+          }
+          return newSet;
+      });
+  }, [isSelectionMode]);
 
   const clearSelection = () => {
       setIsSelectionMode(false);
@@ -264,12 +259,9 @@ const TrackingDashboard: React.FC = () => {
 
   const executeBulkDelete = async () => {
       if (selectedOrderIds.size === 0) return;
-      
-      // Explicitly cast to string[] to resolve type inference issues
       const ids = Array.from(selectedOrderIds) as string[];
       const restorationMap = new Map<string, number>();
 
-      // 1. Calculate totals to restore from selected orders
       ids.forEach(id => {
           const order = orders.find(o => o.id === id);
           if (order) {
@@ -282,7 +274,6 @@ const TrackingDashboard: React.FC = () => {
           }
       });
 
-      // 2. Update Products Stock (Only iterate unique products to update)
       for (const [prodId, qty] of restorationMap.entries()) {
           const product = products.find(p => p.id === prodId);
           if (product) {
@@ -294,9 +285,7 @@ const TrackingDashboard: React.FC = () => {
           }
       }
 
-      // 3. Delete Orders
       await storageService.deleteOrdersBatch(ids);
-      
       toast.success(`Đã xóa ${ids.length} đơn hàng & Hoàn kho`);
       clearSelection();
       setShowBulkDeleteConfirm(false);
@@ -319,11 +308,8 @@ const TrackingDashboard: React.FC = () => {
 
   const executeBulkStatusUpdate = async (status: OrderStatus) => {
       if (selectedOrderIds.size === 0) return;
-      
-      // Explicitly cast to string[] to resolve type inference issues
       const ids = Array.from(selectedOrderIds) as string[];
       const promises = ids.map(id => storageService.updateStatus(id, status));
-      
       await Promise.all(promises);
       toast.success(`Đã cập nhật ${ids.length} đơn sang ${statusLabels[status]}`);
       setShowBulkStatusModal(false);
@@ -335,11 +321,11 @@ const TrackingDashboard: React.FC = () => {
       setMoveBatchData({ isOpen: true, targetBatch: '' });
   };
   
-  const handleSingleMoveBatch = (order: Order) => {
+  const handleSingleMoveBatch = useCallback((order: Order) => {
       setIsSelectionMode(true);
       setSelectedOrderIds(new Set([order.id]));
       setMoveBatchData({ isOpen: true, targetBatch: order.batchId || '' });
-  };
+  }, []);
   
   const confirmMoveBatch = async () => {
       if (!moveBatchData.targetBatch.trim()) {
@@ -349,7 +335,6 @@ const TrackingDashboard: React.FC = () => {
       const ids = Array.from(selectedOrderIds) as string[];
       await storageService.moveOrdersBatch(ids, moveBatchData.targetBatch);
       toast.success(`Đã chuyển ${ids.length} đơn sang lô: ${moveBatchData.targetBatch}`);
-      
       setMoveBatchData({ isOpen: false, targetBatch: '' });
       clearSelection();
   };
@@ -401,23 +386,20 @@ const TrackingDashboard: React.FC = () => {
       }
   };
 
-  const handleUpdate = (updatedOrder: Order) => {};
-  const handleDeleteClick = (id: string) => { setDeleteId(id); setShowDeleteConfirm(true); };
+  const handleUpdate = useCallback((updatedOrder: Order) => {}, []);
+  const handleDeleteClick = useCallback((id: string) => { setDeleteId(id); setShowDeleteConfirm(true); }, []);
   
   const confirmDelete = async () => { 
       if (deleteId) { 
           const id = deleteId as string;
           const orderToDelete = orders.find(o => o.id === id);
-          
           if (orderToDelete) {
-               // RESTORE STOCK LOGIC
                for (const item of orderToDelete.items) {
                    if (item.productId) {
                        const product = products.find(p => p.id === item.productId);
                        if (product) {
                            const currentStock = Number(product.stockQuantity) || 0;
                            const restoreQty = Number(item.quantity) || 0;
-                           // Update product stock back
                            await storageService.saveProduct({
                                ...product,
                                stockQuantity: currentStock + restoreQty
@@ -425,54 +407,28 @@ const TrackingDashboard: React.FC = () => {
                        }
                    }
                }
-
                await storageService.deleteOrder(id, { name: orderToDelete.customerName, address: orderToDelete.address }); 
           }
-          
           toast.success('Đã xóa đơn & Hoàn kho'); 
           setShowDeleteConfirm(false); 
           setDeleteId(null); 
       } 
   };
   
-  const handleEdit = (order: Order) => { setEditingOrder(JSON.parse(JSON.stringify(order))); setActiveEditProductRow(null); };
+  const handleEdit = useCallback((order: Order) => { setEditingOrder(JSON.parse(JSON.stringify(order))); setActiveEditProductRow(null); }, []);
   const saveEdit = async (e: React.FormEvent) => { e.preventDefault(); if (editingOrder) { await storageService.updateOrderDetails(editingOrder); setEditingOrder(null); toast.success('Đã lưu thay đổi'); } };
   const updateEditItem = (index: number, field: keyof OrderItem, value: any) => { if (!editingOrder) return; const newItems = [...editingOrder.items]; newItems[index] = { ...newItems[index], [field]: value }; if (field === 'name') newItems[index].productId = undefined; const newTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0); setEditingOrder({ ...editingOrder, items: newItems, totalPrice: newTotal }); };
   const selectProductForEditItem = (index: number, product: Product) => { if (!editingOrder) return; const newItems = [...editingOrder.items]; newItems[index] = { ...newItems[index], productId: product.id, name: product.name, price: product.defaultPrice }; const newTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0); setEditingOrder({ ...editingOrder, items: newItems, totalPrice: newTotal }); setActiveEditProductRow(null); };
   const addEditItem = () => { if (!editingOrder) return; const newItems = [...editingOrder.items, { id: uuidv4(), name: '', quantity: 1, price: 0 }]; setEditingOrder({ ...editingOrder, items: newItems }); };
   const removeEditItem = (index: number) => { if (!editingOrder) return; const newItems = [...editingOrder.items]; newItems.splice(index, 1); const newTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0); setEditingOrder({ ...editingOrder, items: newItems, totalPrice: newTotal }); };
-  const handleSplitBatch = async (order: Order) => { await storageService.splitOrderToNextBatch(order.id, order.batchId); toast.success('Đã chuyển đơn sang lô sau!'); };
-  
-  const handleAutoSort = async () => { 
-      setIsSorting(true);
-      setTimeout(async () => {
-          try {
-              const count = await storageService.autoSortOrders(filteredOrders); 
-              setSortBy('ROUTE'); 
-              toast.success(`Đã sắp xếp ${count} đơn theo ưu tiên!`); 
-          } catch (e: any) {
-              console.error(e);
-              // Ensure error is string
-              const errorMessage = e instanceof Error ? e.message : String(e);
-              toast.error(`Lỗi sắp xếp: ${errorMessage}`);
-          } finally {
-              setIsSorting(false);
-          }
-      }, 50);
-  };
+  const handleSplitBatch = useCallback(async (order: Order) => { await storageService.splitOrderToNextBatch(order.id, order.batchId); toast.success('Đã chuyển đơn sang lô sau!'); }, []);
   
   // -- HANDLE SMART ROUTE SORT --
   const handleSmartRouteSort = async (sortedOrders: Order[]) => {
-      // Re-assign indexes based on the smart sort result
       const reindexed = sortedOrders.map((o, idx) => ({ ...o, orderIndex: idx }));
-      
-      // Save locally & cloud
       await storageService.saveOrdersList(reindexed);
-      
-      // Update local state to reflect change immediately
       setOrders(prev => {
           const orderMap = new Map(prev.map(o => [o.id, o]));
-          // Merge sorted logic with existing data
           reindexed.forEach(ro => {
               if(orderMap.has(ro.id)) {
                   orderMap.set(ro.id, ro);
@@ -480,7 +436,6 @@ const TrackingDashboard: React.FC = () => {
           });
           return Array.from(orderMap.values());
       });
-      
       setSortBy('ROUTE');
   };
   
@@ -496,13 +451,13 @@ const TrackingDashboard: React.FC = () => {
       toast.success("Đã học lộ trình mới!", { icon: '🧠', duration: 2000 });
   };
   
-  const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>, position: number) => { 
+  const handleTouchStart = useCallback((e: React.TouchEvent<HTMLDivElement>, position: number) => { 
       if (sortBy !== 'ROUTE') return;
       dragItem.current = position; 
       e.currentTarget.closest('.order-row')?.classList.add('opacity-50', 'bg-yellow-50'); 
-  };
+  }, [sortBy]);
   
-  const handleTouchMove = (e: React.TouchEvent<HTMLDivElement>) => { 
+  const handleTouchMove = useCallback((e: React.TouchEvent<HTMLDivElement>) => { 
       if (sortBy !== 'ROUTE') return;
       if (dragItem.current === null) return; 
       const touch = e.touches[0]; 
@@ -519,19 +474,17 @@ const TrackingDashboard: React.FC = () => {
               saveReorderedList(_orders); 
           } 
       } 
-  };
+  }, [sortBy, visibleOrders]);
 
-  const handleTouchEnd = (e: React.TouchEvent<HTMLDivElement>,) => { 
+  const handleTouchEnd = useCallback((e: React.TouchEvent<HTMLDivElement>,) => { 
       dragItem.current = null; 
       document.querySelectorAll('.order-row').forEach(r => r.classList.remove('opacity-50', 'bg-yellow-50')); 
-  };
+  }, []);
   
-  const handleDragStart = (e: React.DragEvent<HTMLDivElement>, position: number) => { dragItem.current = position; e.currentTarget.classList.add('opacity-40', 'scale-95'); if (e.dataTransfer) e.dataTransfer.effectAllowed = "move"; };
+  const handleDragStart = (e: React.DragEvent<HTMLDivElement>, position: number) => { dragItem.current = position; e.currentTarget.closest('.order-row')?.classList.add('opacity-40', 'scale-95'); if (e.dataTransfer) e.dataTransfer.effectAllowed = "move"; };
   const handleDragEnter = (e: React.DragEvent<HTMLDivElement>, position: number) => { dragOverItem.current = position; e.preventDefault(); };
-  const handleDragEnd = (e: React.DragEvent<HTMLDivElement>) => { e.currentTarget.classList.remove('opacity-40', 'scale-95'); if (dragItem.current !== null && dragOverItem.current !== null && sortBy === 'ROUTE') { const _orders = [...visibleOrders]; const draggedItemContent = _orders[dragItem.current]; _orders.splice(dragItem.current, 1); _orders.splice(dragOverItem.current, 0, draggedItemContent); saveReorderedList(_orders); } dragItem.current = null; dragOverItem.current = null; };
+  const handleDragEnd = (e: React.DragEvent<HTMLDivElement>) => { e.currentTarget.closest('.order-row')?.classList.remove('opacity-40', 'scale-95'); if (dragItem.current !== null && dragOverItem.current !== null && sortBy === 'ROUTE') { const _orders = [...visibleOrders]; const draggedItemContent = _orders[dragItem.current]; _orders.splice(dragItem.current, 1); _orders.splice(dragOverItem.current, 0, draggedItemContent); saveReorderedList(_orders); } dragItem.current = null; dragOverItem.current = null; };
 
-  const copyRouteToClipboard = () => { const addressList = filteredOrders.filter(o => o.status !== OrderStatus.CANCELLED && o.status !== OrderStatus.DELIVERED).map(o => `- ${o.address} (${o.customerName})`).join('\n'); if (!addressList) { toast('Không có đơn hàng nào cần giao'); return; } navigator.clipboard.writeText(addressList); toast.success('Đã copy danh sách địa chỉ!'); };
-  
   const handleBatchPrintClick = () => {
       if (filteredOrders.length === 0) { toast.error("Không có đơn hàng nào để in"); return; }
       setOrdersToPrint(filteredOrders);
@@ -550,7 +503,6 @@ const TrackingDashboard: React.FC = () => {
           if (isSelectionMode) clearSelection();
       } catch (e: any) {
           console.error(e);
-          // Ensure error is string
           const errorMessage = e instanceof Error ? e.message : String(e);
           toast.error(`Lỗi tạo PDF: ${errorMessage}`);
       } finally { setIsPrinting(false); setOrdersToPrint([]); }
@@ -570,7 +522,6 @@ const TrackingDashboard: React.FC = () => {
           if (result.matchedOrders.length === 0) { toast('Không tìm thấy giao dịch nào khớp.', { icon: '🔍' }); } else { toast.success(`Tìm thấy ${result.matchedOrders.length} giao dịch khớp!`); }
       } catch (error: any) {
           console.error(error);
-          // Ensure error is string
           const errorMessage = error instanceof Error ? error.message : String(error);
           toast.error(`Lỗi đọc file PDF: ${errorMessage}`);
       } finally { setIsReconciling(false); }
@@ -586,19 +537,16 @@ const TrackingDashboard: React.FC = () => {
   };
 
   // --- QR MODAL LOGIC (Lifted) ---
-  const handleShowQR = async (order: Order) => {
+  const handleShowQR = useCallback(async (order: Order) => {
       const bankConfig = await storageService.getBankConfig();
       if (!bankConfig || !bankConfig.accountNo) {
           toast.error("Vui lòng cài đặt thông tin Ngân hàng trước.");
           return;
       }
-      
       const desc = `DH ${order.id}`;
-      // Generate VietQR URL
       const url = `https://img.vietqr.io/image/${bankConfig.bankId}-${bankConfig.accountNo}-${bankConfig.template || 'compact2'}.png?amount=${order.totalPrice}&addInfo=${encodeURIComponent(desc)}&accountName=${encodeURIComponent(bankConfig.accountName)}`;
-      
       setQrState({ isOpen: true, url, order });
-  };
+  }, []);
   
   const handleConfirmQrPayment = async () => {
       if (qrState.order) {
@@ -662,7 +610,7 @@ const TrackingDashboard: React.FC = () => {
                 <div className="relative flex-grow">
                     <i className="fas fa-search absolute left-3 top-2.5 text-gray-400 text-xs"></i>
                     <input 
-                        placeholder="Tìm tên, sđt, địa chỉ..." 
+                        placeholder="Tìm tên, sđt, địa chỉ, hàng hóa..." 
                         value={searchTerm} 
                         onChange={e => setSearchTerm(e.target.value)} 
                         className="w-full pl-9 pr-9 py-2 rounded-lg bg-gray-100 border-transparent focus:bg-white focus:ring-2 focus:ring-eco-100 text-sm font-medium outline-none transition-all" 
@@ -671,44 +619,40 @@ const TrackingDashboard: React.FC = () => {
                         onClick={handleVoiceSearch}
                         className={`absolute right-2 top-1.5 w-7 h-7 rounded-full flex items-center justify-center transition-colors ${isListeningSearch ? 'bg-red-500 text-white animate-pulse' : 'text-gray-400 hover:text-eco-600 hover:bg-gray-200'}`}
                         title="Tìm bằng giọng nói"
+                        aria-label="Tìm bằng giọng nói"
                     >
                         <i className={`fas ${isListeningSearch ? 'fa-microphone-slash' : 'fa-microphone'}`}></i>
                     </button>
                 </div>
-                <button onClick={() => setIsCompactMode(!isCompactMode)} className={`w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg border transition-all ${isCompactMode ? 'bg-eco-100 text-eco-700 border-eco-200' : 'bg-white text-gray-400 border-gray-200'}`}><i className={`fas ${isCompactMode ? 'fa-list' : 'fa-th-large'}`}></i></button>
-                <button onClick={handleBatchPrintClick} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-white text-gray-500 hover:text-blue-600 border border-gray-200" title="In Lô Hàng"><i className="fas fa-print"></i></button>
-                
-                {/* NEW: SMART ROUTE BUTTON */}
-                <button onClick={() => setShowRoutePlanner(true)} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-white text-gray-500 hover:text-blue-600 border border-gray-200" title="Lập Lộ Trình"><i className="fas fa-map-marked-alt"></i></button>
-                
-                <button onClick={() => setShowStatsModal(true)} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-white text-gray-500 hover:text-purple-600 border border-gray-200" title="Thống kê Lô"><i className="fas fa-cubes"></i></button>
-                <button onClick={() => setShowReconcileModal(true)} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-white text-gray-500 hover:text-green-600 border border-gray-200" title="Đối soát Ngân hàng"><i className="fas fa-file-invoice-dollar"></i></button>
+                <button onClick={() => setIsCompactMode(!isCompactMode)} className={`w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg border transition-all ${isCompactMode ? 'bg-eco-100 text-eco-700 border-eco-200' : 'bg-white text-gray-400 border-gray-200'}`} aria-label={isCompactMode ? "Chế độ lưới" : "Chế độ danh sách"}><i className={`fas ${isCompactMode ? 'fa-list' : 'fa-th-large'}`}></i></button>
+                <button onClick={handleBatchPrintClick} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-white text-gray-500 hover:text-blue-600 border border-gray-200" title="In Lô Hàng" aria-label="In lô hàng"><i className="fas fa-print"></i></button>
+                <button onClick={() => setShowStatsModal(true)} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-white text-gray-500 hover:text-purple-600 border border-gray-200" title="Thống kê Lô" aria-label="Thống kê"><i className="fas fa-cubes"></i></button>
+                <button onClick={() => setShowReconcileModal(true)} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-white text-gray-500 hover:text-green-600 border border-gray-200" title="Đối soát Ngân hàng" aria-label="Đối soát ngân hàng"><i className="fas fa-file-invoice-dollar"></i></button>
              </div>
              <div className={`grid transition-[grid-template-rows] duration-300 ease-out ${isHeaderVisible ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}><div className="overflow-hidden"><div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
                 <div className="relative flex-1 min-w-[100px] flex items-center gap-1">
-                     <button ref={batchDropdownBtnRef} onClick={() => openDropdown('BATCH')} className="flex-grow pl-2 pr-6 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-xs font-bold text-gray-700 text-left flex items-center justify-between outline-none truncate"><span className="truncate">{getLabel('BATCH')}</span><i className="fas fa-chevron-down text-gray-400 text-[10px]"></i></button>
+                     <button ref={batchDropdownBtnRef} onClick={() => openDropdown('BATCH')} className="flex-grow pl-2 pr-6 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-xs font-bold text-gray-700 text-left flex items-center justify-between outline-none truncate" aria-label="Chọn lô hàng"><span className="truncate">{getLabel('BATCH')}</span><i className="fas fa-chevron-down text-gray-400 text-[10px]"></i></button>
                      {/* Show Edit Button if exactly 1 batch is selected */}
                      {filterBatch.length === 1 && (
                          <button 
                              onClick={handleRenameBatch} 
                              className="w-7 h-7 flex-shrink-0 rounded-lg bg-white border border-gray-200 text-gray-400 hover:text-blue-600 hover:border-blue-300 flex items-center justify-center transition-colors" 
                              title="Đổi tên Lô"
+                             aria-label="Đổi tên lô"
                          >
                              <i className="fas fa-edit text-xs"></i>
                          </button>
                      )}
                 </div>
-                {users.length > 0 && (<div className="relative flex-1 min-w-[90px]"><select value={filterUser} onChange={e => setFilterUser(e.target.value)} className="w-full pl-2 pr-6 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-xs font-medium text-gray-700 appearance-none outline-none"><option value="ALL">User: All</option>{users.map(u => <option key={u} value={u}>{u}</option>)}</select><i className="fas fa-user absolute right-2 top-2 text-gray-400 text-[10px] pointer-events-none"></i></div>)}
-                <div className="relative flex-1 min-w-[110px]"><button ref={statusDropdownBtnRef} onClick={() => openDropdown('STATUS')} className="w-full pl-2 pr-6 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-xs font-medium text-gray-700 text-left flex items-center justify-between outline-none truncate"><span className="truncate">{getLabel('STATUS')}</span><i className="fas fa-chevron-down text-gray-400 text-[10px]"></i></button></div>
+                <div className="relative flex-1 min-w-[110px]"><button ref={statusDropdownBtnRef} onClick={() => openDropdown('STATUS')} className="w-full pl-2 pr-6 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-xs font-medium text-gray-700 text-left flex items-center justify-between outline-none truncate" aria-label="Chọn trạng thái"><span className="truncate">{getLabel('STATUS')}</span><i className="fas fa-chevron-down text-gray-400 text-[10px]"></i></button></div>
                 <div className="flex bg-gray-100 rounded-lg p-0.5 flex-shrink-0">
                     <button onClick={() => setSortBy('NEWEST')} className={`px-2 py-1 rounded-md text-[10px] font-bold transition-all ${sortBy === 'NEWEST' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-400'}`}>Mới</button>
                     <button 
-                        onClick={() => { if(sortBy !== 'ROUTE') handleAutoSort(); }} 
-                        className={`px-2 py-1 rounded-md text-[10px] font-bold transition-all flex items-center gap-1 ${sortBy === 'ROUTE' ? 'bg-white shadow-sm text-eco-700' : 'text-gray-400'}`}
-                        disabled={isSorting}
+                         onClick={() => setShowRoutePlanner(true)}
+                         className={`px-2 py-1 rounded-md text-[10px] font-bold transition-all flex items-center gap-1 ${sortBy === 'ROUTE' ? 'bg-white shadow-sm text-eco-700' : 'text-gray-400'}`}
+                         title="Lập lộ trình thông minh"
                     >
-                        {isSorting ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-route"></i>} 
-                        Auto Sort
+                        <i className="fas fa-map-marked-alt"></i> Lộ trình
                     </button>
                 </div>
              </div></div></div>
@@ -720,15 +664,6 @@ const TrackingDashboard: React.FC = () => {
         {activeDropdown === 'STATUS' ? (Object.entries(statusLabels).map(([key, label]) => { const status = key as OrderStatus; const isSelected = filterStatus.includes(status); return <div key={status} onClick={() => toggleFilter('STATUS', status)} className={`px-3 py-2 rounded-md text-xs font-medium cursor-pointer flex items-center gap-2 transition-colors ${isSelected ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50 text-gray-700'}`}><i className={`fas ${isSelected ? 'fa-check-square' : 'fa-square text-gray-300'}`}></i>{label}</div>; })) : (batches.map(batch => { const isSelected = filterBatch.includes(batch); return <div key={batch} onClick={() => toggleFilter('BATCH', batch)} className={`px-3 py-2 rounded-md text-xs font-medium cursor-pointer flex items-center gap-2 transition-colors ${isSelected ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50 text-gray-700'}`}><i className={`fas ${isSelected ? 'fa-check-square' : 'fa-square text-gray-300'}`}></i>{batch}</div>; }))}
       </div>)}
       <div ref={observerTarget} className="h-px w-full opacity-0 pointer-events-none"></div>
-      
-      {isSorting && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/50 backdrop-blur-[1px]">
-             <div className="bg-black/80 text-white px-6 py-3 rounded-2xl flex items-center gap-3 shadow-xl">
-                 <i className="fas fa-sync fa-spin"></i>
-                 <span className="font-bold text-sm">Đang tính toán lộ trình...</span>
-             </div>
-        </div>
-      )}
       
       {isPrinting && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-white/70 backdrop-blur-sm">
@@ -843,7 +778,6 @@ const TrackingDashboard: React.FC = () => {
                                             </td>
                                             <td className="p-3 text-center bg-blue-50/30">
                                                 <div className="font-bold text-blue-600">{totalImported}</div>
-                                                {/* Calculated Balance */}
                                                 <div className={`text-[10px] font-bold mt-1 ${isOversold ? 'text-red-500' : 'text-green-600'}`}>
                                                     (Dư: {estimatedRemaining})
                                                 </div>
@@ -1120,7 +1054,7 @@ const TrackingDashboard: React.FC = () => {
             const cust = findCustomerForOrder(order);
             const score = (cust?.priorityScore !== undefined && cust.priorityScore !== null) ? cust.priorityScore : 999999;
             return (
-                <div key={order.id} data-index={index} draggable={sortBy === 'ROUTE'} onDragStart={(e) => handleDragStart(e, index)} onDragEnter={(e) => handleDragEnter(e, index)} onDragEnd={handleDragEnd} onDragOver={(e) => e.preventDefault()} className={`relative transition-all duration-200 order-row`}><div className="flex-grow h-full">
+                <div key={order.id} data-index={index} className={`relative transition-all duration-200 order-row`}><div className="flex-grow h-full">
                     <OrderCard 
                         order={order} 
                         onUpdate={handleUpdate} 
@@ -1132,6 +1066,9 @@ const TrackingDashboard: React.FC = () => {
                         onTouchStart={(e) => handleTouchStart(e, index)} 
                         onTouchMove={handleTouchMove} 
                         onTouchEnd={handleTouchEnd} 
+                        onDragStart={handleDragStart}
+                        onDragEnter={handleDragEnter}
+                        onDragEnd={handleDragEnd}
                         isNewCustomer={newCustomerMap[order.id]} 
                         onSplitBatch={handleSplitBatch}
                         priorityScore={score} 
@@ -1164,7 +1101,7 @@ const TrackingDashboard: React.FC = () => {
       {qrState.isOpen && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/80 backdrop-blur-sm p-4 animate-fade-in" onClick={() => setQrState({ ...qrState, isOpen: false })}>
               <div className="bg-white p-6 rounded-3xl shadow-2xl max-w-sm w-full flex flex-col items-center text-center relative" onClick={e => e.stopPropagation()}>
-                  <button onClick={() => setQrState({ ...qrState, isOpen: false })} className="absolute top-4 right-4 w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-500 transition-colors"><i className="fas fa-times"></i></button>
+                  <button onClick={() => setQrState({ ...qrState, isOpen: false })} className="absolute top-4 right-4 w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-500 transition-colors" aria-label="Đóng"><i className="fas fa-times"></i></button>
                   <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center text-2xl mb-4 shadow-inner"><i className="fas fa-qrcode"></i></div>
                   <h3 className="text-xl font-black text-gray-800 mb-1">Quét mã thanh toán</h3>
                   <p className="text-sm text-gray-500 mb-6 font-medium">Số tiền: <span className="text-blue-600 font-bold text-lg">{new Intl.NumberFormat('vi-VN').format(qrState.order?.totalPrice || 0)}đ</span></p>

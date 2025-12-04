@@ -23,12 +23,6 @@ const PaymentAudit: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedBatch, setSelectedBatch] = useState('ALL');
   
-  // View Mode
-  const [viewMode, setViewMode] = useState<'SINGLE' | 'CUSTOMER'>('SINGLE');
-  
-  // Expanded Groups State
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-
   // Confirm Modal State
   const [confirmData, setConfirmData] = useState<{isOpen: boolean, ids: string[], message: string}>({
       isOpen: false, ids: [], message: ''
@@ -98,7 +92,7 @@ const PaymentAudit: React.FC = () => {
 
   const totalAmount = filteredOrders.reduce((sum, o) => sum + o.totalPrice, 0);
 
-  // --- LOGIC GỘP NHÓM KHÁCH HÀNG (ĐÃ SỬA LỖI GÁN NHẦM ID) ---
+  // --- LOGIC GỘP NHÓM KHÁCH HÀNG ---
   const customerGroups = useMemo(() => {
       const groups: Record<string, CustomerDebtGroup> = {};
       const processedIds = new Set<string>(); // Prevent duplicate orders
@@ -107,11 +101,10 @@ const PaymentAudit: React.FC = () => {
           if (processedIds.has(o.id)) return;
           processedIds.add(o.id);
 
-          // 1. Determine Key STRICTLY
+          // Determine Key STRICTLY
           let key = '';
 
-          // Combine ID + Normalized Name to ensure different people with same ID (legacy error) get split
-          // If customerId exists, we use it, but append name hash to force split if names diverge
+          // Combine ID + Normalized Name to ensure different people with same ID get split
           if (o.customerId) {
                key = `${o.customerId}_${normalizeString(o.customerName)}`;
           } else if (o.customerPhone && o.customerPhone.length > 6) {
@@ -133,10 +126,7 @@ const PaymentAudit: React.FC = () => {
                   maxReminders: 0
               };
           } else {
-              // Update with better data if available
-              if (!groups[key].customerId && o.customerId) {
-                  groups[key].customerId = o.customerId;
-              }
+              if (!groups[key].customerId && o.customerId) groups[key].customerId = o.customerId;
               if ((!groups[key].customerPhone || groups[key].customerPhone.length < 8) && o.customerPhone) {
                    groups[key].customerPhone = o.customerPhone;
               }
@@ -149,14 +139,6 @@ const PaymentAudit: React.FC = () => {
       
       return Object.values(groups).sort((a, b) => b.totalAmount - a.totalAmount);
   }, [filteredOrders]);
-
-  const handleConfirmSingle = (id: string, name: string) => {
-    setConfirmData({
-        isOpen: true,
-        ids: [id],
-        message: `Xác nhận tiền về cho đơn #${id} (${name})?`
-    });
-  };
 
   const handleConfirmGroup = (group: CustomerDebtGroup) => {
       const ids = group.orders.map(o => o.id);
@@ -216,11 +198,6 @@ const PaymentAudit: React.FC = () => {
     }
   };
 
-  const handleShareSingleQR = (order: Order) => {
-      const desc = `DH ${order.id}`;
-      generateAndShareQR(order.totalPrice, desc, `Thanh toán đơn ${order.id}`, [order.id]);
-  };
-
   const handleShareGroupQR = (group: CustomerDebtGroup) => {
       const safeName = group.customerName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9 ]/g, '').toUpperCase().split(' ').slice(0,2).join(' ');
       const desc = `TT ${safeName} ${group.orders.length} DON`;
@@ -247,13 +224,6 @@ const PaymentAudit: React.FC = () => {
           </div>
       );
   }
-
-  const toggleGroup = (key: string) => {
-      const newSet = new Set(expandedGroups);
-      if (newSet.has(key)) newSet.delete(key);
-      else newSet.add(key);
-      setExpandedGroups(newSet);
-  };
 
   return (
     <div className="max-w-7xl mx-auto pb-24 animate-fade-in px-2 sm:px-4">
@@ -286,12 +256,6 @@ const PaymentAudit: React.FC = () => {
                 </select>
                 <i className="fas fa-chevron-down absolute right-3 top-2.5 text-gray-400 text-xs pointer-events-none"></i>
             </div>
-
-             {/* View Toggle */}
-            <div className="flex bg-gray-100 p-1 rounded-xl flex-shrink-0">
-                <button onClick={() => setViewMode('SINGLE')} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${viewMode === 'SINGLE' ? 'bg-white text-eco-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>Đơn Lẻ</button>
-                <button onClick={() => setViewMode('CUSTOMER')} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${viewMode === 'CUSTOMER' ? 'bg-white text-eco-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>Gộp Khách</button>
-            </div>
             
             {/* Search Filter */}
             <div className="relative flex-grow md:flex-grow-0 md:w-64">
@@ -306,148 +270,88 @@ const PaymentAudit: React.FC = () => {
         </div>
       </div>
 
-      {/* 3. LIST CONTENT */}
+      {/* 2. MAIN LIST */}
       {filteredOrders.length === 0 ? (
            <div className="text-center py-12 flex flex-col items-center justify-center text-gray-300">
                <i className="fas fa-check-circle text-5xl mb-3 opacity-20"></i>
                <p className="text-sm font-medium">Tuyệt vời! Không có đơn nợ nào.</p>
            </div>
       ) : (
-          <>
-            {/* --- SINGLE ORDER VIEW --- */}
-            {viewMode === 'SINGLE' && (
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                    {filteredOrders.map(order => (
-                        <div key={order.id} className="bg-white rounded-2xl p-4 border border-gray-200 shadow-sm hover:border-eco-300 hover:shadow-md transition-all flex flex-col relative group">
-                            <div className="flex justify-between items-start mb-3">
-                                <div className="flex flex-col">
-                                    <div className="font-bold text-gray-800 text-sm leading-tight flex items-center gap-2">
-                                        {order.customerName}
-                                        <ReminderBadge count={order.reminderCount} />
-                                    </div>
-                                    <div className="text-[10px] text-gray-400 font-mono mt-0.5">{order.customerPhone}</div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {customerGroups.map(group => {
+                const isMulti = group.orders.length > 1;
+                return (
+                <div key={group.key} className={`bg-white rounded-2xl border border-gray-200 shadow-sm flex flex-col overflow-hidden transition-all hover:shadow-md hover:border-eco-300`}>
+                    
+                    {/* Header */}
+                    <div className="p-4 pb-2 bg-white">
+                        <div className="flex justify-between items-start">
+                            <div>
+                                <div className="flex items-center gap-2">
+                                    <div className="font-bold text-gray-900 text-base">{group.customerName}</div>
+                                    <ReminderBadge count={group.maxReminders} />
+                                    {isMulti && <span className="bg-red-50 text-red-600 text-[9px] font-bold px-1.5 py-0.5 rounded border border-red-100">{group.orders.length} đơn</span>}
                                 </div>
-                                <div className="text-right">
-                                    <div className="text-lg font-black text-eco-700">{new Intl.NumberFormat('vi-VN').format(order.totalPrice)}</div>
-                                </div>
-                            </div>
-                            
-                            <div className="bg-gray-50 p-2.5 rounded-xl border border-gray-100 mb-4 flex-grow">
-                                <div className="flex justify-between items-start mb-1">
-                                    <span className="font-mono font-bold text-blue-600 text-xs bg-blue-50 px-1.5 py-0.5 rounded">#{order.id}</span>
-                                    {order.batchId && <span className="text-[9px] text-gray-400 bg-white px-1.5 rounded border border-gray-100">{order.batchId}</span>}
-                                </div>
-                                <div className="text-xs text-gray-700 font-medium leading-relaxed">
-                                    {order.items.map(i => `${i.name} (x${i.quantity})`).join(', ')}
+                                <div className="flex items-center gap-3 mt-1">
+                                    <span className="text-xs text-gray-500 font-mono tracking-tight">{group.customerPhone || 'Không có SĐT'}</span>
+                                    {group.customerPhone && (
+                                        <div className="flex gap-2">
+                                            <a href={`tel:${group.customerPhone}`} className="text-gray-400 hover:text-green-600"><i className="fas fa-phone-alt text-xs"></i></a>
+                                            <a href={`https://zalo.me/${group.customerPhone}`} target="_blank" className="text-gray-400 hover:text-blue-600 font-bold text-[9px] border border-gray-300 rounded px-1">Z</a>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
-                            
-                            <div className="grid grid-cols-[1fr_auto_auto] gap-2 mt-auto">
-                                <button onClick={() => handleConfirmSingle(order.id, order.customerName)} className="bg-eco-600 hover:bg-eco-700 text-white py-2.5 rounded-xl font-bold text-xs shadow-md shadow-green-100 transition-transform active:scale-95 flex items-center justify-center gap-2">
-                                    <i className="fas fa-check-circle"></i> Xác nhận tiền về
-                                </button>
-                                <button onClick={() => handleShareSingleQR(order)} disabled={isSharing} className="w-10 bg-blue-50 text-blue-600 rounded-xl hover:bg-blue-100 border border-blue-100 transition-colors flex items-center justify-center">
-                                    <i className="fas fa-qrcode"></i>
-                                </button>
-                                <button onClick={() => handleSMS(order.customerPhone, order.customerName, order.totalPrice, `DH ${order.id}`, [order.id])} className="w-10 bg-orange-50 text-orange-600 rounded-xl hover:bg-orange-100 border border-orange-100 transition-colors flex items-center justify-center">
-                                    <i className="fas fa-comment-dots"></i>
-                                </button>
+                            <div className="text-right">
+                                <div className="text-lg font-black text-eco-700">{new Intl.NumberFormat('vi-VN').format(group.totalAmount)}</div>
+                                <div className="text-[9px] font-bold text-gray-400 uppercase">Tổng nợ</div>
                             </div>
                         </div>
-                    ))}
-                </div>
-            )}
-
-            {/* --- CUSTOMER GROUP VIEW --- */}
-            {viewMode === 'CUSTOMER' && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {customerGroups.map(group => {
-                        const isExpanded = expandedGroups.has(group.key);
-                        return (
-                        <div key={group.key} className={`bg-white rounded-2xl border transition-all ${isExpanded ? 'shadow-md border-eco-200' : 'shadow-sm border-gray-200 hover:border-eco-300'}`}>
-                            {/* Group Header */}
-                            <div className="p-4 cursor-pointer" onClick={() => toggleGroup(group.key)}>
-                                <div className="flex justify-between items-start">
-                                    <div>
-                                        <div className="flex items-center gap-2">
-                                            <div className="font-bold text-gray-800 text-base">{group.customerName}</div>
-                                            <ReminderBadge count={group.maxReminders} />
-                                            {group.orders.length > 1 && <span className="bg-red-100 text-red-600 text-[10px] font-bold px-2 py-0.5 rounded-full">{group.orders.length} đơn</span>}
-                                        </div>
-                                        <div className="text-xs text-gray-400 font-mono flex items-center gap-1 mt-0.5">
-                                            <i className="fas fa-phone-alt text-[9px]"></i> {group.customerPhone || 'N/A'}
-                                            {/* Debug Info: Show grouping reason subtly */}
-                                            {/* <span className="text-[8px] opacity-30 ml-2">{group.key}</span> */}
-                                        </div>
+                    </div>
+                    
+                    {/* List of Orders (Always Expanded for Detail Visibility) */}
+                    <div className="flex-grow bg-gray-50/50 border-t border-gray-100 border-b">
+                        {group.orders.map((o, idx) => (
+                            <div key={o.id} className={`p-3 text-xs ${idx < group.orders.length - 1 ? 'border-b border-gray-100' : ''}`}>
+                                <div className="flex justify-between items-start gap-2 mb-1">
+                                    <div className="flex items-center gap-1.5">
+                                        <span className="font-mono font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded text-[10px]">#{o.id}</span>
+                                        {o.batchId && <span className="text-[9px] text-gray-400 border border-gray-200 px-1 rounded bg-white">{o.batchId}</span>}
                                     </div>
-                                    <div className="text-right">
-                                        <div className="text-xl font-black text-eco-700">{new Intl.NumberFormat('vi-VN').format(group.totalAmount)}đ</div>
-                                    </div>
+                                    <span className="font-bold text-gray-800">{new Intl.NumberFormat('vi-VN').format(o.totalPrice)}</span>
                                 </div>
-                            </div>
-                            
-                            {/* Expanded Details - TABLE LAYOUT */}
-                            {isExpanded && (
-                                <div className="border-t border-gray-100 bg-gray-50/50">
-                                    <div className="grid grid-cols-[60px_1fr_80px] gap-2 px-4 py-2 bg-gray-100 text-[9px] font-bold text-gray-500 uppercase tracking-wider">
-                                        <div>Mã đơn</div>
-                                        <div>Chi tiết hàng hóa</div>
-                                        <div className="text-right">Thành tiền</div>
-                                    </div>
-                                    <div className="divide-y divide-gray-100">
-                                        {group.orders.map(o => (
-                                            <div key={o.id} className="grid grid-cols-[60px_1fr_80px] gap-2 px-4 py-3 text-xs hover:bg-white transition-colors items-start">
-                                                <div className="flex flex-col items-start gap-1">
-                                                    <span className="font-mono font-bold text-blue-600 bg-blue-50 px-1 py-0.5 rounded w-fit h-fit leading-none">#{o.id}</span>
-                                                    {o.batchId && <span className="text-[8px] text-gray-400 bg-white border border-gray-100 px-1 rounded">{o.batchId}</span>}
-                                                </div>
-                                                <div className="text-gray-700 leading-snug">
-                                                    {o.items.map(i => `${i.name} (x${i.quantity})`).join(', ')}
-                                                    {o.notes && <div className="text-[10px] text-gray-400 italic mt-0.5">Note: {o.notes}</div>}
-                                                </div>
-                                                <div className="text-right font-bold text-gray-800">
-                                                    {new Intl.NumberFormat('vi-VN').format(o.totalPrice)}
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                    <div className="p-3 bg-gray-50 border-t border-gray-200 flex justify-end gap-2">
-                                        <div className="text-xs font-bold text-gray-500 uppercase self-center mr-2">Tổng thanh toán:</div>
-                                        <div className="text-base font-black text-eco-700">{new Intl.NumberFormat('vi-VN').format(group.totalAmount)}đ</div>
-                                    </div>
+                                
+                                <div className="text-gray-600 leading-snug pl-1">
+                                    {o.items.map(i => `${i.name} (x${i.quantity})`).join(', ')}
                                 </div>
-                            )}
-
-                            {/* Actions Footer */}
-                            <div className="p-3 border-t border-gray-100 flex gap-2">
-                                <button onClick={(e) => { e.stopPropagation(); handleConfirmGroup(group); }} className="flex-grow bg-eco-600 hover:bg-eco-700 text-white py-2.5 rounded-xl font-bold text-xs shadow-md shadow-green-100 transition-transform active:scale-95 flex items-center justify-center gap-2">
-                                    <i className="fas fa-check-double"></i> Xác nhận {group.orders.length} đơn
-                                </button>
-                                <button onClick={(e) => { e.stopPropagation(); handleShareGroupQR(group); }} className="w-10 bg-blue-50 text-blue-600 rounded-xl hover:bg-blue-100 border border-blue-100 flex items-center justify-center">
-                                    <i className="fas fa-qrcode"></i>
-                                </button>
-                                <button onClick={(e) => {
-                                    e.stopPropagation();
-                                    const safeName = group.customerName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9 ]/g, '').toUpperCase().split(' ').slice(0, 2).join(' ');
-                                    const desc = `TT ${safeName} ${group.orders.length} DON`;
-                                    const ids = group.orders.map(o => o.id);
-                                    handleSMS(group.customerPhone, group.customerName, group.totalAmount, desc, ids);
-                                }} className="w-10 bg-orange-50 text-orange-600 rounded-xl hover:bg-orange-100 border border-orange-100 flex items-center justify-center">
-                                    <i className="fas fa-comment-dots"></i>
-                                </button>
-                                <button 
-                                    onClick={(e) => { e.stopPropagation(); toggleGroup(group.key); }}
-                                    className="w-10 bg-gray-50 text-gray-500 rounded-xl hover:bg-gray-100 border border-gray-200 flex items-center justify-center"
-                                >
-                                    <i className={`fas fa-chevron-${isExpanded ? 'up' : 'down'}`}></i>
-                                </button>
+                                {o.notes && <div className="text-[10px] text-gray-400 italic mt-0.5 pl-1"><i className="fas fa-comment-alt mr-1"></i>{o.notes}</div>}
                             </div>
-                        </div>
-                        );
-                    })}
+                        ))}
+                    </div>
+
+                    {/* Actions */}
+                    <div className="p-3 bg-white flex items-center gap-2">
+                        <button onClick={() => handleConfirmGroup(group)} className="flex-grow bg-eco-600 hover:bg-eco-700 text-white py-2.5 rounded-xl font-bold text-xs shadow-md shadow-green-100 transition-transform active:scale-95 flex items-center justify-center gap-2">
+                            <i className="fas fa-check-circle"></i> Xác nhận tiền về
+                        </button>
+                        
+                        <button onClick={() => handleShareGroupQR(group)} disabled={isSharing} className="w-10 h-10 bg-blue-50 text-blue-600 rounded-xl hover:bg-blue-100 border border-blue-100 flex items-center justify-center transition-colors">
+                            <i className="fas fa-qrcode"></i>
+                        </button>
+                        
+                        <button onClick={() => {
+                            const safeName = group.customerName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9 ]/g, '').toUpperCase().split(' ').slice(0, 2).join(' ');
+                            const desc = `TT ${safeName} ${group.orders.length} DON`;
+                            const ids = group.orders.map(o => o.id);
+                            handleSMS(group.customerPhone, group.customerName, group.totalAmount, desc, ids);
+                        }} className="w-10 h-10 bg-orange-50 text-orange-600 rounded-xl hover:bg-orange-100 border border-orange-100 flex items-center justify-center transition-colors">
+                            <i className="fas fa-comment-dots"></i>
+                        </button>
+                    </div>
                 </div>
-            )}
-          </>
+                );
+            })}
+        </div>
       )}
 
       {/* CONFIRM MODAL */}

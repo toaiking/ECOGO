@@ -2,24 +2,11 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { SmartParseResult, Order, OrderStatus, PaymentMethod, Product, Customer, RawPDFImportData } from "../types";
 
 const getClient = () => {
-  let apiKey: string | undefined;
-
-  try {
-    // @ts-ignore
-    if (typeof import.meta !== 'undefined' && import.meta.env) {
-      // @ts-ignore
-      apiKey = import.meta.env.VITE_API_KEY;
-    }
-  } catch (e) {
-    // Ignore error if import.meta is not defined
-  }
-
-  if (!apiKey) {
-    apiKey = process.env.API_KEY;
-  }
+  // STRICT SECURITY RULE: API key must be obtained exclusively from process.env.API_KEY
+  const apiKey = process.env.API_KEY;
   
   if (!apiKey) {
-    console.error("Missing API Key. Please set VITE_API_KEY in .env file or API_KEY in environment");
+    console.error("Missing API Key. Ensure process.env.API_KEY is populated.");
     throw new Error("API Key is missing");
   }
   return new GoogleGenAI({ apiKey });
@@ -64,8 +51,6 @@ export const parseOrderText = async (
        - "ck", "chuyển khoản", "banking" -> TRANSFER.
        - "đã tt", "đã thanh toán" -> PAID.
        - Default -> CASH.
-
-    OUTPUT JSON SCHEMA:
   `;
 
   const response = await ai.models.generateContent({
