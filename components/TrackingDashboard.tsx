@@ -18,7 +18,22 @@ const TrackingDashboard: React.FC = () => {
   const [customers, setCustomers] = useState<Customer[]>([]);
 
   const [filterStatus, setFilterStatus] = useState<OrderStatus[]>([]);
-  const [filterBatch, setFilterBatch] = useState<string[]>([]); 
+  
+  // Persist Batch Filter
+  const [filterBatch, setFilterBatch] = useState<string[]>(() => {
+      try {
+          const saved = localStorage.getItem('ecogo_filter_batch');
+          return saved ? JSON.parse(saved) : [];
+      } catch {
+          return [];
+      }
+  });
+
+  // Save batch filter changes
+  useEffect(() => {
+      localStorage.setItem('ecogo_filter_batch', JSON.stringify(filterBatch));
+  }, [filterBatch]);
+
   const [searchTerm, setSearchTerm] = useState('');
   const deferredSearchTerm = useDeferredValue(searchTerm);
 
@@ -62,7 +77,6 @@ const TrackingDashboard: React.FC = () => {
 
   // Stats Modal
   const [showStatsModal, setShowStatsModal] = useState(false);
-  const [selectedStatsBatch, setSelectedStatsBatch] = useState<string>('');
 
   // Route Planner Modal
   const [showRoutePlanner, setShowRoutePlanner] = useState(false);
@@ -81,7 +95,7 @@ const TrackingDashboard: React.FC = () => {
   useEffect(() => {
       const observer = new IntersectionObserver(
           ([entry]) => { setIsHeaderVisible(entry.isIntersecting); setActiveDropdown(null); },
-          { threshold: 0, rootMargin: "-64px 0px 0px 0px" }
+          { threshold: 0, rootMargin: "-70px 0px 0px 0px" }
       );
       if (observerTarget.current) observer.observe(observerTarget.current);
       return () => observer.disconnect();
@@ -123,13 +137,6 @@ const TrackingDashboard: React.FC = () => {
     orders.forEach(o => { if (o.batchId) batchActivity.set(o.batchId, Math.max(batchActivity.get(o.batchId) || 0, o.createdAt)); });
     return Array.from(batchActivity.entries()).sort((a, b) => b[1] - a[1]).map(entry => entry[0]).slice(0, 50);
   }, [orders]);
-
-  // Set default selected batch for stats
-  useEffect(() => {
-      if (batches.length > 0 && !selectedStatsBatch) {
-          setSelectedStatsBatch(batches[0]);
-      }
-  }, [batches, selectedStatsBatch]);
 
   const newCustomerMap = useMemo(() => {
       const map: Record<string, boolean> = {};
@@ -174,26 +181,33 @@ const TrackingDashboard: React.FC = () => {
     return result;
   }, [orders, filterStatus, filterBatch, deferredSearchTerm, sortBy]);
 
-  // --- STATS DATA CALCULATION ---
+  // --- UPDATED STATS DATA CALCULATION ---
+  // Logic: Thống kê dựa trên những đơn hàng ĐANG HIỂN THỊ (hoặc thuộc lô đang lọc)
   const batchStatsData = useMemo(() => {
-      if (!selectedStatsBatch) return [];
-
       const statsMap = new Map<string, { 
           name: string, 
           qtyOrdered: number, 
           productInfo?: Product 
       }>();
 
-      orders.filter(o => o.batchId === selectedStatsBatch && o.status !== OrderStatus.CANCELLED).forEach(o => {
-          o.items.forEach(item => {
-              const name = item.name.trim();
-              if (name) {
-                  const current = statsMap.get(name) || { name, qtyOrdered: 0 };
-                  current.qtyOrdered += item.quantity;
-                  statsMap.set(name, current);
-              }
+      // Determine source: If filters are applied, use filtered orders. Else use all active orders.
+      // We want stats for "All Selected Batches".
+      const targetOrders = filterBatch.length > 0 
+          ? orders.filter(o => o.batchId && filterBatch.includes(o.batchId))
+          : orders;
+
+      targetOrders
+          .filter(o => o.status !== OrderStatus.CANCELLED)
+          .forEach(o => {
+              o.items.forEach(item => {
+                  const name = item.name.trim();
+                  if (name) {
+                      const current = statsMap.get(name) || { name, qtyOrdered: 0 };
+                      current.qtyOrdered += item.quantity;
+                      statsMap.set(name, current);
+                  }
+              });
           });
-      });
 
       const result = Array.from(statsMap.values()).map(item => {
           const normName = normalizeString(item.name);
@@ -203,10 +217,15 @@ const TrackingDashboard: React.FC = () => {
       });
 
       return result.sort((a, b) => a.name.localeCompare(b.name));
-  }, [orders, products, selectedStatsBatch]);
+  }, [orders, products, filterBatch]); 
+
+  const handleOpenStats = () => {
+      setShowStatsModal(true);
+  };
 
   const handleShareStats = () => {
-      let text = `📦 TK LÔ: ${selectedStatsBatch}\n----------------\n`;
+      const batchTitle = filterBatch.length > 0 ? filterBatch.join(', ') : "TẤT CẢ";
+      let text = `📦 TK LÔ: ${batchTitle}\n----------------\n`;
       text += `MẶT HÀNG | ĐẶT | KHO | DƯ\n`;
       batchStatsData.forEach(item => {
           const imported = item.productInfo?.totalImported || 0;
@@ -216,7 +235,7 @@ const TrackingDashboard: React.FC = () => {
       text += `----------------\nEcoGo Logistics`;
       
       if (navigator.share) {
-          navigator.share({ title: `TK ${selectedStatsBatch}`, text }).catch(console.error);
+          navigator.share({ title: `TK ${batchTitle}`, text }).catch(console.error);
       } else {
           navigator.clipboard.writeText(text);
           toast.success("Đã copy thống kê!");
@@ -626,36 +645,48 @@ const TrackingDashboard: React.FC = () => {
                 </div>
                 <button onClick={() => setIsCompactMode(!isCompactMode)} className={`w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg border transition-all ${isCompactMode ? 'bg-eco-100 text-eco-700 border-eco-200' : 'bg-white text-gray-400 border-gray-200'}`} aria-label={isCompactMode ? "Chế độ lưới" : "Chế độ danh sách"}><i className={`fas ${isCompactMode ? 'fa-list' : 'fa-th-large'}`}></i></button>
                 <button onClick={handleBatchPrintClick} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-white text-gray-500 hover:text-blue-600 border border-gray-200" title="In Lô Hàng" aria-label="In lô hàng"><i className="fas fa-print"></i></button>
-                <button onClick={() => setShowStatsModal(true)} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-white text-gray-500 hover:text-purple-600 border border-gray-200" title="Thống kê Lô" aria-label="Thống kê"><i className="fas fa-cubes"></i></button>
+                <button onClick={handleOpenStats} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-white text-gray-500 hover:text-purple-600 border border-gray-200" title="Thống kê Lô" aria-label="Thống kê"><i className="fas fa-cubes"></i></button>
                 <button onClick={() => setShowReconcileModal(true)} className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-white text-gray-500 hover:text-green-600 border border-gray-200" title="Đối soát Ngân hàng" aria-label="Đối soát ngân hàng"><i className="fas fa-file-invoice-dollar"></i></button>
              </div>
-             <div className={`grid transition-[grid-template-rows] duration-300 ease-out ${isHeaderVisible ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}><div className="overflow-hidden"><div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
-                <div className="relative flex-1 min-w-[100px] flex items-center gap-1">
-                     <button ref={batchDropdownBtnRef} onClick={() => openDropdown('BATCH')} className="flex-grow pl-2 pr-6 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-xs font-bold text-gray-700 text-left flex items-center justify-between outline-none truncate" aria-label="Chọn lô hàng"><span className="truncate">{getLabel('BATCH')}</span><i className="fas fa-chevron-down text-gray-400 text-[10px]"></i></button>
-                     {/* Show Edit Button if exactly 1 batch is selected */}
-                     {filterBatch.length === 1 && (
-                         <button 
-                             onClick={handleRenameBatch} 
-                             className="w-7 h-7 flex-shrink-0 rounded-lg bg-white border border-gray-200 text-gray-400 hover:text-blue-600 hover:border-blue-300 flex items-center justify-center transition-colors" 
-                             title="Đổi tên Lô"
-                             aria-label="Đổi tên lô"
-                         >
-                             <i className="fas fa-edit text-xs"></i>
-                         </button>
-                     )}
+             <div className={`grid transition-[grid-template-rows] duration-300 ease-out ${isHeaderVisible ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
+                <div className="overflow-hidden">
+                    <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+                        <div className="relative flex-1 min-w-[100px] flex items-center gap-1">
+                             <button ref={batchDropdownBtnRef} onClick={() => openDropdown('BATCH')} className="flex-grow pl-2 pr-6 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-xs font-bold text-gray-700 text-left flex items-center justify-between outline-none truncate" aria-label="Chọn lô hàng">
+                                 <span className="truncate">{getLabel('BATCH')}</span>
+                                 <i className="fas fa-chevron-down text-gray-400 text-[10px]"></i>
+                             </button>
+                             {/* Show Edit Button if exactly 1 batch is selected */}
+                             {filterBatch.length === 1 && (
+                                 <button 
+                                     onClick={handleRenameBatch} 
+                                     className="w-7 h-7 flex-shrink-0 rounded-lg bg-white border border-gray-200 text-gray-400 hover:text-blue-600 hover:border-blue-300 flex items-center justify-center transition-colors" 
+                                     title="Đổi tên Lô"
+                                     aria-label="Đổi tên lô"
+                                 >
+                                     <i className="fas fa-edit text-xs"></i>
+                                 </button>
+                             )}
+                        </div>
+                        <div className="relative flex-1 min-w-[110px]">
+                            <button ref={statusDropdownBtnRef} onClick={() => openDropdown('STATUS')} className="w-full pl-2 pr-6 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-xs font-medium text-gray-700 text-left flex items-center justify-between outline-none truncate" aria-label="Chọn trạng thái">
+                                <span className="truncate">{getLabel('STATUS')}</span>
+                                <i className="fas fa-chevron-down text-gray-400 text-[10px]"></i>
+                            </button>
+                        </div>
+                        <div className="flex bg-gray-100 rounded-lg p-0.5 flex-shrink-0">
+                            <button onClick={() => setSortBy('NEWEST')} className={`px-2 py-1 rounded-md text-[10px] font-bold transition-all ${sortBy === 'NEWEST' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-400'}`}>Mới</button>
+                            <button 
+                                 onClick={() => setShowRoutePlanner(true)}
+                                 className={`px-2 py-1 rounded-md text-[10px] font-bold transition-all flex items-center gap-1 ${sortBy === 'ROUTE' ? 'bg-white shadow-sm text-eco-700' : 'text-gray-400'}`}
+                                 title="Lập lộ trình thông minh"
+                            >
+                                <i className="fas fa-map-marked-alt"></i> Lộ trình
+                            </button>
+                        </div>
+                    </div>
                 </div>
-                <div className="relative flex-1 min-w-[110px]"><button ref={statusDropdownBtnRef} onClick={() => openDropdown('STATUS')} className="w-full pl-2 pr-6 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-xs font-medium text-gray-700 text-left flex items-center justify-between outline-none truncate" aria-label="Chọn trạng thái"><span className="truncate">{getLabel('STATUS')}</span><i className="fas fa-chevron-down text-gray-400 text-[10px]"></i></button></div>
-                <div className="flex bg-gray-100 rounded-lg p-0.5 flex-shrink-0">
-                    <button onClick={() => setSortBy('NEWEST')} className={`px-2 py-1 rounded-md text-[10px] font-bold transition-all ${sortBy === 'NEWEST' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-400'}`}>Mới</button>
-                    <button 
-                         onClick={() => setShowRoutePlanner(true)}
-                         className={`px-2 py-1 rounded-md text-[10px] font-bold transition-all flex items-center gap-1 ${sortBy === 'ROUTE' ? 'bg-white shadow-sm text-eco-700' : 'text-gray-400'}`}
-                         title="Lập lộ trình thông minh"
-                    >
-                        <i className="fas fa-map-marked-alt"></i> Lộ trình
-                    </button>
-                </div>
-             </div></div></div>
+             </div>
          </div>
       </div>
       {activeDropdown && (<div id="floating-dropdown-portal" className="fixed z-[9999] bg-white border border-gray-100 rounded-lg shadow-xl max-h-60 overflow-y-auto p-1 animate-fade-in" style={{ top: dropdownPos.top, left: dropdownPos.left, minWidth: dropdownPos.width }}>
@@ -731,16 +762,14 @@ const TrackingDashboard: React.FC = () => {
                         <button onClick={() => setShowStatsModal(false)} className="text-gray-400 hover:text-gray-600"><i className="fas fa-times"></i></button>
                     </div>
                     
-                    <select 
-                        value={selectedStatsBatch}
-                        onChange={(e) => setSelectedStatsBatch(e.target.value)}
-                        className="w-full p-2.5 bg-white border border-gray-200 rounded-lg text-sm font-bold text-gray-700 outline-none focus:border-purple-500"
-                    >
-                        {batches.length === 0 && <option value="">Không có lô nào</option>}
-                        {batches.map(b => (
-                            <option key={b} value={b}>{b}</option>
-                        ))}
-                    </select>
+                    {/* Display Active Filters */}
+                    <div className="text-sm font-bold text-gray-600">
+                        {filterBatch.length > 0 ? (
+                            <span>Đang xem: <span className="text-purple-600">{filterBatch.join(', ')}</span></span>
+                        ) : (
+                            <span>Đang xem: <span className="text-green-600">Tất cả đơn hàng (All)</span></span>
+                        )}
+                    </div>
                 </div>
                 
                 <div className="flex-grow overflow-y-auto p-0">
@@ -755,7 +784,7 @@ const TrackingDashboard: React.FC = () => {
                         </thead>
                         <tbody className="divide-y divide-gray-50">
                             {batchStatsData.length === 0 ? (
-                                <tr><td colSpan={4} className="p-8 text-center text-gray-400">Chọn lô để xem dữ liệu</td></tr>
+                                <tr><td colSpan={4} className="p-8 text-center text-gray-400">Không có dữ liệu</td></tr>
                             ) : (
                                 batchStatsData.map((item, idx) => {
                                     const totalImported = item.productInfo?.totalImported || 0;

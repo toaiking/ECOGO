@@ -43,6 +43,14 @@ export interface Order {
   reminderCount?: number; // NEW: Number of times payment reminder sent
 }
 
+export interface ImportRecord {
+  id: string;
+  date: number;
+  quantity: number;
+  price: number; // Import price at time of entry
+  note?: string;
+}
+
 export interface Product {
   id: string;
   name: string;
@@ -52,6 +60,7 @@ export interface Product {
   stockQuantity: number; // Current Stock
   totalImported?: number; // Total Imported History
   lastImportDate: number; 
+  importHistory?: ImportRecord[]; // NEW: Track distinct import batches
 }
 
 export interface Customer {

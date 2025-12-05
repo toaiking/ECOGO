@@ -1,5 +1,5 @@
 
-import { Order, OrderStatus, Product, Customer, BankConfig, Notification, ShopConfig } from '../types';
+import { Order, OrderStatus, Product, Customer, BankConfig, Notification, ShopConfig, ImportRecord } from '../types';
 import { db } from '../firebaseConfig';
 import { v4 as uuidv4 } from 'uuid';
 import { 
@@ -190,6 +190,17 @@ const ensureOrdersLoaded = () => {
         _memoryOrders = [];
     }
     return _memoryOrders;
+};
+
+const ensureProductsLoaded = () => {
+    if (_memoryProducts) return _memoryProducts;
+    try {
+        const local = localStorage.getItem(PRODUCT_KEY);
+        _memoryProducts = local ? JSON.parse(local) : [];
+    } catch {
+        _memoryProducts = [];
+    }
+    return _memoryProducts;
 };
 
 const buildIndices = () => {
@@ -390,7 +401,7 @@ export const storageService = {
     
     try {
         const localOrders = ensureOrdersLoaded();
-        const localProducts = JSON.parse(localStorage.getItem(PRODUCT_KEY) || '[]');
+        const localProducts = ensureProductsLoaded();
         const localCustomers = ensureCustomersLoaded();
         const localTags = storageService.getQuickTags();
 
@@ -473,20 +484,12 @@ export const storageService = {
   },
 
   getProductBySku: (sku: string): Product | undefined => {
-      let list = _memoryProducts || [];
-      if (list.length === 0) {
-           const local = localStorage.getItem(PRODUCT_KEY);
-           if(local) list = JSON.parse(local);
-      }
+      let list = ensureProductsLoaded();
       return list.find(p => p.id === sku);
   },
 
   saveProduct: async (product: Product) => {
-      let list = _memoryProducts || [];
-      if (list.length === 0) {
-           const local = localStorage.getItem(PRODUCT_KEY);
-           if(local) list = JSON.parse(local);
-      }
+      let list = ensureProductsLoaded();
       const idx = list.findIndex(p => p.id === product.id);
       
       if (idx >= 0) {
@@ -505,16 +508,225 @@ export const storageService = {
   },
 
   deleteProduct: async (id: string) => {
-      let list = _memoryProducts || [];
-      if (list.length === 0) {
-           const local = localStorage.getItem(PRODUCT_KEY);
-           if(local) list = JSON.parse(local);
-      }
+      let list = ensureProductsLoaded();
       list = list.filter(p => p.id !== id);
       _memoryProducts = list;
       localStorage.setItem(PRODUCT_KEY, JSON.stringify(list));
       window.dispatchEvent(new Event('storage_' + PRODUCT_KEY));
       await safeCloudOp(() => deleteDoc(doc(db, "products", id)));
+  },
+
+  // --- TOOL: CLEAN AND MERGE DUPLICATE PRODUCTS ---
+  cleanAndMergeDuplicateProducts: async (): Promise<{mergedCount: number, fixedOrders: number}> => {
+      const products = ensureProductsLoaded();
+      const orders = ensureOrdersLoaded();
+      
+      // 1. Group products by Normalized Name
+      const productGroups = new Map<string, Product[]>();
+      products.forEach(p => {
+          const key = generateProductSku(p.name); // Using standard SKU gen as the key
+          if (!productGroups.has(key)) productGroups.set(key, []);
+          productGroups.get(key)!.push(p);
+      });
+
+      let mergedCount = 0;
+      let fixedOrders = 0;
+      const batch = writeBatch(db);
+      let batchOps = 0;
+      
+      // Helper to commit batch if full
+      const checkCommit = async () => {
+          batchOps++;
+          if (batchOps >= 300 && isOnline()) {
+              await batch.commit();
+              batchOps = 0;
+          }
+      };
+
+      for (const [key, group] of productGroups.entries()) {
+          if (group.length <= 1) continue;
+
+          // MERGE LOGIC
+          // Sort group: Keep the one with most stock or oldest import as Primary
+          group.sort((a, b) => (b.stockQuantity || 0) - (a.stockQuantity || 0));
+          
+          const primary = group[0];
+          const duplicates = group.slice(1);
+          
+          let totalStock = primary.stockQuantity || 0;
+          let totalImported = primary.totalImported || 0;
+          let latestPrice = primary.defaultPrice;
+          let latestImportPrice = primary.importPrice;
+          
+          // NEW: Merge Import History
+          const mergedHistory: ImportRecord[] = [...(primary.importHistory || [])];
+
+          for (const dup of duplicates) {
+              totalStock += (dup.stockQuantity || 0);
+              totalImported += (dup.totalImported || 0);
+              
+              // If dup has newer update, maybe take its price? For now, keep primary or max.
+              latestPrice = Math.max(latestPrice, dup.defaultPrice);
+              latestImportPrice = Math.max(latestImportPrice || 0, dup.importPrice || 0);
+              
+              if (dup.importHistory) {
+                  mergedHistory.push(...dup.importHistory);
+              }
+
+              // 2. Fix Orders referencing duplicate product IDs
+              orders.forEach(o => {
+                  let orderChanged = false;
+                  o.items.forEach(item => {
+                      if (item.productId === dup.id) {
+                          item.productId = primary.id;
+                          item.name = primary.name; // Normalize name in order too
+                          orderChanged = true;
+                      }
+                  });
+                  if (orderChanged) {
+                      fixedOrders++;
+                      if (isOnline()) batch.update(doc(db, "orders", o.id), { items: o.items });
+                  }
+              });
+
+              // 3. Delete Duplicate Product
+              if (isOnline()) batch.delete(doc(db, "products", dup.id));
+              const idx = products.findIndex(p => p.id === dup.id);
+              if (idx >= 0) products.splice(idx, 1);
+          }
+          
+          // Sort history by date
+          mergedHistory.sort((a,b) => a.date - b.date);
+
+          // 4. Update Primary Product
+          primary.stockQuantity = totalStock;
+          primary.totalImported = totalImported;
+          primary.defaultPrice = latestPrice;
+          primary.importPrice = latestImportPrice;
+          primary.importHistory = mergedHistory;
+          primary.id = key; // Enforce Standard SKU as ID if possible (Careful with this if key != primary.id)
+          
+          if (isOnline()) batch.set(doc(db, "products", primary.id), sanitize(primary));
+          
+          mergedCount += duplicates.length;
+          await checkCommit();
+      }
+
+      // Final commit
+      if (isOnline() && batchOps > 0) await batch.commit();
+
+      // Update Local Storage
+      _memoryProducts = products;
+      localStorage.setItem(PRODUCT_KEY, JSON.stringify(products));
+      window.dispatchEvent(new Event('storage_' + PRODUCT_KEY));
+      
+      _memoryOrders = orders;
+      localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
+      window.dispatchEvent(new Event('storage_' + ORDER_KEY));
+
+      return { mergedCount, fixedOrders };
+  },
+
+  // --- TOOL: RECALCULATE INVENTORY FROM ORDERS ---
+  recalculateInventoryFromOrders: async (): Promise<number> => {
+      const products = ensureProductsLoaded();
+      const orders = ensureOrdersLoaded();
+      let updatedCount = 0;
+
+      // 1. Map: ProductID -> Total Sold Quantity
+      const soldMap = new Map<string, number>();
+      
+      orders.forEach(o => {
+          // Ignore cancelled orders
+          if (o.status === OrderStatus.CANCELLED) return;
+          
+          o.items.forEach(item => {
+              if (item.productId) {
+                  const currentSold = soldMap.get(item.productId) || 0;
+                  soldMap.set(item.productId, currentSold + (Number(item.quantity) || 0));
+              }
+          });
+      });
+
+      const batch = writeBatch(db);
+      let batchOps = 0;
+
+      // 2. Iterate Products and Recalculate
+      for (const p of products) {
+          const totalSold = soldMap.get(p.id) || 0;
+          
+          // Calculate Imported from History if available
+          const historyImport = (p.importHistory || []).reduce((sum, h) => sum + (Number(h.quantity) || 0), 0);
+          
+          let totalImported = Number(p.totalImported) || 0;
+          const currentStock = Number(p.stockQuantity) || 0;
+
+          // DECISION LOGIC: Determine the most accurate Total Imported
+          // RULE 1: If History exists, it is the SOURCE OF TRUTH for Total Imported.
+          if (historyImport > 0) {
+              totalImported = historyImport;
+          }
+          // RULE 2: Legacy Fallback (No history)
+          // If no history, and Total Imported seems undefined or clearly wrong (less than what we have + sold),
+          // we reset Total Imported to match reality (Stock + Sold).
+          // This "freezes" the current stock as correct and sets the baseline Import.
+          else if (totalImported < (currentStock + totalSold)) {
+              totalImported = currentStock + totalSold;
+          }
+
+          // FINAL CALCULATION
+          // Stock = Total Imported - Total Sold
+          const calculatedStock = Math.max(0, totalImported - totalSold);
+          
+          // Check if update needed
+          if (calculatedStock !== currentStock || totalImported !== p.totalImported) {
+              p.stockQuantity = calculatedStock;
+              p.totalImported = totalImported;
+              
+              if (isOnline()) {
+                  batch.update(doc(db, "products", p.id), { 
+                      stockQuantity: calculatedStock,
+                      totalImported: totalImported
+                  });
+                  batchOps++;
+              }
+              updatedCount++;
+          }
+          
+          // Commit in chunks
+          if (batchOps >= 300) {
+              if (isOnline()) await batch.commit();
+              batchOps = 0;
+          }
+      }
+
+      // Final commit
+      if (isOnline() && batchOps > 0) {
+          await batch.commit();
+      }
+
+      // Update Local Storage
+      _memoryProducts = products;
+      localStorage.setItem(PRODUCT_KEY, JSON.stringify(products));
+      window.dispatchEvent(new Event('storage_' + PRODUCT_KEY));
+
+      return updatedCount;
+  },
+
+  getProductOrderHistory: (productId: string): { order: Order, quantity: number }[] => {
+      const orders = ensureOrdersLoaded();
+      const history: { order: Order, quantity: number }[] = [];
+      
+      orders.forEach(o => {
+          if (o.status === OrderStatus.CANCELLED) return;
+          const item = o.items.find(i => i.productId === productId);
+          if (item) {
+              history.push({ order: o, quantity: item.quantity });
+          }
+      });
+      
+      // Sort by newest
+      return history.sort((a,b) => b.order.createdAt - a.order.createdAt);
   },
 
   // --- NEW: SYNC PRODUCT UPDATES TO PENDING ORDERS ---
