@@ -162,14 +162,31 @@ const SettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
 
   const handleFixDuplicates = async () => {
       setIsRunningTest(true);
-      setTestResult('Đang phân tích và tách khách hàng...');
+      setTestResult('Đang phân tích...');
       try {
           const count = await storageService.fixDuplicateCustomerIds();
-          setTestResult(`Hoàn tất! Đã tách thành công ${count} khách hàng bị trùng ID.`);
-          toast.success(`Xong! Đã sửa lỗi ${count} khách hàng.`);
+          setTestResult(`Đã tách ${count} khách trùng ID.`);
+          toast.success(`Xong! Đã sửa ${count} lỗi.`);
       } catch (e: any) {
           setTestResult('Lỗi: ' + (e?.message || e));
           toast.error("Lỗi khi sửa dữ liệu");
+      } finally {
+          setIsRunningTest(false);
+      }
+  };
+
+  const handleMergeDuplicates = async () => {
+      if (!window.confirm("Hành động này sẽ gộp các khách hàng có CÙNG SỐ ĐIỆN THOẠI thành 1 người duy nhất (giữ lại người có nhiều đơn nhất). Bạn có chắc không?")) return;
+      
+      setIsRunningTest(true);
+      setTestResult('Đang gộp khách hàng trùng lặp...');
+      try {
+          const count = await storageService.mergeCustomersByPhone();
+          setTestResult(`Đã gộp thành công ${count} nhóm khách hàng trùng lặp.`);
+          toast.success(`Xong! Đã gộp ${count} nhóm khách.`);
+      } catch (e: any) {
+          setTestResult('Lỗi: ' + (e?.message || e));
+          toast.error("Lỗi gộp dữ liệu");
       } finally {
           setIsRunningTest(false);
       }
@@ -416,6 +433,14 @@ const SettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
                         className="w-full py-2 bg-blue-100 hover:bg-blue-200 text-blue-800 rounded-lg font-bold text-xs transition-colors"
                     >
                         Đánh dấu tất cả là Khách cũ
+                    </button>
+                    
+                    <button 
+                        onClick={handleMergeDuplicates} 
+                        disabled={isRunningTest}
+                        className="w-full py-2 bg-green-100 hover:bg-green-200 text-green-800 rounded-lg font-bold text-xs transition-colors"
+                    >
+                        Gộp Khách Hàng Trùng Lặp
                     </button>
 
                     <button 

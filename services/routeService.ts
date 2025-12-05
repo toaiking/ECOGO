@@ -1,10 +1,21 @@
-
 import { Order } from '../types';
 import { normalizeString } from './storageService';
 
-// CẤU HÌNH THỨ TỰ ƯU TIÊN (Dựa trên tài liệu của bạn)
-// Priority càng nhỏ càng đi trước.
-const ROUTE_ZONES = [
+// --- CONFIGURATION ZONE ---
+export interface RouteZone {
+    id: string;
+    name: string;      // Tên hiển thị (VD: "1. Eco Xuân")
+    priority: number;  // Độ ưu tiên (Càng nhỏ càng giao trước)
+    keywords: string[]; // Danh sách từ khóa để nhận diện (viết thường)
+}
+
+/**
+ * HƯỚNG DẪN THÊM KHU VỰC MỚI:
+ * 1. Thêm một object mới vào mảng ROUTE_ZONES bên dưới.
+ * 2. 'priority': Đặt số thứ tự bạn muốn (VD: muốn chen giữa 10 và 20 thì đặt 15).
+ * 3. 'keywords': Các từ khóa trong địa chỉ khách hàng để nhận diện khu vực đó.
+ */
+export const ROUTE_ZONES: RouteZone[] = [
     // 1. Chung cư Eco Xuân
     { 
         id: 'ECO_XUAN', 
@@ -13,54 +24,15 @@ const ROUTE_ZONES = [
         keywords: ['ecoxuan', 'eco xuan', 'eco xuân', 'sảnh a', 'sảnh b', 'sảnh c', 'block a', 'block b', 'block c', 'tòa a', 'tòa b', 'tòa c']
     },
     // 2. Khu Căn Hộ Ehome 4 (Block B, C)
-    { 
-        id: 'EHOME_B1', 
-        name: '2.1 Ehome 4 - Block B1', 
-        priority: 21,
-        keywords: ['b1', 'bún bò thủy tiên', 'tạp hóa'] // "b1" sẽ match b1-xxx
-    },
-    { 
-        id: 'EHOME_B2', 
-        name: '2.2 Ehome 4 - Block B2', 
-        priority: 22,
-        keywords: ['b2', 'hồng panda', 'xì trum', 'osaka']
-    },
-    { 
-        id: 'EHOME_B3', 
-        name: '2.3 Ehome 4 - Block B3', 
-        priority: 23,
-        keywords: ['b3', 'bếp nhà', 'anna food', 'thùy ly']
-    },
-    { 
-        id: 'EHOME_B4', 
-        name: '2.4 Ehome 4 - Block B4', 
-        priority: 24,
-        keywords: ['b4', 'cột tóc', 'thùy dương']
-    },
-    { 
-        id: 'EHOME_C1', 
-        name: '2.5 Ehome 4 - Block C1', 
-        priority: 25,
-        keywords: ['c1', 'minex']
-    },
-    { 
-        id: 'EHOME_C2', 
-        name: '2.6 Ehome 4 - Block C2', 
-        priority: 26,
-        keywords: ['c2', 'chỉ có thể', 'salem']
-    },
-    { 
-        id: 'EHOME_C3', 
-        name: '2.7 Ehome 4 - Block C3', 
-        priority: 27,
-        keywords: ['c3', 'oanh yumi', 'hoàng tâm']
-    },
-    { 
-        id: 'EHOME_C4', 
-        name: '2.8 Ehome 4 - Block C4', 
-        priority: 28,
-        keywords: ['c4', 'gia hội']
-    },
+    { id: 'EHOME_B1', name: '2.1 Ehome 4 - Block B1', priority: 21, keywords: ['b1', 'bún bò thủy tiên', 'tạp hóa'] },
+    { id: 'EHOME_B2', name: '2.2 Ehome 4 - Block B2', priority: 22, keywords: ['b2', 'hồng panda', 'xì trum', 'osaka'] },
+    { id: 'EHOME_B3', name: '2.3 Ehome 4 - Block B3', priority: 23, keywords: ['b3', 'bếp nhà', 'anna food', 'thùy ly'] },
+    { id: 'EHOME_B4', name: '2.4 Ehome 4 - Block B4', priority: 24, keywords: ['b4', 'cột tóc', 'thùy dương'] },
+    { id: 'EHOME_C1', name: '2.5 Ehome 4 - Block C1', priority: 25, keywords: ['c1', 'minex'] },
+    { id: 'EHOME_C2', name: '2.6 Ehome 4 - Block C2', priority: 26, keywords: ['c2', 'chỉ có thể', 'salem'] },
+    { id: 'EHOME_C3', name: '2.7 Ehome 4 - Block C3', priority: 27, keywords: ['c3', 'oanh yumi', 'hoàng tâm'] },
+    { id: 'EHOME_C4', name: '2.8 Ehome 4 - Block C4', priority: 28, keywords: ['c4', 'gia hội'] },
+    
     // 3. Khu Nhà Phố & Biệt Thự Ehome
     {
         id: 'NHAPHO',
@@ -73,48 +45,24 @@ const ROUTE_ZONES = [
         ]
     },
     // 4. Lái Thiêu
-    {
-        id: 'LAI_THIEU',
-        name: '4. Lái Thiêu (115, 117)',
-        priority: 40,
-        keywords: ['lái thiêu', 'lt 115', 'lt115', 'lt 117', 'lt117', 'hoa giấy', 'anna spa', 'hẻm 8 quởn']
-    },
+    { id: 'LAI_THIEU', name: '4. Lái Thiêu (115, 117)', priority: 40, keywords: ['lái thiêu', 'lt 115', 'lt115', 'lt 117', 'lt117', 'hoa giấy', 'anna spa', 'hẻm 8 quởn'] },
+    
     // 5. Vĩnh An
-    {
-        id: 'VINH_AN',
-        name: '5. KDC Vĩnh An',
-        priority: 50,
-        keywords: ['vĩnh an', 'vinh an', 'đường số 1', 'đường số 2', 'đường số 3', 'đường số 4']
-    },
+    { id: 'VINH_AN', name: '5. KDC Vĩnh An', priority: 50, keywords: ['vĩnh an', 'vinh an', 'đường số 1', 'đường số 2', 'đường số 3', 'đường số 4'] },
+    
     // 6. Hẻm Lộc Phát
-    {
-        id: 'LOC_PHAT',
-        name: '6. Hẻm Lộc Phát (Đối diện B1)',
-        priority: 60,
-        keywords: ['lộc phát', 'đối diện b1', 'đối diện ehome']
-    },
+    { id: 'LOC_PHAT', name: '6. Hẻm Lộc Phát (Đối diện B1)', priority: 60, keywords: ['lộc phát', 'đối diện b1', 'đối diện ehome'] },
+    
     // 7. Vĩnh Phú 2
-    {
-        id: 'VP2',
-        name: '7. KDC Vĩnh Phú 2',
-        priority: 70,
-        keywords: ['vp2', 'vĩnh phú 2', 'hồ câu', 'trí việt', 'thiên phú long', 'mỹ sài gòn', 'đường 18', 'đường 19']
-    },
-    // 8 + 10. Marina Tower
-    {
-        id: 'MARINA',
-        name: '8. Marina Tower',
-        priority: 80,
-        keywords: ['marina', 'maria', 'cỏ 3 lá', 'kim ngọc', 'hera', 'phở nam định']
-    },
+    { id: 'VP2', name: '7. KDC Vĩnh Phú 2', priority: 70, keywords: ['vp2', 'vĩnh phú 2', 'hồ câu', 'trí việt', 'thiên phú long', 'mỹ sài gòn', 'đường 18', 'đường 19'] },
+    
+    // 8. Marina Tower
+    { id: 'MARINA', name: '8. Marina Tower', priority: 80, keywords: ['marina', 'maria', 'cỏ 3 lá', 'kim ngọc', 'hera', 'phở nam định'] },
+    
     // 9. Vĩnh Phú 1
-    {
-        id: 'VP1',
-        name: '9. KDC Vĩnh Phú 1',
-        priority: 90,
-        keywords: ['vp1', 'vĩnh phú 1']
-    },
-    // 11. Khu vực Vĩnh Phú (Hẻm lẻ) - Sắp xếp ngược từ 41 về 02 theo list của bạn
+    { id: 'VP1', name: '9. KDC Vĩnh Phú 1', priority: 90, keywords: ['vp1', 'vĩnh phú 1'] },
+    
+    // 11. Khu vực Vĩnh Phú (Hẻm lẻ)
     { id: 'VP41', name: '11.1 VP41 (Kho Thăng Long)', priority: 1101, keywords: ['vp41', 'vp 41', 'hoàng thiện'] },
     { id: 'VP42', name: '11.2 VP42 (Hẻm ve chai)', priority: 1102, keywords: ['vp42', 'vp 42', 'hẻm ve chai', 'hoàng duyên', 'cổng đen', 'cổng xanh'] },
     { id: 'VP40', name: '11.3 VP40 (Kim Phụng)', priority: 1103, keywords: ['vp40', 'vp 40', 'kim phụng'] },
@@ -126,11 +74,11 @@ const ROUTE_ZONES = [
 
 export const routeService = {
     
-    // Hàm xác định Zone cho một địa chỉ
+    // Hàm xác định Zone cho một địa chỉ dựa trên ROUTE_ZONES
     identifyZone: (address: string): { id: string, name: string, priority: number } => {
         const normalizedAddr = normalizeString(address || "");
         
-        // Duyệt qua từng Zone định nghĩa
+        // Duyệt qua mảng cấu hình
         for (const zone of ROUTE_ZONES) {
             for (const keyword of zone.keywords) {
                 const normKeyword = normalizeString(keyword);
@@ -138,16 +86,10 @@ export const routeService = {
                 // Kiểm tra từ khóa trong địa chỉ
                 if (normalizedAddr.includes(normKeyword)) {
                     // Logic Edge Case: 
-                    // Nếu khớp "Block A" (có ở cả Eco và Marina), phải check thêm ngữ cảnh.
-                    // Nhưng ở đây ta đã đặt thứ tự ưu tiên: Eco check trước, Marina check sau.
-                    // Nếu "A Maria" -> sẽ không khớp Eco (vì Eco keyword là ecoxuan).
-                    // Nếu "A Ecoxuan" -> khớp Eco ngay.
-                    // Nếu chỉ "A" -> Rất khó, sẽ rơi vào trường hợp mặc định.
-                    
-                    // Đặc biệt xử lý Ehome Blocks: Tránh "B1" khớp nhầm trong "đối diện B1"
+                    // Đặc biệt xử lý Ehome Blocks: Tránh "B1" khớp nhầm trong "đối diện B1" (thuộc Lộc Phát)
                     if (['b1', 'b2', 'b3', 'b4'].includes(normKeyword)) {
                         if (normalizedAddr.includes('doi dien') || normalizedAddr.includes('đoi dien')) {
-                            continue; // Bỏ qua, để cho Zone Lộc Phát bắt
+                            continue; // Bỏ qua, để cho Zone Lộc Phát bắt sau
                         }
                     }
 
@@ -167,13 +109,11 @@ export const routeService = {
 
         sorted.sort((a, b) => {
             const zoneA = routeService.identifyZone(a.address);
-            const zoneB = routeService.identifyZone(a.address); // Wait, logic error in original thought, fixing below
-            
-            const zoneB_Fixed = routeService.identifyZone(b.address);
+            const zoneB = routeService.identifyZone(b.address);
 
             // 1. So sánh Priority của Zone (Nhỏ xếp trước)
-            if (zoneA.priority !== zoneB_Fixed.priority) {
-                return zoneA.priority - zoneB_Fixed.priority;
+            if (zoneA.priority !== zoneB.priority) {
+                return zoneA.priority - zoneB.priority;
             }
 
             // 2. Nếu cùng Zone, sắp xếp theo tên đường/số nhà (Alphabet)

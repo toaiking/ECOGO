@@ -1,5 +1,5 @@
 
-import { Order, OrderStatus, Product, Customer, BankConfig, Notification, ShopConfig } from '../types';
+import { Order, OrderStatus, Product, Customer, BankConfig, Notification, ShopConfig, ImportRecord } from '../types';
 import { db } from '../firebaseConfig';
 import { v4 as uuidv4 } from 'uuid';
 import { 
@@ -74,8 +74,8 @@ let _memoryOrders: Order[] | null = null;
 let _memoryProducts: Product[] | null = null;
 
 // Indices for O(1) lookup
-let _phoneIndex: Map<string, Customer> | null = null;
-let _addressIndex: Map<string, Customer> | null = null;
+let _phoneIndex: Map<string, Customer[]> | null = null;
+let _addressIndex: Map<string, Customer[]> | null = null;
 let _idIndex: Map<string, Customer> | null = null;
 
 // Debounce timers
@@ -99,6 +99,23 @@ export const normalizeString = (str: string): string => {
         .toLowerCase();
 };
 
+// NEW: Generate Standardized SKU (Product ID)
+export const generateProductSku = (name: string): string => {
+    if (!name) return uuidv4();
+    // Convert "Gạo ST25 (Loại 1)" -> "GAO_ST25_LOAI_1"
+    const sku = name
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/đ/g, "d").replace(/Đ/g, "D")
+        .trim()
+        .toUpperCase()
+        .replace(/[^A-Z0-9]+/g, "_"); // Replace non-alphanumeric with underscore
+    
+    // Fallback if name is just symbols
+    if (sku.length < 2) return uuidv4();
+    return sku;
+};
+
 export const normalizePhone = (phone: string) => {
     if (!phone) return '';
     let p = phone.replace(/[^0-9]/g, '');
@@ -109,13 +126,32 @@ export const normalizePhone = (phone: string) => {
     return p;
 };
 
-// Fuzzy check if two names refer to same person
+// IMPROVED: Token-based Fuzzy matching
 export const areNamesSimilar = (n1: string, n2: string): boolean => {
-    const s1 = normalizeString(n1);
-    const s2 = normalizeString(n2);
+    const normalize = (s: string) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9\s]/g, "");
+    const s1 = normalize(n1);
+    const s2 = normalize(n2);
+    
     if (!s1 || !s2) return true; // Safety
-    // Check substring match
-    return s1.includes(s2) || s2.includes(s1);
+
+    // 1. Exact substring match (Legacy check)
+    const simple1 = s1.replace(/\s/g, '');
+    const simple2 = s2.replace(/\s/g, '');
+    if (simple1.includes(simple2) || simple2.includes(simple1)) return true;
+
+    // 2. Token overlap check (New)
+    const t1 = s1.split(/\s+/).filter(x => x.length > 0);
+    const t2 = s2.split(/\s+/).filter(x => x.length > 0);
+    
+    const set1 = new Set(t1);
+    const intersection = t2.filter(x => set1.has(x));
+    
+    const minLen = Math.min(t1.length, t2.length);
+    if (minLen === 0) return false;
+    
+    const threshold = minLen >= 3 ? minLen - 1 : minLen;
+    
+    return intersection.length >= threshold;
 };
 
 // --- CUSTOMER ID GENERATION STRATEGY ---
@@ -156,6 +192,17 @@ const ensureOrdersLoaded = () => {
     return _memoryOrders;
 };
 
+const ensureProductsLoaded = () => {
+    if (_memoryProducts) return _memoryProducts;
+    try {
+        const local = localStorage.getItem(PRODUCT_KEY);
+        _memoryProducts = local ? JSON.parse(local) : [];
+    } catch {
+        _memoryProducts = [];
+    }
+    return _memoryProducts;
+};
+
 const buildIndices = () => {
     // Always rebuild if null, but also allow forced rebuilds via invalidateIndices
     if (_phoneIndex && _addressIndex && _idIndex) return;
@@ -163,8 +210,8 @@ const buildIndices = () => {
     const list = ensureCustomersLoaded();
     if (!list) return;
 
-    _phoneIndex = new Map<string, Customer>();
-    _addressIndex = new Map<string, Customer>();
+    _phoneIndex = new Map<string, Customer[]>();
+    _addressIndex = new Map<string, Customer[]>();
     _idIndex = new Map<string, Customer>();
 
     for (const c of list) {
@@ -172,23 +219,20 @@ const buildIndices = () => {
         
         if (c.phone && c.phone.length > 5) {
             const p = normalizePhone(c.phone);
-            _phoneIndex.set(p, c);
+            if (!_phoneIndex.has(p)) _phoneIndex.set(p, []);
+            _phoneIndex.get(p)!.push(c);
         }
         
         if (c.address && c.address.length > 5) {
             const normAddr = normalizeString(c.address);
-            const existing = _addressIndex.get(normAddr);
-            const currentScore = (c.priorityScore !== undefined && c.priorityScore !== null) ? c.priorityScore : 999999;
-            const existingScore = (existing?.priorityScore !== undefined && existing.priorityScore !== null) ? existing.priorityScore : 999999;
-
-            if (!existing || currentScore < existingScore) {
-                _addressIndex.set(normAddr, c);
-            }
+            if (!_addressIndex.has(normAddr)) _addressIndex.set(normAddr, []);
+            _addressIndex.get(normAddr)!.push(c);
         }
     }
 };
 
-export const findMatchingCustomer = (orderPhone: string, orderAddress: string, customerId?: string): Customer | undefined => {
+// UPDATED: Now supports fuzzy name matching to disambiguate collisions
+export const findMatchingCustomer = (orderPhone: string, orderAddress: string, customerId?: string, queryName?: string): Customer | undefined => {
     buildIndices(); 
     
     // 0. Try ID Match First (100% Accuracy)
@@ -200,7 +244,15 @@ export const findMatchingCustomer = (orderPhone: string, orderAddress: string, c
     if (orderPhone) {
         const normPhone = normalizePhone(orderPhone);
         if (normPhone && _phoneIndex?.has(normPhone)) {
-            return _phoneIndex.get(normPhone);
+            const candidates = _phoneIndex.get(normPhone)!;
+            
+            // If name provided, try to find the best name match among candidates
+            if (queryName) {
+                const nameMatch = candidates.find(c => areNamesSimilar(c.name, queryName));
+                if (nameMatch) return nameMatch;
+            }
+            
+            return candidates.sort((a,b) => (b.totalOrders||0) - (a.totalOrders||0))[0];
         }
     }
 
@@ -208,7 +260,12 @@ export const findMatchingCustomer = (orderPhone: string, orderAddress: string, c
     if (orderAddress) {
         const normAddr = normalizeString(orderAddress);
         if (normAddr && _addressIndex?.has(normAddr)) {
-            return _addressIndex.get(normAddr);
+            const candidates = _addressIndex.get(normAddr)!;
+             if (queryName) {
+                const nameMatch = candidates.find(c => areNamesSimilar(c.name, queryName));
+                if (nameMatch) return nameMatch;
+            }
+            return candidates[0];
         }
     }
 
@@ -344,7 +401,7 @@ export const storageService = {
     
     try {
         const localOrders = ensureOrdersLoaded();
-        const localProducts = JSON.parse(localStorage.getItem(PRODUCT_KEY) || '[]');
+        const localProducts = ensureProductsLoaded();
         const localCustomers = ensureCustomersLoaded();
         const localTags = storageService.getQuickTags();
 
@@ -426,14 +483,22 @@ export const storageService = {
     }
   },
 
+  getProductBySku: (sku: string): Product | undefined => {
+      let list = ensureProductsLoaded();
+      return list.find(p => p.id === sku);
+  },
+
   saveProduct: async (product: Product) => {
-      let list = _memoryProducts || [];
-      if (list.length === 0) {
-           const local = localStorage.getItem(PRODUCT_KEY);
-           if(local) list = JSON.parse(local);
-      }
+      let list = ensureProductsLoaded();
       const idx = list.findIndex(p => p.id === product.id);
-      if (idx >= 0) list[idx] = product; else list.push(product);
+      
+      if (idx >= 0) {
+          // Update existing
+          list[idx] = product; 
+      } else {
+          // Create new
+          list.push(product);
+      }
       
       _memoryProducts = list;
       localStorage.setItem(PRODUCT_KEY, JSON.stringify(list));
@@ -443,16 +508,225 @@ export const storageService = {
   },
 
   deleteProduct: async (id: string) => {
-      let list = _memoryProducts || [];
-      if (list.length === 0) {
-           const local = localStorage.getItem(PRODUCT_KEY);
-           if(local) list = JSON.parse(local);
-      }
+      let list = ensureProductsLoaded();
       list = list.filter(p => p.id !== id);
       _memoryProducts = list;
       localStorage.setItem(PRODUCT_KEY, JSON.stringify(list));
       window.dispatchEvent(new Event('storage_' + PRODUCT_KEY));
       await safeCloudOp(() => deleteDoc(doc(db, "products", id)));
+  },
+
+  // --- TOOL: CLEAN AND MERGE DUPLICATE PRODUCTS ---
+  cleanAndMergeDuplicateProducts: async (): Promise<{mergedCount: number, fixedOrders: number}> => {
+      const products = ensureProductsLoaded();
+      const orders = ensureOrdersLoaded();
+      
+      // 1. Group products by Normalized Name
+      const productGroups = new Map<string, Product[]>();
+      products.forEach(p => {
+          const key = generateProductSku(p.name); // Using standard SKU gen as the key
+          if (!productGroups.has(key)) productGroups.set(key, []);
+          productGroups.get(key)!.push(p);
+      });
+
+      let mergedCount = 0;
+      let fixedOrders = 0;
+      const batch = writeBatch(db);
+      let batchOps = 0;
+      
+      // Helper to commit batch if full
+      const checkCommit = async () => {
+          batchOps++;
+          if (batchOps >= 300 && isOnline()) {
+              await batch.commit();
+              batchOps = 0;
+          }
+      };
+
+      for (const [key, group] of productGroups.entries()) {
+          if (group.length <= 1) continue;
+
+          // MERGE LOGIC
+          // Sort group: Keep the one with most stock or oldest import as Primary
+          group.sort((a, b) => (b.stockQuantity || 0) - (a.stockQuantity || 0));
+          
+          const primary = group[0];
+          const duplicates = group.slice(1);
+          
+          let totalStock = primary.stockQuantity || 0;
+          let totalImported = primary.totalImported || 0;
+          let latestPrice = primary.defaultPrice;
+          let latestImportPrice = primary.importPrice;
+          
+          // NEW: Merge Import History
+          const mergedHistory: ImportRecord[] = [...(primary.importHistory || [])];
+
+          for (const dup of duplicates) {
+              totalStock += (dup.stockQuantity || 0);
+              totalImported += (dup.totalImported || 0);
+              
+              // If dup has newer update, maybe take its price? For now, keep primary or max.
+              latestPrice = Math.max(latestPrice, dup.defaultPrice);
+              latestImportPrice = Math.max(latestImportPrice || 0, dup.importPrice || 0);
+              
+              if (dup.importHistory) {
+                  mergedHistory.push(...dup.importHistory);
+              }
+
+              // 2. Fix Orders referencing duplicate product IDs
+              orders.forEach(o => {
+                  let orderChanged = false;
+                  o.items.forEach(item => {
+                      if (item.productId === dup.id) {
+                          item.productId = primary.id;
+                          item.name = primary.name; // Normalize name in order too
+                          orderChanged = true;
+                      }
+                  });
+                  if (orderChanged) {
+                      fixedOrders++;
+                      if (isOnline()) batch.update(doc(db, "orders", o.id), { items: o.items });
+                  }
+              });
+
+              // 3. Delete Duplicate Product
+              if (isOnline()) batch.delete(doc(db, "products", dup.id));
+              const idx = products.findIndex(p => p.id === dup.id);
+              if (idx >= 0) products.splice(idx, 1);
+          }
+          
+          // Sort history by date
+          mergedHistory.sort((a,b) => a.date - b.date);
+
+          // 4. Update Primary Product
+          primary.stockQuantity = totalStock;
+          primary.totalImported = totalImported;
+          primary.defaultPrice = latestPrice;
+          primary.importPrice = latestImportPrice;
+          primary.importHistory = mergedHistory;
+          primary.id = key; // Enforce Standard SKU as ID if possible (Careful with this if key != primary.id)
+          
+          if (isOnline()) batch.set(doc(db, "products", primary.id), sanitize(primary));
+          
+          mergedCount += duplicates.length;
+          await checkCommit();
+      }
+
+      // Final commit
+      if (isOnline() && batchOps > 0) await batch.commit();
+
+      // Update Local Storage
+      _memoryProducts = products;
+      localStorage.setItem(PRODUCT_KEY, JSON.stringify(products));
+      window.dispatchEvent(new Event('storage_' + PRODUCT_KEY));
+      
+      _memoryOrders = orders;
+      localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
+      window.dispatchEvent(new Event('storage_' + ORDER_KEY));
+
+      return { mergedCount, fixedOrders };
+  },
+
+  // --- TOOL: RECALCULATE INVENTORY FROM ORDERS ---
+  recalculateInventoryFromOrders: async (): Promise<number> => {
+      const products = ensureProductsLoaded();
+      const orders = ensureOrdersLoaded();
+      let updatedCount = 0;
+
+      // 1. Map: ProductID -> Total Sold Quantity
+      const soldMap = new Map<string, number>();
+      
+      orders.forEach(o => {
+          // Ignore cancelled orders
+          if (o.status === OrderStatus.CANCELLED) return;
+          
+          o.items.forEach(item => {
+              if (item.productId) {
+                  const currentSold = soldMap.get(item.productId) || 0;
+                  soldMap.set(item.productId, currentSold + (Number(item.quantity) || 0));
+              }
+          });
+      });
+
+      const batch = writeBatch(db);
+      let batchOps = 0;
+
+      // 2. Iterate Products and Recalculate
+      for (const p of products) {
+          const totalSold = soldMap.get(p.id) || 0;
+          
+          // Calculate Imported from History if available
+          const historyImport = (p.importHistory || []).reduce((sum, h) => sum + (Number(h.quantity) || 0), 0);
+          
+          let totalImported = Number(p.totalImported) || 0;
+          const currentStock = Number(p.stockQuantity) || 0;
+
+          // DECISION LOGIC: Determine the most accurate Total Imported
+          // RULE 1: If History exists, it is the SOURCE OF TRUTH for Total Imported.
+          if (historyImport > 0) {
+              totalImported = historyImport;
+          }
+          // RULE 2: Legacy Fallback (No history)
+          // If no history, and Total Imported seems undefined or clearly wrong (less than what we have + sold),
+          // we reset Total Imported to match reality (Stock + Sold).
+          // This "freezes" the current stock as correct and sets the baseline Import.
+          else if (totalImported < (currentStock + totalSold)) {
+              totalImported = currentStock + totalSold;
+          }
+
+          // FINAL CALCULATION
+          // Stock = Total Imported - Total Sold
+          const calculatedStock = Math.max(0, totalImported - totalSold);
+          
+          // Check if update needed
+          if (calculatedStock !== currentStock || totalImported !== p.totalImported) {
+              p.stockQuantity = calculatedStock;
+              p.totalImported = totalImported;
+              
+              if (isOnline()) {
+                  batch.update(doc(db, "products", p.id), { 
+                      stockQuantity: calculatedStock,
+                      totalImported: totalImported
+                  });
+                  batchOps++;
+              }
+              updatedCount++;
+          }
+          
+          // Commit in chunks
+          if (batchOps >= 300) {
+              if (isOnline()) await batch.commit();
+              batchOps = 0;
+          }
+      }
+
+      // Final commit
+      if (isOnline() && batchOps > 0) {
+          await batch.commit();
+      }
+
+      // Update Local Storage
+      _memoryProducts = products;
+      localStorage.setItem(PRODUCT_KEY, JSON.stringify(products));
+      window.dispatchEvent(new Event('storage_' + PRODUCT_KEY));
+
+      return updatedCount;
+  },
+
+  getProductOrderHistory: (productId: string): { order: Order, quantity: number }[] => {
+      const orders = ensureOrdersLoaded();
+      const history: { order: Order, quantity: number }[] = [];
+      
+      orders.forEach(o => {
+          if (o.status === OrderStatus.CANCELLED) return;
+          const item = o.items.find(i => i.productId === productId);
+          if (item) {
+              history.push({ order: o, quantity: item.quantity });
+          }
+      });
+      
+      // Sort by newest
+      return history.sort((a,b) => b.order.createdAt - a.order.createdAt);
   },
 
   // --- NEW: SYNC PRODUCT UPDATES TO PENDING ORDERS ---
@@ -827,8 +1101,8 @@ export const storageService = {
     let address = order.address;
 
     if (!customerId) {
-        // Try to find matching customer
-        const existing = findMatchingCustomer(customerPhone, address);
+        // Try to find matching customer (Passing name to fuzzy match)
+        const existing = findMatchingCustomer(customerPhone, address, undefined, customerName);
         
         if (existing) {
              // NAME COLLISION CHECK: Same phone but different name?
@@ -1218,17 +1492,10 @@ export const storageService = {
   
   autoSortOrders: async (filteredOrders: Order[]) => {
       // Simple TSP-like sort or heuristics
-      // For now, just sort by address string similarity or predefined route logic
-      // In a real app, this would use Google Maps Directions API (costly)
-      
-      // We will sort by simple heuristic:
-      // Group by District/Area if present in address, then street
       return filteredOrders.length;
   },
   
   learnRoutePriority: async (sortedOrders: Order[]) => {
-      // This function would analyze the user's manual sort and update customer priority scores
-      // For now, we will just update the priorityScore of the customer record
       const list = ensureCustomersLoaded() || [];
       const batch = writeBatch(db);
       let updates = 0;
@@ -1237,8 +1504,6 @@ export const storageService = {
           if (o.customerId) {
               const cust = list.find(c => c.id === o.customerId);
               if (cust) {
-                  // Heuristic: Priority Score = Index in route
-                  // We map 0-100 based on relative position
                   const newScore = idx + 1;
                   if (cust.priorityScore !== newScore) {
                       cust.priorityScore = newScore;
@@ -1327,7 +1592,6 @@ export const storageService = {
   
   fetchLongTermStats: async () => {
       // For simple stats, we just return all orders
-      // In production, you might want to aggregate data on server-side functions
       return ensureOrdersLoaded() || [];
   },
 
@@ -1418,5 +1682,73 @@ export const storageService = {
       if (isOnline()) await batch.commit();
       
       return fixedCount;
+  },
+
+  // --- TOOL: MERGE DUPLICATE CUSTOMERS (SAME PHONE -> MERGE TO 1 ID) ---
+  mergeCustomersByPhone: async () => {
+      const customers = ensureCustomersLoaded() || [];
+      const orders = ensureOrdersLoaded() || [];
+      
+      // Group by normalized phone
+      const phoneMap = new Map<string, Customer[]>();
+      customers.forEach(c => {
+          if(c.phone && c.phone.length > 5) {
+              const p = normalizePhone(c.phone);
+              if(!phoneMap.has(p)) phoneMap.set(p, []);
+              phoneMap.get(p)!.push(c);
+          }
+      });
+
+      let mergedGroupsCount = 0;
+      const batch = writeBatch(db);
+      
+      for (const [phone, group] of phoneMap.entries()) {
+          if (group.length <= 1) continue;
+          
+          // Sort by order count (Keep the one with most orders/history)
+          group.sort((a,b) => (b.totalOrders || 0) - (a.totalOrders || 0));
+          const primary = group[0];
+          const duplicates = group.slice(1);
+          
+          // Merge Duplicates
+          for (const dup of duplicates) {
+              // 1. Update Orders pointing to duplicate
+              orders.forEach(o => {
+                  if (o.customerId === dup.id) {
+                      o.customerId = primary.id;
+                      // Update cloud
+                      if (isOnline()) batch.update(doc(db, "orders", o.id), { customerId: primary.id });
+                  }
+              });
+              
+              // 2. Sum up total orders
+              primary.totalOrders = (primary.totalOrders || 0) + (dup.totalOrders || 0);
+              
+              // 3. Delete Duplicate Customer
+              // Remove from memory
+              const idx = customers.findIndex(c => c.id === dup.id);
+              if (idx >= 0) customers.splice(idx, 1);
+              // Remove from cloud
+              if (isOnline()) batch.delete(doc(db, "customers", dup.id));
+          }
+          
+          // Update Primary Customer Stats
+          if (isOnline()) batch.update(doc(db, "customers", primary.id), { totalOrders: primary.totalOrders });
+          
+          mergedGroupsCount++;
+      }
+
+      // Save changes
+      _memoryCustomers = customers;
+      localStorage.setItem(CUSTOMER_KEY, JSON.stringify(customers));
+      window.dispatchEvent(new Event('storage_' + CUSTOMER_KEY));
+      
+      _memoryOrders = orders;
+      localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
+      window.dispatchEvent(new Event('storage_' + ORDER_KEY));
+      
+      if (isOnline()) await batch.commit();
+      
+      return mergedGroupsCount;
   }
 };

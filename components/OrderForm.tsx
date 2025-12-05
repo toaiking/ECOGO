@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import toast from 'react-hot-toast';
 import { Order, OrderStatus, Product, Customer, PaymentMethod, OrderItem } from '../types';
-import { storageService } from '../services/storageService';
+import { storageService, generateProductSku } from '../services/storageService';
 import { parseOrderText } from '../services/geminiService';
 import { differenceInDays } from 'date-fns';
 
@@ -346,29 +346,42 @@ const OrderForm: React.FC = () => {
       e.preventDefault();
       if (!newProdName) return;
       
-      const newProduct: Product = {
-          id: uuidv4(),
-          name: newProdName,
-          defaultPrice: newProdPrice || 0,
-          importPrice: newProdImportPrice || 0, // NEW
-          defaultWeight: 1,
-          stockQuantity: 100, // Default generous stock
-          totalImported: 100,
-          lastImportDate: Date.now()
-      };
+      const sku = generateProductSku(newProdName);
       
-      await storageService.saveProduct(newProduct);
+      // Check for existing product with this SKU
+      const existing = storageService.getProductBySku(sku);
       
-      // Auto select this new product for the current row
-      if (activeProductRow !== null) {
-          selectProductForItem(activeProductRow, newProduct);
+      if (existing) {
+          // Use existing product
+          if (activeProductRow !== null) {
+              selectProductForItem(activeProductRow, existing);
+          }
+          toast.success("Sản phẩm đã tồn tại trong kho, đã tự động chọn!");
+      } else {
+          // Create new
+          const newProduct: Product = {
+              id: sku,
+              name: newProdName,
+              defaultPrice: newProdPrice || 0,
+              importPrice: newProdImportPrice || 0,
+              defaultWeight: 1,
+              stockQuantity: 100, // Default generous stock
+              totalImported: 100,
+              lastImportDate: Date.now()
+          };
+          
+          await storageService.saveProduct(newProduct);
+          
+          if (activeProductRow !== null) {
+              selectProductForItem(activeProductRow, newProduct);
+          }
+          toast.success("Đã tạo và chọn sản phẩm mới!");
       }
       
       setShowQuickAddProduct(false);
       setNewProdName('');
       setNewProdPrice(0);
       setNewProdImportPrice(0);
-      toast.success("Đã tạo và chọn sản phẩm mới!");
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
