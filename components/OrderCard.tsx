@@ -20,7 +20,7 @@ interface Props {
   // Desktop Drag Events
   onDragStart?: (e: React.DragEvent<HTMLDivElement>, index: number) => void;
   onDragEnter?: (e: React.DragEvent<HTMLDivElement>, index: number) => void;
-  onDragEnd?: (e: React.DragEvent<HTMLDivElement>) => void;
+  onDragEnd?: (e: React.DragEvent<HTMLDivElement>, index: number) => void;
   onDragOver?: (e: React.DragEvent<HTMLDivElement>) => void;
 
   isNewCustomer?: boolean;
@@ -158,6 +158,7 @@ export const OrderCard: React.FC<Props> = ({
           e.stopPropagation();
           onToggleSelect(order.id);
       } else if (!isLongPressing.current) {
+          // Compact mode click -> View Detail
           if (isCompactMode && onViewDetail) {
               onViewDetail(order);
           } else {
@@ -365,9 +366,9 @@ export const OrderCard: React.FC<Props> = ({
   if (isCompactMode) {
       return (
           <>
-          {/* MOBILE VIEW (CONDENSED CARD) */}
+          {/* MOBILE VIEW (CONDENSED CARD) - Hidden on SM (Tablet) */}
           <div 
-            className={`md:hidden relative border-b border-gray-100 p-3 bg-white hover:bg-gray-50 transition-colors cursor-pointer select-none group ${isSelected ? 'bg-eco-50' : ''} ${isSortMode ? 'pr-12' : ''}`}
+            className={`sm:hidden relative border-b border-gray-100 p-3 bg-white hover:bg-gray-50 transition-colors cursor-pointer select-none group ${isSelected ? 'bg-eco-50' : ''} ${isSortMode ? 'pr-12' : ''}`}
             onClick={handleCardClick}
             onTouchStart={handleTouchStartSelection}
             onTouchMove={handleTouchMoveSelection}
@@ -410,9 +411,9 @@ export const OrderCard: React.FC<Props> = ({
                </div>
           </div>
 
-          {/* DESKTOP VIEW (EXCEL ROW STYLE) */}
+          {/* DESKTOP/TABLET VIEW (EXCEL ROW STYLE) - Visible on SM+ */}
           <div 
-            className={`hidden md:grid grid-cols-[40px_1.5fr_2fr_2fr_100px_110px_50px] gap-2 items-center border-b border-gray-100 py-2 px-3 bg-white hover:bg-blue-50 transition-colors cursor-pointer select-none text-xs group ${isSelected ? 'bg-eco-50' : ''}`}
+            className={`hidden sm:grid grid-cols-[40px_1.5fr_2fr_2fr_100px_110px_50px] gap-2 items-center border-b border-gray-100 py-2 px-3 bg-white hover:bg-blue-50 transition-colors cursor-pointer select-none text-xs group ${isSelected ? 'bg-eco-50' : ''}`}
             onClick={handleCardClick}
           >
               {/* Col 1: Select & Index */}

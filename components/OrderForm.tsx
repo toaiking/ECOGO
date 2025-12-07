@@ -494,7 +494,7 @@ const OrderForm: React.FC = () => {
         )}
 
         {/* --- MOBILE TAB HEADER --- */}
-        <div className="md:hidden flex border-b border-gray-200 bg-white shrink-0">
+        <div className="sm:hidden flex border-b border-gray-200 bg-white shrink-0">
             <button 
                 onClick={() => setMobileTab('FORM')}
                 className={`flex-1 py-3 text-sm font-bold border-b-2 transition-colors ${mobileTab === 'FORM' ? 'border-eco-600 text-eco-700' : 'border-transparent text-gray-400'}`}
@@ -509,11 +509,11 @@ const OrderForm: React.FC = () => {
             </button>
         </div>
 
-        <div className="flex flex-col md:flex-row h-full overflow-hidden">
+        <div className="flex flex-col sm:flex-row h-full overflow-hidden">
             
             {/* --- LEFT SIDE: FORM INPUT (70%) --- */}
-            {/* Logic: Hidden on Mobile if Stats Tab active. Always Flex on Desktop */}
-            <div className={`${mobileTab === 'FORM' ? 'flex' : 'hidden'} md:flex md:w-[70%] flex-col h-full overflow-hidden relative`}>
+            {/* Logic: Hidden on Mobile if Stats Tab active. Always Flex on Desktop/Tablet (SM+) */}
+            <div className={`${mobileTab === 'FORM' ? 'flex' : 'hidden'} sm:flex sm:w-[70%] flex-col h-full overflow-hidden relative`}>
                 {/* 1. HEADER */}
                 <div className="px-4 py-3 bg-gradient-to-r from-gray-50 to-white border-b border-gray-100 flex justify-between items-center shrink-0">
                     <div className="flex items-center gap-2">
@@ -732,8 +732,8 @@ const OrderForm: React.FC = () => {
             </div>
 
             {/* --- RIGHT SIDE: BATCH STATS TABLE (30% or Mobile Tab) --- */}
-            {/* Logic: Hidden on Mobile if Form Tab active. Always Flex on Desktop */}
-            <div className={`${mobileTab === 'STATS' ? 'flex' : 'hidden'} md:flex md:w-[30%] flex-col border-l border-gray-200 bg-gray-50/30 h-full overflow-hidden`}>
+            {/* Logic: Hidden on Mobile if Form Tab active. Always Flex on Desktop/Tablet (SM+) */}
+            <div className={`${mobileTab === 'STATS' ? 'flex' : 'hidden'} sm:flex sm:w-[30%] flex-col border-l border-gray-200 bg-gray-50/30 h-full overflow-hidden`}>
                 <div className="p-3 border-b border-gray-200 bg-white">
                     <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">
                         <i className="fas fa-cubes text-purple-500"></i> Thống kê Lô {batchId}

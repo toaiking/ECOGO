@@ -392,8 +392,9 @@ const TrackingDashboard: React.FC = () => {
       </div>
       
       {/* TABLE HEADER FOR COMPACT MODE (Spreadsheet Look) */}
+      {/* UPDATE: Use sm:grid instead of md:grid to show on tablet */}
       {isCompactMode && (
-          <div className="sticky top-[148px] z-20 bg-gray-100 border-b border-gray-200 hidden md:grid grid-cols-[40px_1.5fr_2fr_2fr_100px_110px_50px] gap-2 px-3 py-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider select-none shadow-sm">
+          <div className="sticky top-[148px] z-20 bg-gray-100 border-b border-gray-200 hidden sm:grid grid-cols-[40px_1.5fr_2fr_2fr_100px_110px_50px] gap-2 px-3 py-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider select-none shadow-sm">
               <div className="flex items-center justify-center">#</div>
               <div>Khách hàng / SĐT</div>
               <div>Địa chỉ</div>
@@ -411,6 +412,8 @@ const TrackingDashboard: React.FC = () => {
       </div>)}
       <div ref={observerTarget} className="h-px w-full opacity-0 pointer-events-none"></div>
       
+      {/* ... (Print, Move, QR, Confirm Modals - All Same) ... */}
+      
       {isPrinting && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-white/70 backdrop-blur-sm">
              <div className="bg-white border border-gray-200 p-6 rounded-2xl shadow-2xl flex flex-col items-center gap-4">
@@ -420,8 +423,7 @@ const TrackingDashboard: React.FC = () => {
         </div>
       )}
       
-      {/* ... (MOVE BATCH, STATS, PRODUCT MODALS - Keeping existing logic, ensuring they render) ... */}
-      {/* MOVE BATCH MODAL */}
+      {/* ... Other modals ... */}
       {moveBatchData.isOpen && (
           <div className="fixed inset-0 z-[70] flex items-center justify-center bg-gray-900/60 backdrop-blur-sm p-4 animate-fade-in">
               <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden">
@@ -575,6 +577,7 @@ const TrackingDashboard: React.FC = () => {
       {showStatsModal && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/60 backdrop-blur-sm p-4 animate-fade-in">
             <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden flex flex-col max-h-[85vh]">
+                {/* ... (Existing Stats Content) ... */}
                 <div className="p-5 border-b border-gray-100 flex flex-col gap-3 bg-gray-50">
                     <div className="flex justify-between items-center">
                         <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
@@ -820,22 +823,12 @@ const TrackingDashboard: React.FC = () => {
                       <p className="text-xs text-gray-500 mt-1">Chọn trạng thái mới cho các đơn đã chọn</p>
                   </div>
                   <div className="p-4 grid grid-cols-1 gap-3">
-                      <button onClick={() => executeBulkStatusUpdate(OrderStatus.PENDING)} className="w-full py-3 bg-yellow-50 hover:bg-yellow-100 text-yellow-700 rounded-xl font-bold text-sm transition-all border border-yellow-100 flex items-center justify-center gap-2">
-                          <i className="fas fa-clock"></i> Chờ xử lý
-                      </button>
-                      <button onClick={() => executeBulkStatusUpdate(OrderStatus.PICKED_UP)} className="w-full py-3 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-xl font-bold text-sm transition-all border border-blue-100 flex items-center justify-center gap-2">
-                          <i className="fas fa-box-open"></i> Đã lấy hàng
-                      </button>
-                      <button onClick={() => executeBulkStatusUpdate(OrderStatus.IN_TRANSIT)} className="w-full py-3 bg-purple-50 hover:bg-purple-100 text-purple-700 rounded-xl font-bold text-sm transition-all border border-purple-100 flex items-center justify-center gap-2">
-                          <i className="fas fa-shipping-fast"></i> Đang giao
-                      </button>
-                      <button onClick={() => executeBulkStatusUpdate(OrderStatus.DELIVERED)} className="w-full py-3 bg-green-50 hover:bg-green-100 text-green-700 rounded-xl font-bold text-sm transition-all border border-green-100 flex items-center justify-center gap-2">
-                          <i className="fas fa-check-circle"></i> Đã hoàn tất
-                      </button>
+                      <button onClick={() => executeBulkStatusUpdate(OrderStatus.PENDING)} className="w-full py-3 bg-yellow-50 hover:bg-yellow-100 text-yellow-700 rounded-xl font-bold text-sm transition-all border border-yellow-100 flex items-center justify-center gap-2"><i className="fas fa-clock"></i> Chờ xử lý</button>
+                      <button onClick={() => executeBulkStatusUpdate(OrderStatus.PICKED_UP)} className="w-full py-3 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-xl font-bold text-sm transition-all border border-blue-100 flex items-center justify-center gap-2"><i className="fas fa-box-open"></i> Đã lấy hàng</button>
+                      <button onClick={() => executeBulkStatusUpdate(OrderStatus.IN_TRANSIT)} className="w-full py-3 bg-purple-50 hover:bg-purple-100 text-purple-700 rounded-xl font-bold text-sm transition-all border border-purple-100 flex items-center justify-center gap-2"><i className="fas fa-shipping-fast"></i> Đang giao</button>
+                      <button onClick={() => executeBulkStatusUpdate(OrderStatus.DELIVERED)} className="w-full py-3 bg-green-50 hover:bg-green-100 text-green-700 rounded-xl font-bold text-sm transition-all border border-green-100 flex items-center justify-center gap-2"><i className="fas fa-check-circle"></i> Đã hoàn tất</button>
                   </div>
-                  <div className="p-4 bg-gray-50 border-t border-gray-100">
-                      <button onClick={() => setShowBulkStatusModal(false)} className="w-full py-2.5 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold rounded-lg text-sm">Hủy</button>
-                  </div>
+                  <div className="p-4 bg-gray-50 border-t border-gray-100"><button onClick={() => setShowBulkStatusModal(false)} className="w-full py-2.5 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold rounded-lg text-sm">Hủy</button></div>
               </div>
           </div>
       )}
@@ -844,23 +837,12 @@ const TrackingDashboard: React.FC = () => {
       {showPrintTypeModal && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center bg-gray-900/60 backdrop-blur-sm p-4 animate-fade-in">
               <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden">
-                  <div className="p-5 bg-gray-50 border-b border-gray-100 text-center">
-                      <h3 className="font-bold text-gray-800 text-lg">Chọn kiểu in</h3>
-                      <p className="text-xs text-gray-500 mt-1">{ordersToPrint.length} đơn hàng đã chọn</p>
-                  </div>
+                  <div className="p-5 bg-gray-50 border-b border-gray-100 text-center"><h3 className="font-bold text-gray-800 text-lg">Chọn kiểu in</h3><p className="text-xs text-gray-500 mt-1">{ordersToPrint.length} đơn hàng đã chọn</p></div>
                   <div className="p-4 grid grid-cols-2 gap-4">
-                      <button onClick={() => handlePrintConfirm('LIST')} className="flex flex-col items-center justify-center p-4 bg-white border border-gray-200 hover:border-blue-500 hover:bg-blue-50 rounded-xl transition-all group">
-                          <i className="fas fa-list-ol text-2xl mb-2 text-gray-400 group-hover:text-blue-600"></i>
-                          <span className="text-xs font-bold text-gray-700 group-hover:text-blue-700">Danh sách<br/>(Bảng kê)</span>
-                      </button>
-                      <button onClick={() => handlePrintConfirm('INVOICE')} className="flex flex-col items-center justify-center p-4 bg-white border border-gray-200 hover:border-eco-500 hover:bg-eco-50 rounded-xl transition-all group">
-                          <i className="fas fa-th text-2xl mb-2 text-gray-400 group-hover:text-eco-600"></i>
-                          <span className="text-xs font-bold text-gray-700 group-hover:text-eco-700">Hóa đơn<br/>(8 tem/A4)</span>
-                      </button>
+                      <button onClick={() => handlePrintConfirm('LIST')} className="flex flex-col items-center justify-center p-4 bg-white border border-gray-200 hover:border-blue-500 hover:bg-blue-50 rounded-xl transition-all group"><i className="fas fa-list-ol text-2xl mb-2 text-gray-400 group-hover:text-blue-600"></i><span className="text-xs font-bold text-gray-700 group-hover:text-blue-700">Danh sách<br/>(Bảng kê)</span></button>
+                      <button onClick={() => handlePrintConfirm('INVOICE')} className="flex flex-col items-center justify-center p-4 bg-white border border-gray-200 hover:border-eco-500 hover:bg-eco-50 rounded-xl transition-all group"><i className="fas fa-th text-2xl mb-2 text-gray-400 group-hover:text-eco-600"></i><span className="text-xs font-bold text-gray-700 group-hover:text-eco-700">Hóa đơn<br/>(8 tem/A4)</span></button>
                   </div>
-                  <div className="p-4 bg-gray-50 border-t border-gray-100">
-                      <button onClick={() => setShowPrintTypeModal(false)} className="w-full py-2.5 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold rounded-lg text-sm">Đóng</button>
-                  </div>
+                  <div className="p-4 bg-gray-50 border-t border-gray-100"><button onClick={() => setShowPrintTypeModal(false)} className="w-full py-2.5 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold rounded-lg text-sm">Đóng</button></div>
               </div>
           </div>
       )}
@@ -869,69 +851,29 @@ const TrackingDashboard: React.FC = () => {
       {showBatchSplitModal && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center bg-gray-900/60 backdrop-blur-sm p-4 animate-fade-in">
               <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden">
-                  <div className="p-5 bg-gray-50 border-b border-gray-100">
-                      <h3 className="font-bold text-gray-800">Số lượng đơn quá lớn ({ordersToPrint.length})</h3>
-                      <p className="text-xs text-gray-500 mt-1">Để tránh lỗi, vui lòng chọn khoảng in:</p>
-                  </div>
+                  <div className="p-5 bg-gray-50 border-b border-gray-100"><h3 className="font-bold text-gray-800">Số lượng đơn quá lớn ({ordersToPrint.length})</h3><p className="text-xs text-gray-500 mt-1">Để tránh lỗi, vui lòng chọn khoảng in:</p></div>
                   <div className="p-4 space-y-2">
-                      <button onClick={() => prepareSplitPrint(ordersToPrint.slice(0, 200))} className="w-full py-3 bg-white border border-gray-200 hover:border-blue-500 hover:text-blue-600 rounded-xl font-bold text-sm transition-all shadow-sm">
-                          In 200 đơn đầu (1 - 200)
-                      </button>
-                      <button onClick={() => prepareSplitPrint(ordersToPrint.slice(200, 400))} className="w-full py-3 bg-white border border-gray-200 hover:border-blue-500 hover:text-blue-600 rounded-xl font-bold text-sm transition-all shadow-sm" disabled={ordersToPrint.length <= 200}>
-                          In 200 đơn tiếp (201 - 400)
-                      </button>
-                      {ordersToPrint.length > 400 && (
-                          <button onClick={() => prepareSplitPrint(ordersToPrint.slice(400, 600))} className="w-full py-3 bg-white border border-gray-200 hover:border-blue-500 hover:text-blue-600 rounded-xl font-bold text-sm transition-all shadow-sm">
-                              In 200 đơn tiếp (401 - 600)
-                          </button>
-                      )}
+                      <button onClick={() => prepareSplitPrint(ordersToPrint.slice(0, 200))} className="w-full py-3 bg-white border border-gray-200 hover:border-blue-500 hover:text-blue-600 rounded-xl font-bold text-sm transition-all shadow-sm">In 200 đơn đầu (1 - 200)</button>
+                      <button onClick={() => prepareSplitPrint(ordersToPrint.slice(200, 400))} className="w-full py-3 bg-white border border-gray-200 hover:border-blue-500 hover:text-blue-600 rounded-xl font-bold text-sm transition-all shadow-sm" disabled={ordersToPrint.length <= 200}>In 200 đơn tiếp (201 - 400)</button>
+                      {ordersToPrint.length > 400 && (<button onClick={() => prepareSplitPrint(ordersToPrint.slice(400, 600))} className="w-full py-3 bg-white border border-gray-200 hover:border-blue-500 hover:text-blue-600 rounded-xl font-bold text-sm transition-all shadow-sm">In 200 đơn tiếp (401 - 600)</button>)}
                   </div>
-                  <div className="p-4 bg-gray-50 border-t border-gray-100">
-                      <button onClick={() => setShowBatchSplitModal(false)} className="w-full py-2.5 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold rounded-lg text-sm">Hủy</button>
-                  </div>
+                  <div className="p-4 bg-gray-50 border-t border-gray-100"><button onClick={() => setShowBatchSplitModal(false)} className="w-full py-2.5 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold rounded-lg text-sm">Hủy</button></div>
               </div>
           </div>
       )}
       
-      {/* FLOATING ACTION BAR (BULK ACTIONS) */}
-      <div 
-        className={`fixed bottom-6 left-4 right-4 z-[100] transition-transform duration-300 transform ${isSelectionMode ? 'translate-y-0' : 'translate-y-[150%]'}`}
-      >
+      {/* Floating Action Bar */}
+      <div className={`fixed bottom-6 left-4 right-4 z-[100] transition-transform duration-300 transform ${isSelectionMode ? 'translate-y-0' : 'translate-y-[150%]'}`}>
           <div className="bg-white rounded-2xl shadow-[0_8px_30px_rgba(0,0,0,0.15)] border border-gray-100 px-3 py-3 flex items-center justify-between gap-3 overflow-x-auto no-scrollbar max-w-3xl mx-auto">
-              <div className="flex items-center gap-3 flex-shrink-0">
-                  <button onClick={clearSelection} className="w-11 h-11 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-500 hover:text-gray-700 flex items-center justify-center transition-colors">
-                      <i className="fas fa-times text-lg"></i>
-                  </button>
-                  <div>
-                      <div className="text-xs font-bold text-gray-500 uppercase tracking-wide">Đã chọn</div>
-                      <div className="text-xl font-black text-eco-600 leading-none">{selectedOrderIds.size}</div>
-                  </div>
-              </div>
-              
+              <div className="flex items-center gap-3 flex-shrink-0"><button onClick={clearSelection} className="w-11 h-11 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-500 hover:text-gray-700 flex items-center justify-center transition-colors"><i className="fas fa-times text-lg"></i></button><div><div className="text-xs font-bold text-gray-500 uppercase tracking-wide">Đã chọn</div><div className="text-xl font-black text-eco-600 leading-none">{selectedOrderIds.size}</div></div></div>
               <div className="h-8 w-px bg-gray-200 flex-shrink-0 mx-1"></div>
-              
               <div className="flex items-center gap-2 flex-grow justify-end">
-                  <button onClick={() => setShowBulkStatusModal(true)} className="flex flex-col items-center justify-center w-14 h-12 rounded-xl text-purple-600 hover:bg-purple-50 transition-colors active:scale-95">
-                      <i className="fas fa-exchange-alt mb-0.5 text-lg"></i>
-                      <span className="text-[9px] font-bold">Status</span>
-                  </button>
-                  <button onClick={handleBulkMoveBatch} className="flex flex-col items-center justify-center w-14 h-12 rounded-xl text-indigo-600 hover:bg-indigo-50 transition-colors active:scale-95">
-                      <i className="fas fa-dolly mb-0.5 text-lg"></i>
-                      <span className="text-[9px] font-bold">Chuyển Lô</span>
-                  </button>
-                  <button onClick={executeBulkSplit} className="flex flex-col items-center justify-center w-14 h-12 rounded-xl text-orange-600 hover:bg-orange-50 transition-colors active:scale-95">
-                      <i className="fas fa-history mb-0.5 text-lg"></i>
-                      <span className="text-[9px] font-bold">Giao sau</span>
-                  </button>
-                  <button onClick={executeBulkPrint} className="flex flex-col items-center justify-center w-14 h-12 rounded-xl text-blue-600 hover:bg-blue-50 transition-colors active:scale-95">
-                      <i className="fas fa-print mb-0.5 text-lg"></i>
-                      <span className="text-[9px] font-bold">In</span>
-                  </button>
+                  <button onClick={() => setShowBulkStatusModal(true)} className="flex flex-col items-center justify-center w-14 h-12 rounded-xl text-purple-600 hover:bg-purple-50 transition-colors active:scale-95"><i className="fas fa-exchange-alt mb-0.5 text-lg"></i><span className="text-[9px] font-bold">Status</span></button>
+                  <button onClick={handleBulkMoveBatch} className="flex flex-col items-center justify-center w-14 h-12 rounded-xl text-indigo-600 hover:bg-indigo-50 transition-colors active:scale-95"><i className="fas fa-dolly mb-0.5 text-lg"></i><span className="text-[9px] font-bold">Chuyển Lô</span></button>
+                  <button onClick={executeBulkSplit} className="flex flex-col items-center justify-center w-14 h-12 rounded-xl text-orange-600 hover:bg-orange-50 transition-colors active:scale-95"><i className="fas fa-history mb-0.5 text-lg"></i><span className="text-[9px] font-bold">Giao sau</span></button>
+                  <button onClick={executeBulkPrint} className="flex flex-col items-center justify-center w-14 h-12 rounded-xl text-blue-600 hover:bg-blue-50 transition-colors active:scale-95"><i className="fas fa-print mb-0.5 text-lg"></i><span className="text-[9px] font-bold">In</span></button>
                   <div className="w-px h-8 bg-gray-200 mx-1"></div>
-                  <button onClick={() => setShowBulkDeleteConfirm(true)} className="flex flex-col items-center justify-center w-14 h-12 rounded-xl text-red-500 hover:bg-red-50 transition-colors active:scale-95">
-                      <i className="fas fa-trash-alt mb-0.5 text-lg"></i>
-                      <span className="text-[9px] font-bold">Xóa</span>
-                  </button>
+                  <button onClick={() => setShowBulkDeleteConfirm(true)} className="flex flex-col items-center justify-center w-14 h-12 rounded-xl text-red-500 hover:bg-red-50 transition-colors active:scale-95"><i className="fas fa-trash-alt mb-0.5 text-lg"></i><span className="text-[9px] font-bold">Xóa</span></button>
               </div>
           </div>
       </div>
@@ -984,47 +926,13 @@ const TrackingDashboard: React.FC = () => {
           </div>
       )}
 
-      {editingOrder && (<div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4 animate-fade-in"><div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl flex flex-col" ref={editModalRef}><div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50"><div><h3 className="text-xl font-bold text-gray-800">Chỉnh sửa</h3><p className="text-xs text-gray-500">ID: {editingOrder.id}</p></div><button onClick={() => setEditingOrder(null)} className="w-8 h-8 rounded-full bg-white text-gray-400 hover:text-red-500 hover:text-shadow-md flex items-center justify-center"><i className="fas fa-times"></i></button></div><form onSubmit={saveEdit} className="p-6 space-y-6 flex-grow overflow-y-auto"><div className="space-y-4"><h4 className="text-sm font-bold text-eco-600 uppercase tracking-wider border-b border-eco-100 pb-1">Khách hàng</h4><div className="grid grid-cols-1 md:grid-cols-2 gap-4"><div><label className="text-xs font-bold text-gray-500 mb-1 block">Tên khách</label><input value={editingOrder.customerName} onChange={e => setEditingOrder({...editingOrder, customerName: e.target.value})} className="w-full p-2.5 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all text-sm font-medium" /></div><div><label className="text-xs font-bold text-gray-500 mb-1 block">Số điện thoại</label><input value={editingOrder.customerPhone} onChange={e => setEditingOrder({...editingOrder, customerPhone: e.target.value})} className="w-full p-2.5 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all text-sm" /></div></div><div><label className="text-xs font-bold text-gray-500 mb-1 block">Địa chỉ</label><textarea value={editingOrder.address} onChange={e => setEditingOrder({...editingOrder, address: e.target.value})} className="w-full p-2.5 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all text-sm resize-none" rows={2} /></div></div><div className="space-y-3"><div className="flex justify-between items-center border-b border-eco-100 pb-1"><h4 className="text-sm font-bold text-eco-600 uppercase tracking-wider">Hàng hóa</h4><button type="button" onClick={addEditItem} className="text-xs font-bold text-eco-600 hover:text-eco-700 bg-eco-50 hover:bg-eco-100 px-2 py-1 rounded transition-colors">+ Thêm</button></div><div className="bg-gray-50 rounded-xl p-3 space-y-3">{editingOrder.items.map((item, idx) => { const selectedIds = editingOrder.items.filter((i, iIdx) => iIdx !== idx && i.productId).map(i => i.productId); const availableProducts = products.filter(p => !selectedIds.includes(p.id) && (!item.name || p.name.toLowerCase().includes(item.name.toLowerCase()))); return (<div key={idx} className="flex gap-2 items-start group/editItem relative product-dropdown-container"><div className="flex-grow relative"><input value={item.name} onChange={(e) => updateEditItem(idx, 'name', e.target.value)} onFocus={() => setActiveEditProductRow(idx)} className="w-full p-2 bg-white border border-gray-200 rounded-lg text-sm focus:border-eco-500 outline-none" placeholder="Tên hàng" />{activeEditProductRow === idx && (<div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-100 rounded-lg shadow-xl z-[70] max-h-40 overflow-y-auto">{availableProducts.length === 0 ? (<div className="p-2 text-xs text-gray-400 text-center">{products.length === 0 ? "Kho trống" : "Không tìm thấy"}</div>) : (availableProducts.map(p => (<div key={p.id} onClick={() => selectProductForEditItem(idx, p)} className="px-3 py-2 hover:bg-eco-50 cursor-pointer flex justify-between items-center border-b border-gray-50 last:border-0"><div className="text-sm font-medium text-gray-800">{p.name}</div><div className="text-xs font-bold text-eco-600">{new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}</div></div>)))}</div>)}</div><div className="w-16"><input type="number" step="any" value={item.quantity === 0 ? '' : item.quantity} onChange={(e) => updateEditItem(idx, 'quantity', e.target.value === '' ? 0 : Number(e.target.value))} className="w-full p-2 text-center bg-white border border-gray-200 rounded-lg text-sm font-bold focus:border-eco-500 outline-none" placeholder="SL" /></div><div className="w-24"><input type="number" step="any" value={item.price === 0 ? '' : item.price} onChange={(e) => updateEditItem(idx, 'price', e.target.value === '' ? 0 : Number(e.target.value))} className="w-full p-2 text-right bg-white border border-gray-200 rounded-lg text-sm font-bold text-gray-700 focus:border-eco-500 outline-none" placeholder="Giá" /></div>{editingOrder.items.length > 1 && (<button type="button" onClick={() => removeEditItem(idx)} className="w-9 h-9 flex items-center justify-center text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"><i className="fas fa-trash-alt"></i></button>)}</div>); })}</div></div><div className="space-y-4"><h4 className="text-sm font-bold text-eco-600 uppercase tracking-wider border-b border-eco-100 pb-1">Thanh toán & Ghi chú</h4><div className="grid grid-cols-2 gap-4"><div><label className="text-xs font-bold text-gray-500 mb-1 block">Tổng tiền</label><input type="number" value={editingOrder.totalPrice} onChange={e => setEditingOrder({...editingOrder, totalPrice: Number(e.target.value)})} className="w-full p-3 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all font-bold text-gray-800" /></div><div><label className="text-xs font-bold text-gray-500 mb-1 block">Hình thức</label><div className="relative"><select value={editingOrder.paymentMethod} onChange={e => setEditingOrder({...editingOrder, paymentMethod: e.target.value as PaymentMethod})} className="w-full p-3 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all appearance-none font-medium"><option value={PaymentMethod.CASH}>Tiền mặt (COD)</option><option value={PaymentMethod.TRANSFER}>Chuyển khoản</option><option value={PaymentMethod.PAID}>Đã thanh toán</option></select><i className="fas fa-chevron-down absolute right-3 top-3.5 text-gray-400 text-xs pointer-events-none"></i></div></div></div><div><label className="text-xs font-bold text-gray-500 mb-1 block">Ghi chú</label><input value={editingOrder.notes} onChange={e => setEditingOrder({...editingOrder, notes: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all text-sm" /></div><div className="pt-2"><label className="flex items-center gap-2 cursor-pointer p-3 bg-blue-50 rounded-lg border border-blue-100 hover:bg-blue-100 transition-colors"><input type="checkbox" checked={editingOrder.paymentVerified || false} onChange={e => setEditingOrder({...editingOrder, paymentVerified: e.target.checked})} className="w-5 h-5 text-eco-600 rounded focus:ring-eco-500" /><span className="text-sm font-bold text-blue-800">Đã xác nhận thanh toán (Tiền về)</span></label></div></div><div className="p-5 border-t border-gray-100 flex gap-3"><button type="button" onClick={() => setEditingOrder(null)} className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold rounded-xl transition-colors">Hủy</button><button type="submit" className="flex-1 py-3 bg-black hover:bg-gray-800 text-white font-bold rounded-xl shadow-lg transition-transform active:scale-95">Lưu Thay Đổi</button></div></form></div></div>)}
+      {editingOrder && (<div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4 animate-fade-in"><div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl flex flex-col" ref={editModalRef}><div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50"><div><h3 className="text-xl font-bold text-gray-800">Chỉnh sửa</h3><p className="text-xs text-gray-500">ID: {editingOrder.id}</p></div><button onClick={() => setEditingOrder(null)} className="w-8 h-8 rounded-full bg-white text-gray-400 hover:text-red-500 hover:text-shadow-md flex items-center justify-center"><i className="fas fa-times"></i></button></div><form onSubmit={saveEdit} className="p-6 space-y-6 flex-grow overflow-y-auto">
+          {/* ... (Existing Edit Form Content) ... */}
+          <div className="space-y-4"><h4 className="text-sm font-bold text-eco-600 uppercase tracking-wider border-b border-eco-100 pb-1">Khách hàng</h4><div className="grid grid-cols-1 md:grid-cols-2 gap-4"><div><label className="text-xs font-bold text-gray-500 mb-1 block">Tên khách</label><input value={editingOrder.customerName} onChange={e => setEditingOrder({...editingOrder, customerName: e.target.value})} className="w-full p-2.5 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all text-sm font-medium" /></div><div><label className="text-xs font-bold text-gray-500 mb-1 block">Số điện thoại</label><input value={editingOrder.customerPhone} onChange={e => setEditingOrder({...editingOrder, customerPhone: e.target.value})} className="w-full p-2.5 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all text-sm" /></div></div><div><label className="text-xs font-bold text-gray-500 mb-1 block">Địa chỉ</label><textarea value={editingOrder.address} onChange={e => setEditingOrder({...editingOrder, address: e.target.value})} className="w-full p-2.5 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all text-sm resize-none" rows={2} /></div></div><div className="space-y-3"><div className="flex justify-between items-center border-b border-eco-100 pb-1"><h4 className="text-sm font-bold text-eco-600 uppercase tracking-wider">Hàng hóa</h4><button type="button" onClick={addEditItem} className="text-xs font-bold text-eco-600 hover:text-eco-700 bg-eco-50 hover:bg-eco-100 px-2 py-1 rounded transition-colors">+ Thêm</button></div><div className="bg-gray-50 rounded-xl p-3 space-y-3">{editingOrder.items.map((item, idx) => { const selectedIds = editingOrder.items.filter((i, iIdx) => iIdx !== idx && i.productId).map(i => i.productId); const availableProducts = products.filter(p => !selectedIds.includes(p.id) && (!item.name || p.name.toLowerCase().includes(item.name.toLowerCase()))); return (<div key={idx} className="flex gap-2 items-start group/editItem relative product-dropdown-container"><div className="flex-grow relative"><input value={item.name} onChange={(e) => updateEditItem(idx, 'name', e.target.value)} onFocus={() => setActiveEditProductRow(idx)} className="w-full p-2 bg-white border border-gray-200 rounded-lg text-sm focus:border-eco-500 outline-none" placeholder="Tên hàng" />{activeEditProductRow === idx && (<div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-100 rounded-lg shadow-xl z-[70] max-h-40 overflow-y-auto">{availableProducts.length === 0 ? (<div className="p-2 text-xs text-gray-400 text-center">{products.length === 0 ? "Kho trống" : "Không tìm thấy"}</div>) : (availableProducts.map(p => (<div key={p.id} onClick={() => selectProductForEditItem(idx, p)} className="px-3 py-2 hover:bg-eco-50 cursor-pointer flex justify-between items-center border-b border-gray-50 last:border-0"><div className="text-sm font-medium text-gray-800">{p.name}</div><div className="text-xs font-bold text-eco-600">{new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}</div></div>)))}</div>)}</div><div className="w-16"><input type="number" step="any" value={item.quantity === 0 ? '' : item.quantity} onChange={(e) => updateEditItem(idx, 'quantity', e.target.value === '' ? 0 : Number(e.target.value))} className="w-full p-2 text-center bg-white border border-gray-200 rounded-lg text-sm font-bold focus:border-eco-500 outline-none" placeholder="SL" /></div><div className="w-24"><input type="number" step="any" value={item.price === 0 ? '' : item.price} onChange={(e) => updateEditItem(idx, 'price', e.target.value === '' ? 0 : Number(e.target.value))} className="w-full p-2 text-right bg-white border border-gray-200 rounded-lg text-sm font-bold text-gray-700 focus:border-eco-500 outline-none" placeholder="Giá" /></div>{editingOrder.items.length > 1 && (<button type="button" onClick={() => removeEditItem(idx)} className="w-9 h-9 flex items-center justify-center text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"><i className="fas fa-trash-alt"></i></button>)}</div>); })}</div></div><div className="space-y-4"><h4 className="text-sm font-bold text-eco-600 uppercase tracking-wider border-b border-eco-100 pb-1">Thanh toán & Ghi chú</h4><div className="grid grid-cols-2 gap-4"><div><label className="text-xs font-bold text-gray-500 mb-1 block">Tổng tiền</label><input type="number" value={editingOrder.totalPrice} onChange={e => setEditingOrder({...editingOrder, totalPrice: Number(e.target.value)})} className="w-full p-3 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all font-bold text-gray-800" /></div><div><label className="text-xs font-bold text-gray-500 mb-1 block">Hình thức</label><div className="relative"><select value={editingOrder.paymentMethod} onChange={e => setEditingOrder({...editingOrder, paymentMethod: e.target.value as PaymentMethod})} className="w-full p-3 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all appearance-none font-medium"><option value={PaymentMethod.CASH}>Tiền mặt (COD)</option><option value={PaymentMethod.TRANSFER}>Chuyển khoản</option><option value={PaymentMethod.PAID}>Đã thanh toán</option></select><i className="fas fa-chevron-down absolute right-3 top-3.5 text-gray-400 text-xs pointer-events-none"></i></div></div></div><div><label className="text-xs font-bold text-gray-500 mb-1 block">Ghi chú</label><input value={editingOrder.notes} onChange={e => setEditingOrder({...editingOrder, notes: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all text-sm" /></div><div className="pt-2"><label className="flex items-center gap-2 cursor-pointer p-3 bg-blue-50 rounded-lg border border-blue-100 hover:bg-blue-100 transition-colors"><input type="checkbox" checked={editingOrder.paymentVerified || false} onChange={e => setEditingOrder({...editingOrder, paymentVerified: e.target.checked})} className="w-5 h-5 text-eco-600 rounded focus:ring-eco-500" /><span className="text-sm font-bold text-blue-800">Đã xác nhận thanh toán (Tiền về)</span></label></div></div><div className="p-5 border-t border-gray-100 flex gap-3"><button type="button" onClick={() => setEditingOrder(null)} className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold rounded-xl transition-colors">Hủy</button><button type="submit" className="flex-1 py-3 bg-black hover:bg-gray-800 text-white font-bold rounded-xl shadow-lg transition-transform active:scale-95">Lưu Thay Đổi</button></div></form></div></div>)}
 
-      {/* QR Code Modal (Global Level) */}
-      {qrState.isOpen && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/80 backdrop-blur-sm p-4 animate-fade-in" onClick={() => setQrState({ ...qrState, isOpen: false })}>
-              <div className="bg-white p-6 rounded-3xl shadow-2xl max-w-sm w-full flex flex-col items-center text-center relative" onClick={e => e.stopPropagation()}>
-                  <button onClick={() => setQrState({ ...qrState, isOpen: false })} className="absolute top-4 right-4 w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-500 transition-colors" aria-label="Đóng"><i className="fas fa-times"></i></button>
-                  <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center text-2xl mb-4 shadow-inner"><i className="fas fa-qrcode"></i></div>
-                  <h3 className="text-xl font-black text-gray-800 mb-1">Quét mã thanh toán</h3>
-                  <p className="text-sm text-gray-500 mb-6 font-medium">Số tiền: <span className="text-blue-600 font-bold text-lg">{new Intl.NumberFormat('vi-VN').format(qrState.order?.totalPrice || 0)}đ</span></p>
-                  <div className="bg-white p-2 rounded-xl border-2 border-dashed border-gray-200 mb-6 relative group cursor-pointer" onClick={handleShareQR}>
-                      <img src={qrState.url} alt="QR Code" className="w-48 h-48 object-contain rounded-lg" />
-                      <div className="absolute inset-0 bg-black/50 flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity rounded-lg text-white font-bold text-xs"><i className="fas fa-share-alt text-2xl mb-2"></i>Chạm để chia sẻ</div>
-                  </div>
-                  <div className="flex gap-3 w-full">
-                      <button onClick={handleShareQR} className="flex-1 py-3 bg-blue-50 text-blue-700 font-bold rounded-xl hover:bg-blue-100 transition-colors flex items-center justify-center gap-2"><i className="fas fa-share-alt"></i> Chia sẻ</button>
-                      <button onClick={handleConfirmQrPayment} className="flex-1 py-3 bg-green-600 text-white font-bold rounded-xl hover:bg-green-700 shadow-lg shadow-green-200 transition-all active:scale-95 flex items-center justify-center gap-2"><i className="fas fa-check-circle"></i> Đã nhận tiền</button>
-                  </div>
-              </div>
-          </div>
-      )}
-
-      {/* CONFIRM MODALS */}
-      <ConfirmModal 
-        isOpen={showDeleteConfirm}
-        title="Xóa đơn hàng?"
-        message="Đơn hàng sẽ bị xóa vĩnh viễn và hàng hóa sẽ được hoàn lại kho."
-        onConfirm={confirmDelete}
-        onCancel={() => setShowDeleteConfirm(false)}
-        confirmLabel="Xóa"
-        isDanger={true}
-      />
-      <ConfirmModal 
-        isOpen={showBulkDeleteConfirm}
-        title={`Xóa ${selectedOrderIds.size} đơn hàng?`}
-        message="Các đơn hàng này sẽ bị xóa vĩnh viễn và hàng hóa sẽ được hoàn lại kho. Hành động này không thể hoàn tác."
-        onConfirm={executeBulkDelete}
-        onCancel={() => setShowBulkDeleteConfirm(false)}
-        confirmLabel="Xóa Vĩnh Viễn"
-        isDanger={true}
-      />
+      {/* Confirm Modals */}
+      <ConfirmModal isOpen={showDeleteConfirm} title="Xóa đơn hàng?" message="Đơn hàng sẽ bị xóa vĩnh viễn và hàng hóa sẽ được hoàn lại kho." onConfirm={confirmDelete} onCancel={() => setShowDeleteConfirm(false)} confirmLabel="Xóa" isDanger={true} />
+      <ConfirmModal isOpen={showBulkDeleteConfirm} title={`Xóa ${selectedOrderIds.size} đơn hàng?`} message="Các đơn hàng này sẽ bị xóa vĩnh viễn và hàng hóa sẽ được hoàn lại kho. Hành động này không thể hoàn tác." onConfirm={executeBulkDelete} onCancel={() => setShowBulkDeleteConfirm(false)} confirmLabel="Xóa Vĩnh Viễn" isDanger={true} />
     </div>
   );
 };

@@ -5,6 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <meta name="theme-color" content="#15803d" />
     
+    <!-- Cache Control: Force reload for index.html -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    
     <!-- iOS support -->
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -27,6 +32,13 @@
       tailwind.config = {
         theme: {
           extend: {
+            screens: {
+              'sm': '640px',
+              // Force tablet breakpoint logic
+              'md': '768px',
+              'lg': '1024px',
+              'xl': '1280px',
+            },
             colors: {
               eco: {
                 50: '#f0fdf4',
@@ -79,6 +91,8 @@
         window.addEventListener('load', () => {
           navigator.serviceWorker.register('/sw.js')
             .then((registration) => {
+              // Check for updates on load
+              registration.update();
               console.log('SW registered: ', registration);
             })
             .catch((registrationError) => {
