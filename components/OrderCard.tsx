@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { Order, OrderStatus, PaymentMethod, Customer } from '../types';
@@ -17,10 +16,10 @@ interface Props {
   onTouchMove?: (e: React.TouchEvent<HTMLDivElement>) => void;
   onTouchEnd?: (e: React.TouchEvent<HTMLDivElement>) => void;
   
-  // Desktop Drag Events
-  onDragStart?: (e: React.DragEvent<HTMLDivElement>, index: number) => void;
-  onDragEnter?: (e: React.DragEvent<HTMLDivElement>, index: number) => void;
-  onDragEnd?: (e: React.DragEvent<HTMLDivElement>, index: number) => void;
+  // Desktop Drag Events - Renamed to avoid TS2322 conflict with native onDragStart
+  onRowDragStart?: (e: React.DragEvent<HTMLDivElement>, index: number) => void;
+  onRowDragEnter?: (e: React.DragEvent<HTMLDivElement>, index: number) => void;
+  onDragEnd?: (e: React.DragEvent<HTMLDivElement>) => void;
   onDragOver?: (e: React.DragEvent<HTMLDivElement>) => void;
 
   isNewCustomer?: boolean;
@@ -94,7 +93,7 @@ export const OrderCard: React.FC<Props> = ({
   order, onUpdate, onDelete, onEdit, 
   isSortMode, index, isCompactMode,
   onTouchStart, onTouchMove, onTouchEnd,
-  onDragStart, onDragEnter, onDragEnd, onDragOver,
+  onRowDragStart, onRowDragEnter, onDragEnd, onDragOver,
   isNewCustomer, onSplitBatch, priorityScore,
   customerData,
   isSelectionMode, isSelected, onToggleSelect, onLongPress,
@@ -158,7 +157,6 @@ export const OrderCard: React.FC<Props> = ({
           e.stopPropagation();
           onToggleSelect(order.id);
       } else if (!isLongPressing.current) {
-          // Compact mode click -> View Detail
           if (isCompactMode && onViewDetail) {
               onViewDetail(order);
           } else {
@@ -345,8 +343,17 @@ export const OrderCard: React.FC<Props> = ({
             onTouchStart={onTouchStart}
             onTouchMove={onTouchMove}
             onTouchEnd={onTouchEnd}
-            onDragStart={(e) => onDragStart && index !== undefined && onDragStart(e, index)}
-            onDragEnter={(e) => onDragEnter && index !== undefined && onDragEnter(e, index)}
+            onDragStart={(e) => {
+                // Fix TS2322: Call the custom prop with index, ignore React's event if not needed or pass it
+                if (onRowDragStart && index !== undefined) {
+                    onRowDragStart(e, index);
+                }
+            }}
+            onDragEnter={(e) => {
+                if (onRowDragEnter && index !== undefined) {
+                    onRowDragEnter(e, index);
+                }
+            }}
             onDragEnd={onDragEnd}
             onDragOver={onDragOver}
             draggable={true}
