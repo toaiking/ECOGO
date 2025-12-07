@@ -1,16 +1,21 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import toast from 'react-hot-toast';
 import { Order, OrderStatus, Product, Customer, PaymentMethod, OrderItem } from '../types';
-import { storageService, generateProductSku } from '../services/storageService';
+import { storageService, generateProductSku, normalizeString } from '../services/storageService';
 import { parseOrderText } from '../services/geminiService';
 import { differenceInDays } from 'date-fns';
+import { ProductEditModal } from './InventoryManager';
 
 const OrderForm: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]); // Need orders to calc batch stats
   
+  // Mobile Tab State
+  const [mobileTab, setMobileTab] = useState<'FORM' | 'STATS'>('FORM');
+
   // Suggestions State
   const [showCustomerSuggestions, setShowCustomerSuggestions] = useState(false);
   const [activeProductRow, setActiveProductRow] = useState<number | null>(null);
@@ -27,11 +32,10 @@ const OrderForm: React.FC = () => {
   const [isListening, setIsListening] = useState(false);
   const [isProcessingAI, setIsProcessingAI] = useState(false);
 
-  // Quick Add Product Modal State
-  const [showQuickAddProduct, setShowQuickAddProduct] = useState(false);
-  const [newProdName, setNewProdName] = useState('');
-  const [newProdPrice, setNewProdPrice] = useState(0);
-  const [newProdImportPrice, setNewProdImportPrice] = useState(0); // NEW
+  // Quick Add/Edit Product Modal State
+  const [showProductModal, setShowProductModal] = useState(false);
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [editMode, setEditMode] = useState<'IMPORT' | 'SET'>('IMPORT');
 
   // Added customerId to state
   const [customerInfo, setCustomerInfo] = useState({
@@ -61,10 +65,11 @@ const OrderForm: React.FC = () => {
     loadTags();
     window.addEventListener('local_tags_updated', loadTags);
 
-    // Batch Logic
-    const unsubOrders = storageService.subscribeOrders((orders) => {
+    // Batch & Orders Logic
+    const unsubOrders = storageService.subscribeOrders((loadedOrders) => {
+        setOrders(loadedOrders);
         const batchActivity = new Map<string, number>();
-        orders.forEach(o => {
+        loadedOrders.forEach(o => {
             if (o.batchId) {
                 const lastTime = batchActivity.get(o.batchId) || 0;
                 batchActivity.set(o.batchId, Math.max(lastTime, o.createdAt));
@@ -114,6 +119,60 @@ const OrderForm: React.FC = () => {
   }, []);
 
   const totalPrice = items.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0);
+
+  // --- BATCH STATISTICS CALCULATION ---
+  const batchStats = useMemo(() => {
+      const statsMap = new Map<string, { qty: number }>();
+      
+      // 1. Calculate sold quantity for the current batch
+      orders.forEach(o => {
+          if (o.batchId === batchId && o.status !== OrderStatus.CANCELLED) {
+              o.items.forEach(item => {
+                  const normName = normalizeString(item.name);
+                  const current = statsMap.get(normName) || { qty: 0 };
+                  current.qty += item.quantity;
+                  statsMap.set(normName, current);
+              });
+          }
+      });
+
+      // 2. Map to products to get stock info
+      const result = products.map(p => {
+          const normName = normalizeString(p.name);
+          const soldInBatch = statsMap.get(normName)?.qty || 0;
+          
+          const stock = p.stockQuantity || 0;
+          const totalImported = p.totalImported || 0;
+          
+          return {
+              product: p,
+              soldInBatch,
+              stock,
+              totalImported
+          };
+      });
+
+      // Filter: Only show products sold in this batch OR low stock products
+      // Sort: Most sold in batch -> Least sold
+      return result
+          .filter(item => item.soldInBatch > 0)
+          .sort((a, b) => b.soldInBatch - a.soldInBatch);
+
+  }, [orders, products, batchId]);
+
+  // --- HANDLERS ---
+
+  const handleEditProduct = (product: Product) => {
+      setEditingProduct(product);
+      setEditMode('IMPORT'); // Default to import/add more
+      setShowProductModal(true);
+  };
+
+  const handleSaveProduct = async (productData: Product) => {
+      await storageService.saveProduct(productData);
+      toast.success("Đã cập nhật hàng hóa");
+      setEditingProduct(null); // Close modal triggers re-render via state update
+  };
 
   // --- VOICE & AI LOGIC ---
   const handleVoiceInput = () => {
@@ -342,46 +401,10 @@ const OrderForm: React.FC = () => {
       if (nameInputRef.current) nameInputRef.current.focus();
   };
 
-  const handleQuickAddProduct = async (e: React.FormEvent) => {
-      e.preventDefault();
-      if (!newProdName) return;
-      
-      const sku = generateProductSku(newProdName);
-      
-      // Check for existing product with this SKU
-      const existing = storageService.getProductBySku(sku);
-      
-      if (existing) {
-          // Use existing product
-          if (activeProductRow !== null) {
-              selectProductForItem(activeProductRow, existing);
-          }
-          toast.success("Sản phẩm đã tồn tại trong kho, đã tự động chọn!");
-      } else {
-          // Create new
-          const newProduct: Product = {
-              id: sku,
-              name: newProdName,
-              defaultPrice: newProdPrice || 0,
-              importPrice: newProdImportPrice || 0,
-              defaultWeight: 1,
-              stockQuantity: 100, // Default generous stock
-              totalImported: 100,
-              lastImportDate: Date.now()
-          };
-          
-          await storageService.saveProduct(newProduct);
-          
-          if (activeProductRow !== null) {
-              selectProductForItem(activeProductRow, newProduct);
-          }
-          toast.success("Đã tạo và chọn sản phẩm mới!");
-      }
-      
-      setShowQuickAddProduct(false);
-      setNewProdName('');
-      setNewProdPrice(0);
-      setNewProdImportPrice(0);
+  const handleQuickCreateProduct = () => {
+      setEditingProduct(null); // Create new
+      setEditMode('IMPORT');
+      setShowProductModal(true);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -405,7 +428,7 @@ const OrderForm: React.FC = () => {
                 const deductQty = Number(item.quantity) || 0;
                 const newStock = Math.max(0, currentStock - deductQty);
                 
-                // Update product in storage, explicitly setting totalImported so it doesn't get lost or reset
+                // Update product in storage
                 await storageService.saveProduct({
                     ...product,
                     stockQuantity: newStock,
@@ -451,12 +474,14 @@ const OrderForm: React.FC = () => {
           .map(item => item.productId);
   };
 
-  const inputClass = "w-full px-3 py-2.5 bg-gray-50 focus:bg-white border border-gray-200 focus:border-eco-500 rounded-xl outline-none transition-all text-sm font-medium placeholder-gray-400";
-  const labelClass = "block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5 ml-1";
+  const inputClass = "w-full px-2 py-2 bg-gray-50 focus:bg-white border border-gray-200 focus:border-eco-500 rounded-lg outline-none transition-all text-sm font-medium placeholder-gray-400";
+  const labelClass = "block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-0.5 ml-1";
+
+  // Total Quantity in current batch
+  const totalSoldInBatch = batchStats.reduce((sum, item) => sum + item.soldInBatch, 0);
 
   return (
-    <div className="max-w-7xl mx-auto pb-24 animate-fade-in">
-      <div className="bg-white rounded-3xl shadow-xl border border-gray-100 overflow-hidden relative">
+    <div className="flex flex-col h-[calc(100vh-6rem)] bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden relative">
         
         {/* LOADING OVERLAY */}
         {isProcessingAI && (
@@ -468,374 +493,332 @@ const OrderForm: React.FC = () => {
             </div>
         )}
 
-        {/* HEADER BAR */}
-        <div className="px-6 py-4 bg-gradient-to-r from-gray-50 to-white border-b border-gray-100 flex flex-wrap justify-between items-center gap-4">
-          <div className="flex items-center gap-3">
-             <div className="w-10 h-10 rounded-full bg-eco-100 text-eco-600 flex items-center justify-center shadow-sm">
-                <i className="fas fa-plus-circle text-xl"></i>
-             </div>
-             <div>
-                <h2 className="text-lg font-black text-gray-800 leading-tight">Tạo Đơn Hàng</h2>
-                <p className="text-xs text-gray-500 font-medium">Nhập thông tin hoặc dùng AI</p>
-             </div>
-          </div>
-          
-          <div className="flex items-center gap-3">
-              {/* MESSENGER PASTE BUTTON */}
-              <button 
-                onClick={handlePasteFromMessenger}
-                className="flex items-center gap-2 px-4 py-1.5 rounded-xl border border-blue-100 bg-blue-50 text-blue-600 hover:bg-blue-100 hover:border-blue-200 transition-all group"
-                title="Dán đoạn chat từ Messenger"
-              >
-                  <i className="fab fa-facebook-messenger group-hover:scale-110 transition-transform"></i>
-                  <span className="text-xs font-bold hidden sm:inline">Dán từ Messenger</span>
-              </button>
-
-              {/* VOICE INPUT BUTTON */}
-              <button 
-                onClick={handleVoiceInput}
-                disabled={isListening}
-                className={`flex items-center gap-2 px-4 py-1.5 rounded-xl border transition-all ${
-                    isListening 
-                    ? 'bg-red-500 text-white border-red-500 animate-pulse' 
-                    : 'bg-white text-gray-600 border-gray-200 hover:border-eco-400 hover:text-eco-600'
-                }`}
-                title="Nhập bằng giọng nói (AI)"
-              >
-                  <i className={`fas ${isListening ? 'fa-microphone-slash' : 'fa-microphone'}`}></i>
-                  <span className="text-xs font-bold hidden sm:inline">{isListening ? 'Đang nghe...' : 'Voice'}</span>
-              </button>
-
-              {/* BATCH SELECTOR */}
-              <div className="relative" ref={batchWrapperRef}>
-                 <div className="flex items-center bg-white border border-gray-200 rounded-xl px-3 py-1.5 shadow-sm hover:border-eco-400 transition-colors cursor-pointer" onClick={() => setShowBatchSuggestions(!showBatchSuggestions)}>
-                    <span className="text-[10px] font-bold text-gray-400 uppercase mr-2 hidden sm:inline">Lô hàng</span>
-                    <input 
-                      value={batchId}
-                      onChange={(e) => setBatchId(e.target.value)}
-                      className="w-24 sm:w-28 text-sm font-bold text-eco-700 outline-none bg-transparent"
-                      placeholder="LÔ-HÔM-NAY"
-                    />
-                    <i className={`fas fa-chevron-down text-xs text-gray-400 ml-2 transition-transform ${showBatchSuggestions ? 'rotate-180' : ''}`}></i>
-                 </div>
-                 
-                 {showBatchSuggestions && existingBatches.length > 0 && (
-                    <div className="absolute top-full right-0 mt-2 w-56 bg-white border border-gray-100 rounded-xl shadow-2xl z-50 overflow-hidden animate-fade-in">
-                        <div className="px-3 py-2 bg-gray-50 text-[10px] font-bold text-gray-500 uppercase">Gần đây</div>
-                        <div className="max-h-60 overflow-y-auto">
-                            {existingBatches.map(b => (
-                                <div key={b} onClick={() => selectBatch(b)} className="px-4 py-2.5 hover:bg-eco-50 cursor-pointer text-sm font-medium text-gray-700 border-b border-gray-50 last:border-0 flex items-center justify-between">
-                                    {b}
-                                    {batchId === b && <i className="fas fa-check text-eco-600 text-xs"></i>}
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                 )}
-              </div>
-          </div>
+        {/* --- MOBILE TAB HEADER --- */}
+        <div className="md:hidden flex border-b border-gray-200 bg-white shrink-0">
+            <button 
+                onClick={() => setMobileTab('FORM')}
+                className={`flex-1 py-3 text-sm font-bold border-b-2 transition-colors ${mobileTab === 'FORM' ? 'border-eco-600 text-eco-700' : 'border-transparent text-gray-400'}`}
+            >
+                Nhập Đơn
+            </button>
+            <button 
+                onClick={() => setMobileTab('STATS')}
+                className={`flex-1 py-3 text-sm font-bold border-b-2 transition-colors ${mobileTab === 'STATS' ? 'border-purple-600 text-purple-700' : 'border-transparent text-gray-400'}`}
+            >
+                Thống Kê Lô ({batchStats.length})
+            </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="flex flex-col lg:flex-row divide-y lg:divide-y-0 lg:divide-x divide-gray-100">
-          
-          {/* LEFT COLUMN: CUSTOMER INFO */}
-          <div className="lg:w-[40%] p-6 lg:p-8 bg-white/50 space-y-5">
-            <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2 mb-4">
-                <i className="fas fa-user-circle text-eco-500"></i> Thông tin khách hàng
-            </h3>
+        <div className="flex flex-col md:flex-row h-full overflow-hidden">
             
-            <div className="space-y-4">
-                {/* Name */}
-                <div className="relative" ref={customerWrapperRef}>
-                    <label className={labelClass}>Tên khách hàng <span className="text-red-500">*</span></label>
-                    <input
-                        ref={nameInputRef}
-                        value={customerInfo.customerName}
-                        onChange={handleNameChange}
-                        required
-                        className={`${inputClass} font-bold text-gray-800`}
-                        placeholder="Nhập tên khách..."
-                        autoComplete="off"
-                    />
-                    {showCustomerSuggestions && customerSuggestions.length > 0 && (
-                        <ul className="absolute z-30 w-full bg-white border border-gray-100 rounded-xl shadow-2xl mt-1 overflow-hidden animate-fade-in">
-                            {customerSuggestions.map(s => (
-                                <li key={s.id} onClick={() => handleCustomerSelect(s)} className="px-4 py-3 hover:bg-blue-50 cursor-pointer border-b border-gray-50 last:border-0 transition-colors group">
-                                    <div className="flex justify-between items-center">
-                                        <span className="font-bold text-gray-800 group-hover:text-blue-700">{s.name}</span>
-                                        <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-md group-hover:bg-white">{s.phone}</span>
-                                    </div>
-                                    <div className="text-xs text-gray-500 truncate mt-1 group-hover:text-blue-500">{s.address}</div>
-                                </li>
-                            ))}
-                        </ul>
-                    )}
-                </div>
-
-                {/* Phone */}
-                <div>
-                    <label className={labelClass}>Số điện thoại</label>
-                    <div className="relative">
-                        <input
-                            value={customerInfo.customerPhone}
-                            onChange={(e) => setCustomerInfo({...customerInfo, customerPhone: e.target.value})}
-                            className={inputClass}
-                            placeholder="09..."
-                        />
-                        <i className="fas fa-phone absolute right-3 top-3 text-gray-300"></i>
+            {/* --- LEFT SIDE: FORM INPUT (70%) --- */}
+            {/* Logic: Hidden on Mobile if Stats Tab active. Always Flex on Desktop */}
+            <div className={`${mobileTab === 'FORM' ? 'flex' : 'hidden'} md:flex md:w-[70%] flex-col h-full overflow-hidden relative`}>
+                {/* 1. HEADER */}
+                <div className="px-4 py-3 bg-gradient-to-r from-gray-50 to-white border-b border-gray-100 flex justify-between items-center shrink-0">
+                    <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-full bg-eco-100 text-eco-600 flex items-center justify-center shadow-sm">
+                            <i className="fas fa-plus-circle"></i>
+                        </div>
+                        <h2 className="text-base font-black text-gray-800 hidden sm:block">Tạo Đơn Hàng</h2>
                     </div>
-                </div>
-                
-                {/* Address */}
-                <div>
-                    <label className={labelClass}>Địa chỉ giao hàng <span className="text-red-500">*</span></label>
-                    <textarea
-                        value={customerInfo.address}
-                        onChange={(e) => setCustomerInfo({...customerInfo, address: e.target.value})}
-                        required
-                        className={`${inputClass} resize-none h-24`}
-                        placeholder="Số nhà, đường, phường, quận..."
-                    />
-                </div>
-                
-                {/* Notes & Tags */}
-                <div>
-                    <label className={labelClass}>Ghi chú</label>
-                    <input
-                        value={customerInfo.notes}
-                        onChange={(e) => setCustomerInfo({...customerInfo, notes: e.target.value})}
-                        className={`${inputClass} mb-3`}
-                        placeholder="Ghi chú thêm..."
-                    />
-                    <div className="flex flex-wrap gap-2">
-                        {quickTags.map(tag => {
-                            const isActive = customerInfo.notes.includes(tag);
-                            return (
-                                <button
-                                    key={tag}
-                                    type="button"
-                                    onClick={() => toggleQuickTag(tag)}
-                                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition-all active:scale-95 ${
-                                        isActive 
-                                        ? 'bg-eco-100 text-eco-700 border-eco-200 shadow-sm' 
-                                        : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'
-                                    }`}
-                                >
-                                    {isActive && <i className="fas fa-check mr-1"></i>}
-                                    {tag}
-                                </button>
-                            );
-                        })}
-                    </div>
-                </div>
-            </div>
-          </div>
-
-          {/* RIGHT COLUMN: ITEMS & CALCULATIONS */}
-          <div className="lg:w-[60%] flex flex-col h-full bg-gray-50/30">
-             <div className="p-6 lg:p-8 flex-grow" ref={productWrapperRef}>
-                 <div className="flex justify-between items-center mb-4">
-                     <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2">
-                        <i className="fas fa-box-open text-eco-500"></i> Chi tiết đơn hàng
-                     </h3>
-                     <button type="button" onClick={addItemRow} className="text-xs font-bold text-white bg-eco-600 hover:bg-eco-700 px-3 py-1.5 rounded-lg transition-colors shadow-sm active:scale-95">
-                        <i className="fas fa-plus mr-1"></i>Thêm dòng
-                     </button>
-                 </div>
-                 
-                 <div className="space-y-3">
-                    {items.map((item, idx) => {
-                      const selectedIds = getSelectedProductIds(idx);
-                      const availableProducts = products.filter(p => 
-                        !selectedIds.includes(p.id) && 
-                        (!item.name || p.name.toLowerCase().includes(item.name.toLowerCase()))
-                      );
-
-                      return (
-                      <div key={item.id} className={`bg-white p-3 rounded-2xl shadow-sm border border-gray-200 group transition-all hover:shadow-md relative ${activeProductRow === idx ? 'z-20 ring-2 ring-eco-100' : 'z-0'}`}>
-                         <div className="flex items-start gap-3">
-                             {/* Index */}
-                             <div className="w-6 h-6 rounded-full bg-gray-100 text-gray-400 text-xs font-bold flex items-center justify-center mt-2">
-                                {idx + 1}
-                             </div>
-
-                             <div className="flex-grow grid grid-cols-12 gap-3">
-                                 {/* Product Name Input */}
-                                 <div className="col-span-12 md:col-span-6 relative">
-                                    <label className="text-[9px] font-bold text-gray-400 uppercase mb-1 block">Tên sản phẩm</label>
-                                    <input 
-                                        placeholder="Nhập tên..."
-                                        value={item.name}
-                                        onChange={(e) => handleItemChange(idx, 'name', e.target.value)}
-                                        onFocus={() => setActiveProductRow(idx)}
-                                        className="w-full p-2 bg-gray-50 focus:bg-white border border-gray-200 focus:border-eco-500 rounded-lg text-sm font-bold text-gray-800 outline-none transition-all"
-                                    />
-                                    
-                                    {/* Dropdown */}
-                                    {activeProductRow === idx && (
-                                        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-100 rounded-xl shadow-xl z-50 max-h-56 overflow-y-auto animate-fade-in flex flex-col">
-                                            <div className="flex-grow overflow-y-auto max-h-44">
-                                                {availableProducts.length === 0 ? (
-                                                     <div className="p-3 text-xs text-gray-400 text-center italic">
-                                                        Kho không có sản phẩm này
-                                                     </div>
-                                                ) : (
-                                                    availableProducts.map(p => (
-                                                        <div 
-                                                            key={p.id} 
-                                                            onMouseDown={() => selectProductForItem(idx, p)} // Use onMouseDown to trigger before blur
-                                                            className="px-3 py-2.5 hover:bg-eco-50 cursor-pointer flex justify-between items-center border-b border-gray-50 last:border-0 group/opt"
-                                                        >
-                                                            <div>
-                                                                <div className="text-sm font-bold text-gray-800 group-hover/opt:text-eco-700">{p.name}</div>
-                                                                <div className="text-[10px] text-gray-400">Tồn kho: <span className={p.stockQuantity < 5 ? 'text-red-500 font-bold' : ''}>{p.stockQuantity}</span></div>
-                                                            </div>
-                                                            <div className="text-right">
-                                                                <div className="text-xs font-bold text-eco-600 bg-eco-50 px-2 py-1 rounded-md">
-                                                                    {new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}
-                                                                </div>
-                                                                {p.importPrice && p.importPrice > 0 && (
-                                                                    <div className="text-[9px] text-gray-300 mt-0.5">
-                                                                        V: {new Intl.NumberFormat('vi-VN').format(p.importPrice)}
-                                                                    </div>
-                                                                )}
-                                                            </div>
-                                                        </div>
-                                                    ))
-                                                )}
-                                            </div>
-                                            {/* Quick Add Product Trigger */}
-                                            <div 
-                                                onMouseDown={() => {
-                                                    setNewProdName(item.name || '');
-                                                    setShowQuickAddProduct(true);
-                                                }}
-                                                className="p-3 bg-gray-50 border-t border-gray-100 text-center text-xs font-bold text-blue-600 hover:bg-blue-50 cursor-pointer transition-colors"
-                                            >
-                                                <i className="fas fa-plus-circle mr-1"></i> Tạo nhanh sản phẩm mới
-                                            </div>
+                    
+                    <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                        {/* BATCH SELECTOR */}
+                        <div className="relative" ref={batchWrapperRef}>
+                            <div className="flex items-center bg-white border border-gray-200 rounded-lg px-2 py-1.5 shadow-sm hover:border-eco-400 transition-colors cursor-pointer" onClick={() => setShowBatchSuggestions(!showBatchSuggestions)}>
+                                <span className="text-[9px] font-bold text-gray-400 uppercase mr-1 hidden sm:inline">Lô:</span>
+                                <input 
+                                    value={batchId}
+                                    onChange={(e) => setBatchId(e.target.value)}
+                                    className="w-24 text-xs font-bold text-eco-700 outline-none bg-transparent"
+                                    placeholder="LÔ-HÔM-NAY"
+                                />
+                                <i className="fas fa-chevron-down text-[10px] text-gray-400 ml-1"></i>
+                            </div>
+                            {showBatchSuggestions && existingBatches.length > 0 && (
+                                <div className="absolute top-full right-0 mt-1 w-48 bg-white border border-gray-100 rounded-lg shadow-xl z-50 overflow-hidden">
+                                    {existingBatches.map(b => (
+                                        <div key={b} onClick={() => selectBatch(b)} className="px-3 py-2 hover:bg-eco-50 cursor-pointer text-xs font-medium text-gray-700 border-b border-gray-50 last:border-0 flex justify-between">
+                                            {b} {batchId === b && <i className="fas fa-check text-eco-600"></i>}
                                         </div>
-                                    )}
-                                 </div>
-                                 
-                                 {/* Quantity */}
-                                 <div className="col-span-4 md:col-span-2">
-                                    <label className="text-[9px] font-bold text-gray-400 uppercase mb-1 block text-center">SL</label>
-                                    <input 
-                                        type="number" 
-                                        min="0.1" step="any"
-                                        value={item.quantity === 0 ? '' : item.quantity}
-                                        onChange={(e) => handleItemChange(idx, 'quantity', e.target.value === '' ? 0 : Number(e.target.value))}
-                                        className="w-full p-2 text-center bg-gray-50 focus:bg-white border border-gray-200 focus:border-eco-500 rounded-lg text-sm font-bold outline-none transition-all"
-                                    />
-                                 </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
 
-                                 {/* Price */}
-                                 <div className="col-span-6 md:col-span-3">
-                                    <label className="text-[9px] font-bold text-gray-400 uppercase mb-1 block text-right">Đơn giá</label>
-                                    <input 
-                                        type="number" step="any"
-                                        value={item.price === 0 ? '' : item.price}
-                                        onChange={(e) => handleItemChange(idx, 'price', e.target.value === '' ? 0 : Number(e.target.value))}
-                                        className="w-full p-2 text-right bg-gray-50 focus:bg-white border border-gray-200 focus:border-eco-500 rounded-lg text-sm font-bold text-gray-800 outline-none transition-all"
-                                    />
-                                 </div>
-                                 
-                                 {/* Delete */}
-                                 <div className="col-span-2 md:col-span-1 flex items-end justify-center pb-1">
-                                    <button type="button" onClick={() => removeItemRow(idx)} className="w-8 h-8 flex items-center justify-center text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
-                                        <i className="fas fa-trash-alt"></i>
-                                    </button>
-                                 </div>
-                             </div>
-                         </div>
-                      </div>
-                      );
-                    })}
-                 </div>
-             </div>
-
-             {/* FOOTER TOTAL */}
-             <div className="p-6 bg-white border-t border-gray-100 rounded-br-3xl">
-                <div className="flex justify-between items-center mb-6">
-                    <div>
-                        <span className="text-xs font-bold text-gray-400 uppercase block mb-1">Tổng thanh toán</span>
-                        <div className="text-xs text-gray-400">{items.length} mặt hàng</div>
+                        <button onClick={handlePasteFromMessenger} className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-100 flex items-center justify-center transition-colors" title="Dán từ Messenger">
+                            <i className="fab fa-facebook-messenger"></i>
+                        </button>
+                        <button onClick={handleVoiceInput} disabled={isListening} className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${isListening ? 'bg-red-500 text-white animate-pulse' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                            <i className={`fas ${isListening ? 'fa-microphone-slash' : 'fa-microphone'}`}></i>
+                        </button>
                     </div>
-                    <span className="text-3xl font-black text-gray-900 tracking-tighter">
-                        {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(totalPrice)}
-                    </span>
                 </div>
 
-                <div className="flex gap-3">
-                    <button
-                        type="button"
-                        onClick={resetForm}
-                        className="px-6 py-3.5 rounded-xl text-gray-500 font-bold bg-gray-100 hover:bg-gray-200 transition-colors"
-                    >
-                        Hủy
-                    </button>
-                    <button
-                        type="submit"
-                        className="flex-grow bg-black text-white py-3.5 rounded-xl hover:bg-gray-800 font-bold text-lg shadow-xl shadow-gray-200 transition-all active:scale-95 flex items-center justify-center gap-2"
-                    >
-                        <span>Hoàn Tất Đơn Hàng</span>
-                        <i className="fas fa-arrow-right text-sm"></i>
-                    </button>
-                </div>
-             </div>
-          </div>
-        </form>
-      </div>
-
-      {/* QUICK ADD PRODUCT MODAL */}
-      {showQuickAddProduct && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/60 backdrop-blur-sm p-4 animate-fade-in">
-            <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6">
-                <h3 className="text-lg font-bold text-gray-800 mb-4">Thêm nhanh sản phẩm</h3>
-                <form onSubmit={handleQuickAddProduct}>
-                    <div className="space-y-4">
-                        <div>
-                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Tên sản phẩm</label>
-                            <input 
-                                value={newProdName}
-                                onChange={e => setNewProdName(e.target.value)}
-                                className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:border-eco-500 font-bold text-gray-800"
-                                placeholder="Nhập tên..."
-                                autoFocus
+                {/* 2. SCROLLABLE FORM AREA */}
+                <form onSubmit={handleSubmit} className="flex-grow overflow-y-auto p-3 space-y-3">
+                    
+                    {/* A. CUSTOMER INFO (Compact Grid) */}
+                    <div className="bg-gray-50/50 p-3 rounded-xl border border-gray-100">
+                        <div className="grid grid-cols-12 gap-2 mb-2">
+                            <div className="col-span-7 relative" ref={customerWrapperRef}>
+                                <label className={labelClass}>Tên khách <span className="text-red-500">*</span></label>
+                                <input
+                                    ref={nameInputRef}
+                                    value={customerInfo.customerName}
+                                    onChange={handleNameChange}
+                                    required
+                                    className={`${inputClass} font-bold text-gray-800`}
+                                    placeholder="Nhập tên..."
+                                    autoComplete="off"
+                                />
+                                {showCustomerSuggestions && customerSuggestions.length > 0 && (
+                                    <ul className="absolute z-30 w-full bg-white border border-gray-100 rounded-lg shadow-xl mt-1 overflow-hidden">
+                                        {customerSuggestions.map(s => (
+                                            <li key={s.id} onClick={() => handleCustomerSelect(s)} className="px-3 py-2 hover:bg-blue-50 cursor-pointer border-b border-gray-50 last:border-0 text-xs">
+                                                <div className="font-bold text-gray-800">{s.name} <span className="font-normal text-gray-400"> - {s.phone}</span></div>
+                                                <div className="text-gray-500 truncate">{s.address}</div>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                )}
+                            </div>
+                            <div className="col-span-5">
+                                <label className={labelClass}>Điện thoại</label>
+                                <input
+                                    value={customerInfo.customerPhone}
+                                    onChange={(e) => setCustomerInfo({...customerInfo, customerPhone: e.target.value})}
+                                    className={inputClass}
+                                    placeholder="SĐT..."
+                                />
+                            </div>
+                        </div>
+                        
+                        <div className="mb-2">
+                            <input
+                                value={customerInfo.address}
+                                onChange={(e) => setCustomerInfo({...customerInfo, address: e.target.value})}
+                                required
+                                className={`${inputClass} font-medium text-gray-700`}
+                                placeholder="Địa chỉ giao hàng (Số nhà, đường, phường...)"
                             />
                         </div>
-                        <div className="grid grid-cols-2 gap-3">
-                            <div>
-                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Giá bán</label>
-                                <input 
-                                    type="number"
-                                    value={newProdPrice}
-                                    onChange={e => setNewProdPrice(Number(e.target.value))}
-                                    className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:border-eco-500 font-bold"
-                                    placeholder="0"
+
+                        <div className="flex gap-2 items-center">
+                            <div className="flex-grow">
+                                <input
+                                    value={customerInfo.notes}
+                                    onChange={(e) => setCustomerInfo({...customerInfo, notes: e.target.value})}
+                                    className={`${inputClass} text-xs`}
+                                    placeholder="Ghi chú đơn hàng..."
                                 />
                             </div>
-                            <div>
-                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Giá nhập (Vốn)</label>
-                                <input 
-                                    type="number"
-                                    value={newProdImportPrice}
-                                    onChange={e => setNewProdImportPrice(Number(e.target.value))}
-                                    className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:border-eco-500 font-bold text-gray-600"
-                                    placeholder="0"
-                                />
+                            {/* Quick Tags Inline */}
+                            <div className="flex gap-1 overflow-x-auto no-scrollbar max-w-[40%]">
+                                {quickTags.slice(0, 3).map(tag => (
+                                    <button
+                                        key={tag}
+                                        type="button"
+                                        onClick={() => toggleQuickTag(tag)}
+                                        className={`whitespace-nowrap px-2 py-1.5 rounded text-[9px] font-bold border transition-colors ${customerInfo.notes.includes(tag) ? 'bg-eco-100 text-eco-700 border-eco-200' : 'bg-white text-gray-500 border-gray-200'}`}
+                                    >
+                                        {tag}
+                                    </button>
+                                ))}
                             </div>
                         </div>
                     </div>
-                    <div className="flex gap-3 mt-6">
-                        <button type="button" onClick={() => setShowQuickAddProduct(false)} className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 rounded-xl font-bold text-gray-600">Hủy</button>
-                        <button type="submit" className="flex-1 py-3 bg-eco-600 hover:bg-eco-700 text-white rounded-xl font-bold shadow-lg">Lưu & Chọn</button>
+
+                    {/* B. ITEMS LIST */}
+                    <div className="space-y-2 pb-2" ref={productWrapperRef}>
+                        <div className="flex justify-between items-center px-1">
+                            <h3 className="text-xs font-bold text-gray-500 uppercase">Chi tiết đơn hàng</h3>
+                            <button type="button" onClick={addItemRow} className="text-[10px] font-bold text-white bg-eco-600 hover:bg-eco-700 px-2 py-1 rounded transition-colors shadow-sm">
+                                + Thêm dòng
+                            </button>
+                        </div>
+
+                        {items.map((item, idx) => {
+                        const selectedIds = getSelectedProductIds(idx);
+                        const availableProducts = products.filter(p => 
+                            !selectedIds.includes(p.id) && 
+                            (!item.name || p.name.toLowerCase().includes(item.name.toLowerCase()))
+                        );
+
+                        return (
+                        <div key={item.id} className={`flex items-center gap-2 bg-white p-2 rounded-lg border border-gray-200 shadow-sm relative ${activeProductRow === idx ? 'ring-1 ring-blue-200 z-20' : ''}`}>
+                            <div className="flex-grow relative">
+                                <input 
+                                    placeholder="Tên sản phẩm..."
+                                    value={item.name}
+                                    onChange={(e) => handleItemChange(idx, 'name', e.target.value)}
+                                    onFocus={() => setActiveProductRow(idx)}
+                                    className="w-full p-1.5 bg-gray-50 border border-gray-100 rounded text-sm font-bold text-gray-800 outline-none focus:bg-white focus:border-blue-300 transition-all"
+                                />
+                                {/* Dropdown */}
+                                {activeProductRow === idx && (
+                                    <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl z-50 max-h-48 overflow-y-auto flex flex-col">
+                                        <div className="flex-grow overflow-y-auto">
+                                            {availableProducts.length === 0 ? (
+                                                <div className="p-2 text-xs text-gray-400 text-center italic">Không tìm thấy</div>
+                                            ) : (
+                                                availableProducts.map(p => (
+                                                    <div 
+                                                        key={p.id} 
+                                                        onMouseDown={() => selectProductForItem(idx, p)}
+                                                        className="px-3 py-2 hover:bg-blue-50 cursor-pointer flex justify-between items-center border-b border-gray-50 last:border-0 group/opt"
+                                                    >
+                                                        <div>
+                                                            <div className="text-sm font-bold text-gray-800">{p.name}</div>
+                                                            <div className="text-[9px] text-gray-400">Tồn: <span className={p.stockQuantity < 5 ? 'text-red-500 font-bold' : ''}>{p.stockQuantity}</span></div>
+                                                        </div>
+                                                        <div className="text-xs font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">
+                                                            {new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}
+                                                        </div>
+                                                    </div>
+                                                ))
+                                            )}
+                                        </div>
+                                        <div onMouseDown={handleQuickCreateProduct} className="p-2 bg-gray-50 border-t border-gray-100 text-center text-xs font-bold text-blue-600 hover:bg-blue-100 cursor-pointer">
+                                            + Tạo nhanh SP mới
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                            <div className="w-12">
+                                <input 
+                                    type="number" min="0.1" step="any"
+                                    value={item.quantity === 0 ? '' : item.quantity}
+                                    onChange={(e) => handleItemChange(idx, 'quantity', e.target.value === '' ? 0 : Number(e.target.value))}
+                                    className="w-full p-1.5 text-center bg-gray-50 border border-gray-100 rounded text-sm font-bold outline-none focus:bg-white focus:border-blue-300"
+                                    placeholder="SL"
+                                />
+                            </div>
+                            <div className="w-20 hidden sm:block">
+                                <input 
+                                    type="number" step="any"
+                                    value={item.price === 0 ? '' : item.price}
+                                    onChange={(e) => handleItemChange(idx, 'price', e.target.value === '' ? 0 : Number(e.target.value))}
+                                    className="w-full p-1.5 text-right bg-gray-50 border border-gray-100 rounded text-sm font-bold outline-none focus:bg-white focus:border-blue-300"
+                                    placeholder="Giá"
+                                />
+                            </div>
+                            <button type="button" onClick={() => removeItemRow(idx)} className="w-8 h-8 flex items-center justify-center text-gray-300 hover:text-red-500 rounded hover:bg-red-50 transition-colors">
+                                <i className="fas fa-times"></i>
+                            </button>
+                        </div>
+                        );
+                        })}
                     </div>
                 </form>
+
+                {/* 3. FOOTER (TOTAL & ACTION) */}
+                <div className="p-3 bg-white border-t border-gray-200 shrink-0">
+                    <div className="flex justify-between items-end mb-3">
+                        <div className="text-xs text-gray-400 font-medium">{items.length} mặt hàng</div>
+                        <div className="text-2xl font-black text-gray-900 leading-none">
+                            {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(totalPrice)}
+                        </div>
+                    </div>
+                    <div className="flex gap-2">
+                        <button type="button" onClick={resetForm} className="px-4 py-3 rounded-xl bg-gray-100 text-gray-600 font-bold text-xs hover:bg-gray-200 transition-colors">Hủy</button>
+                        <button onClick={handleSubmit} className="flex-grow bg-black text-white py-3 rounded-xl font-bold text-sm shadow-lg hover:bg-gray-800 transition-transform active:scale-95 flex items-center justify-center gap-2">
+                            <span>Lên Đơn & Trừ Kho</span>
+                            <i className="fas fa-paper-plane text-xs"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            {/* --- RIGHT SIDE: BATCH STATS TABLE (30% or Mobile Tab) --- */}
+            {/* Logic: Hidden on Mobile if Form Tab active. Always Flex on Desktop */}
+            <div className={`${mobileTab === 'STATS' ? 'flex' : 'hidden'} md:flex md:w-[30%] flex-col border-l border-gray-200 bg-gray-50/30 h-full overflow-hidden`}>
+                <div className="p-3 border-b border-gray-200 bg-white">
+                    <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">
+                        <i className="fas fa-cubes text-purple-500"></i> Thống kê Lô {batchId}
+                    </h3>
+                </div>
+                
+                <div className="flex-grow overflow-y-auto relative">
+                    {batchStats.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center h-full text-gray-300 space-y-2">
+                            <i className="fas fa-clipboard-list text-3xl opacity-20"></i>
+                            <p className="text-xs">Chưa có hàng trong lô này</p>
+                        </div>
+                    ) : (
+                        <table className="w-full text-left border-collapse">
+                            <thead className="bg-gray-100 text-gray-500 text-[10px] font-bold uppercase sticky top-0 z-10 shadow-sm">
+                                <tr>
+                                    <th className="py-2 pl-3">Sản phẩm</th>
+                                    <th className="py-2 text-center w-12">Đã bán</th>
+                                    <th className="py-2 pr-3 text-right w-14">Tồn</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100 bg-white">
+                                {batchStats.map((stat, idx) => {
+                                    const stockPercent = Math.min(100, (stat.stock / (stat.totalImported || 1)) * 100);
+                                    const isLow = stat.stock < 5;
+                                    
+                                    return (
+                                        <tr key={idx} className="hover:bg-purple-50/50 transition-colors group">
+                                            <td className="py-2 pl-3 align-middle">
+                                                <div className="flex items-center gap-1">
+                                                    <div className="text-xs font-bold text-gray-800 leading-tight group-hover:text-purple-700 transition-colors truncate max-w-[120px]" title={stat.product.name}>
+                                                        {stat.product.name}
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setEditingProduct(stat.product);
+                                                            setEditMode('SET');
+                                                            setShowProductModal(true);
+                                                        }}
+                                                        className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-blue-600 transition-opacity p-1"
+                                                        title="Sửa hàng hóa"
+                                                    >
+                                                        <i className="fas fa-pen text-[10px]"></i>
+                                                    </button>
+                                                </div>
+                                                {/* Mini Progress Bar */}
+                                                <div className="w-full bg-gray-100 rounded-full h-1 mt-1 overflow-hidden opacity-50 group-hover:opacity-100">
+                                                    <div className={`h-full rounded-full ${isLow ? 'bg-red-500' : 'bg-green-500'}`} style={{ width: `${stockPercent}%` }}></div>
+                                                </div>
+                                            </td>
+                                            <td className="py-2 text-center align-middle">
+                                                <span className="bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded text-[10px] font-black">
+                                                    {stat.soldInBatch}
+                                                </span>
+                                            </td>
+                                            <td className="py-2 pr-3 text-right align-middle">
+                                                <span className={`text-[10px] font-bold ${isLow ? 'text-red-500' : 'text-gray-400'}`}>
+                                                    {stat.stock}
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    )}
+                </div>
+                
+                <div className="p-3 border-t border-gray-200 bg-white text-[10px] text-gray-500 flex justify-between shrink-0">
+                    <span>Tổng SP bán trong lô:</span>
+                    <span className="font-bold text-gray-800 text-xs">{totalSoldInBatch}</span>
+                </div>
             </div>
         </div>
-      )}
+
+      {/* QUICK ADD/EDIT PRODUCT MODAL (Reused from InventoryManager) */}
+      <ProductEditModal 
+          isOpen={showProductModal}
+          onClose={() => setShowProductModal(false)}
+          product={editingProduct}
+          onSave={handleSaveProduct}
+          initialMode={editMode}
+      />
     </div>
   );
 };
