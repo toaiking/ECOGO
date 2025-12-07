@@ -14,10 +14,10 @@ interface ProductDetailModalProps {
     product: Product;
     onImport: () => void;
     onAdjust: () => void;
-    onDelete: () => void;
+    onDelete?: () => void;
 }
 
-const ProductDetailModal: React.FC<ProductDetailModalProps> = ({ isOpen, onClose, product, onImport, onAdjust, onDelete }) => {
+export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({ isOpen, onClose, product, onImport, onAdjust, onDelete }) => {
     const [history, setHistory] = useState<{order: Order, quantity: number}[]>([]);
     const [activeTab, setActiveTab] = useState<'EXPORT' | 'IMPORT'>('EXPORT');
     
@@ -203,10 +203,251 @@ const ProductDetailModal: React.FC<ProductDetailModalProps> = ({ isOpen, onClose
                     <button onClick={onAdjust} className="flex-1 py-3 bg-white border border-gray-300 hover:border-gray-400 text-gray-700 font-bold rounded-xl transition-colors shadow-sm">
                         <i className="fas fa-pen mr-2"></i> Sửa / Ghi đè
                     </button>
-                    <button onClick={onDelete} className="w-12 flex items-center justify-center rounded-xl bg-red-50 text-red-500 hover:bg-red-100 border border-red-100 transition-colors">
-                        <i className="fas fa-trash-alt"></i>
-                    </button>
+                    {onDelete && (
+                        <button onClick={onDelete} className="w-12 flex items-center justify-center rounded-xl bg-red-50 text-red-500 hover:bg-red-100 border border-red-100 transition-colors">
+                            <i className="fas fa-trash-alt"></i>
+                        </button>
+                    )}
                 </div>
+            </div>
+        </div>
+    );
+};
+
+export interface ProductEditModalProps {
+    isOpen: boolean;
+    onClose: () => void;
+    product: Product | null;
+    onSave: (productData: Product) => Promise<void>;
+    initialMode?: 'IMPORT' | 'SET';
+}
+
+export const ProductEditModal: React.FC<ProductEditModalProps> = ({ isOpen, onClose, product, onSave, initialMode = 'IMPORT' }) => {
+    const [editTab, setEditTab] = useState<'IMPORT' | 'SET'>(initialMode);
+    const [importAmount, setImportAmount] = useState<string>('');
+    const [formData, setFormData] = useState<Partial<Product>>({
+        name: '',
+        defaultPrice: 0,
+        importPrice: 0,
+        stockQuantity: 0,
+        totalImported: 0,
+    });
+    
+    // Store Sold Quantity as a frozen snapshot to calculate stock accurately
+    const [frozenSold, setFrozenSold] = useState(0);
+
+    useEffect(() => {
+        if (isOpen) {
+            setEditTab(initialMode);
+            setImportAmount('');
+            if (product) {
+                setFormData({
+                    name: product.name,
+                    defaultPrice: product.defaultPrice,
+                    importPrice: product.importPrice,
+                    stockQuantity: product.stockQuantity,
+                    totalImported: product.totalImported || product.stockQuantity
+                });
+                // Calculate and freeze Sold Quantity: Sold = TotalImported - Stock
+                const sold = (product.totalImported || 0) - (product.stockQuantity || 0);
+                setFrozenSold(Math.max(0, sold));
+            } else {
+                setFormData({ name: '', defaultPrice: 0, importPrice: 0, stockQuantity: 0, totalImported: 0 });
+                setFrozenSold(0);
+                setEditTab('SET');
+            }
+        }
+    }, [isOpen, product, initialMode]);
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!formData.name) return;
+
+        const now = Date.now();
+        let finalStock = 0;
+        let finalTotalImported = 0;
+        let currentHistory: ImportRecord[] = product?.importHistory ? [...product.importHistory] : [];
+        let targetId = product?.id;
+
+        if (!targetId) {
+            targetId = generateProductSku(formData.name);
+        }
+
+        if (editTab === 'IMPORT') {
+            // MODE: IMPORT (Additive)
+            const qtyToAdd = Number(importAmount) || 0;
+            if (qtyToAdd !== 0) {
+                finalStock = (product?.stockQuantity || 0) + qtyToAdd;
+                finalTotalImported = (product?.totalImported || 0) + qtyToAdd;
+                
+                currentHistory.push({
+                    id: uuidv4(),
+                    date: now,
+                    quantity: qtyToAdd,
+                    price: Number(formData.importPrice) || 0,
+                    note: 'Nhập hàng thêm'
+                });
+            }
+        } else {
+            // MODE: SET (Adjustment)
+            // Logic: Stock = New Total Imported - Frozen Sold
+            finalTotalImported = Number(formData.totalImported) || 0;
+            finalStock = Math.max(0, finalTotalImported - frozenSold);
+            
+            // Record difference in history
+            const prevTotal = product?.totalImported || 0;
+            const diff = finalTotalImported - prevTotal;
+            
+            if (diff > 0) {
+                 currentHistory.push({
+                    id: uuidv4(),
+                    date: now,
+                    quantity: diff,
+                    price: Number(formData.importPrice) || 0,
+                    note: product ? 'Điều chỉnh số liệu' : 'Khởi tạo'
+                });
+            }
+        }
+
+        const productData: Product = {
+            id: targetId,
+            name: formData.name || '',
+            defaultPrice: Number(formData.defaultPrice) || 0,
+            importPrice: Number(formData.importPrice) || 0,
+            defaultWeight: 1, 
+            stockQuantity: finalStock,
+            totalImported: finalTotalImported, 
+            lastImportDate: now,
+            importHistory: currentHistory
+        };
+
+        await onSave(productData);
+        onClose();
+    };
+
+    if (!isOpen) return null;
+
+    // Live preview of stock for SET mode
+    const previewStock = Math.max(0, (Number(formData.totalImported) || 0) - frozenSold);
+
+    return (
+        <div className="fixed inset-0 z-[110] bg-gray-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90vh]">
+                <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                    <h3 className="font-bold text-lg text-gray-800">{product ? 'Cập Nhật Sản Phẩm' : 'Tạo Sản Phẩm Mới'}</h3>
+                    <button onClick={onClose} className="w-8 h-8 rounded-full bg-white text-gray-400 hover:text-gray-600 flex items-center justify-center"><i className="fas fa-times"></i></button>
+                </div>
+                
+                <form onSubmit={handleSubmit} className="flex-grow overflow-y-auto p-6 space-y-5">
+                    {/* Name */}
+                    <div>
+                        <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Tên sản phẩm</label>
+                        <input 
+                            value={formData.name}
+                            onChange={e => setFormData({...formData, name: e.target.value})}
+                            className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:border-eco-500 outline-none font-bold text-gray-800"
+                            placeholder="VD: Gạo ST25"
+                            autoFocus={!product}
+                        />
+                    </div>
+
+                    {/* Prices */}
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Giá bán</label>
+                            <input 
+                                type="number"
+                                value={formData.defaultPrice}
+                                onChange={e => setFormData({...formData, defaultPrice: Number(e.target.value)})}
+                                className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:border-eco-500 outline-none font-bold"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Giá nhập (Vốn)</label>
+                            <input 
+                                type="number"
+                                value={formData.importPrice}
+                                onChange={e => setFormData({...formData, importPrice: Number(e.target.value)})}
+                                className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:border-eco-500 outline-none font-medium text-gray-600"
+                            />
+                        </div>
+                    </div>
+
+                    <hr className="border-gray-100" />
+
+                    {/* STOCK MANAGEMENT TABS */}
+                    {product && (
+                        <div className="flex bg-gray-100 p-1 rounded-xl">
+                            <button 
+                                type="button"
+                                onClick={() => { setEditTab('IMPORT'); setImportAmount(''); }}
+                                className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${editTab === 'IMPORT' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                            >
+                                Nhập Hàng Về
+                            </button>
+                            <button 
+                                type="button"
+                                onClick={() => setEditTab('SET')}
+                                className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${editTab === 'SET' ? 'bg-white text-orange-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                            >
+                                Điều Chỉnh Số Liệu
+                            </button>
+                        </div>
+                    )}
+
+                    {/* STOCK INPUT FIELDS */}
+                    <div className={`p-4 rounded-xl border ${editTab === 'IMPORT' ? 'bg-blue-50 border-blue-100' : 'bg-orange-50 border-orange-100'}`}>
+                        {editTab === 'IMPORT' && product ? (
+                            <>
+                                <label className="block text-xs font-bold text-blue-700 uppercase mb-1">Số lượng hàng về (+)</label>
+                                <div className="flex items-center gap-3">
+                                    <input 
+                                        type="number"
+                                        value={importAmount}
+                                        onChange={e => setImportAmount(e.target.value)}
+                                        placeholder="0"
+                                        className="w-full p-3 bg-white border border-blue-200 rounded-xl focus:border-blue-500 outline-none font-black text-xl text-blue-700 text-center placeholder-blue-200"
+                                        autoFocus
+                                    />
+                                </div>
+                                <div className="mt-2 text-xs text-blue-600 font-medium flex justify-between">
+                                    <span>Hiện tại: {product.stockQuantity}</span>
+                                    <span>Dự kiến: {(product.stockQuantity || 0) + (Number(importAmount) || 0)}</span>
+                                </div>
+                            </>
+                        ) : (
+                            <div className="space-y-3">
+                                <div>
+                                    <label className="block text-xs font-bold text-orange-600 uppercase mb-1">Tổng nhập (Total Imported)</label>
+                                    <input 
+                                        type="number"
+                                        value={formData.totalImported}
+                                        onChange={e => setFormData({...formData, totalImported: Number(e.target.value)})}
+                                        className="w-full p-2 bg-white border border-orange-200 rounded-lg focus:border-orange-500 outline-none font-bold text-gray-700 text-center"
+                                    />
+                                </div>
+                                
+                                {/* READ ONLY FIELDS FOR DATA INTEGRITY */}
+                                <div className="flex justify-between items-center bg-white p-2 rounded-lg border border-gray-200">
+                                    <span className="text-xs font-medium text-gray-500">Đã bán (Cố định):</span>
+                                    <span className="font-bold text-gray-700">{frozenSold}</span>
+                                </div>
+                                <div className="flex justify-between items-center bg-orange-100 p-2 rounded-lg border border-orange-200">
+                                    <span className="text-xs font-bold text-orange-800">Tồn kho (Tự tính):</span>
+                                    <span className="font-black text-orange-800 text-lg">{previewStock}</span>
+                                </div>
+                                
+                                <div className="text-[10px] text-orange-600 italic text-center">
+                                    * Tồn kho = Tổng nhập - Đã bán
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    <button type="submit" className="w-full py-3.5 bg-black text-white rounded-xl font-bold shadow-lg hover:bg-gray-800 transition-transform active:scale-95">
+                        {product ? 'Lưu Thay Đổi' : 'Xác Nhận Tạo Mới'}
+                    </button>
+                </form>
             </div>
         </div>
     );
@@ -221,24 +462,10 @@ const InventoryManager: React.FC = () => {
   const [showProductModal, setShowProductModal] = useState(false);
   const [viewingProduct, setViewingProduct] = useState<Product | null>(null); // Detail Modal State
   const [editingProduct, setEditingProduct] = useState<Product | null>(null); // Edit Form State
-  
-  // Edit Mode: 'IMPORT' (Add to stock) or 'SET' (Overwrite stats)
-  const [editTab, setEditTab] = useState<'IMPORT' | 'SET'>('IMPORT');
+  const [editMode, setEditMode] = useState<'IMPORT' | 'SET'>('IMPORT');
 
   // Tools
   const [isProcessing, setIsProcessing] = useState(false);
-
-  // Form Data (for Add/Edit)
-  const [formData, setFormData] = useState<Partial<Product>>({
-    name: '',
-    defaultPrice: 0,
-    importPrice: 0,
-    stockQuantity: 0,
-    totalImported: 0,
-  });
-  
-  // Input for "Import More" mode
-  const [importAmount, setImportAmount] = useState<string>('');
 
   // Action Modals
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -293,135 +520,43 @@ const InventoryManager: React.FC = () => {
   // Mode: IMPORT (Add Stock)
   const handleEdit = (product: Product) => {
       setEditingProduct(product);
-      setEditTab('IMPORT'); // Default to Import mode for existing
-      setImportAmount(''); // Reset import amount
-      setFormData({
-          name: product.name,
-          defaultPrice: product.defaultPrice,
-          importPrice: product.importPrice,
-          stockQuantity: product.stockQuantity,
-          totalImported: product.totalImported || product.stockQuantity
-      });
+      setEditMode('IMPORT');
       setShowProductModal(true);
   };
 
   // Mode: SET (Overwrite / Adjust Stock)
   const handleAdjust = (product: Product) => {
       setEditingProduct(product);
-      setEditTab('SET'); // Explicitly set to SET mode
-      setImportAmount('');
-      setFormData({
-          name: product.name,
-          defaultPrice: product.defaultPrice,
-          importPrice: product.importPrice,
-          stockQuantity: product.stockQuantity,
-          totalImported: product.totalImported || product.stockQuantity
-      });
+      setEditMode('SET');
       setShowProductModal(true);
   };
 
   const handleCreate = () => {
       setEditingProduct(null);
-      setEditTab('SET'); // Default to Set mode for new
-      setImportAmount('');
-      setFormData({ name: '', defaultPrice: 0, importPrice: 0, stockQuantity: 0, totalImported: 0 });
+      setEditMode('SET');
       setShowProductModal(true);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formData.name) return;
+  const handleSaveProduct = async (productData: Product) => {
+      let isMerge = false;
+      const existing = storageService.getProductBySku(productData.id);
+      
+      // If we are creating new (editingProduct is null), but ID exists -> Merge case
+      if (!editingProduct && existing) {
+          if (!window.confirm(`Sản phẩm "${existing.name}" đã tồn tại. Bạn có muốn cập nhật và cộng dồn kho?`)) return;
+          isMerge = true;
+          // In real merging we might want to sum stock, but ProductEditModal returns the final state based on user input.
+          // We respect the user's input from the modal.
+      }
 
-    const now = Date.now();
-    let finalStock = Number(formData.stockQuantity) || 0;
-    let finalTotalImported = Number(formData.totalImported) || finalStock;
-    let currentHistory: ImportRecord[] = editingProduct?.importHistory ? [...editingProduct.importHistory] : [];
-    let targetId = editingProduct?.id;
-    let isMerge = false;
-
-    // 1. RESOLVE ID (Create or Merge)
-    if (!targetId) {
-        const sku = generateProductSku(formData.name);
-        const existing = storageService.getProductBySku(sku);
-        if (existing) {
-            targetId = existing.id;
-            isMerge = true;
-            currentHistory = existing.importHistory || [];
-            if (!window.confirm(`Sản phẩm "${existing.name}" đã tồn tại. Bạn có muốn cập nhật và cộng dồn kho?`)) return;
-            // Prepare merge base values
-            finalStock = existing.stockQuantity;
-            finalTotalImported = existing.totalImported || existing.stockQuantity;
-        } else {
-            targetId = sku;
-        }
-    }
-
-    // 2. CALCULATE STOCK & HISTORY BASED ON MODE
-    if (editTab === 'IMPORT') {
-        const qtyToAdd = Number(importAmount) || 0;
-        
-        if (qtyToAdd !== 0) {
-            finalStock = (isMerge ? finalStock : (editingProduct?.stockQuantity || 0)) + qtyToAdd;
-            finalTotalImported = (isMerge ? finalTotalImported : (editingProduct?.totalImported || 0)) + qtyToAdd;
-            
-            currentHistory.push({
-                id: uuidv4(),
-                date: now,
-                quantity: qtyToAdd,
-                price: Number(formData.importPrice) || 0,
-                note: 'Nhập hàng thêm'
-            });
-        }
-    } else {
-        // MODE: SET (Overwrite / Adjust)
-        // User explicitly sets stock and total imported.
-        // We try to infer an import record if the totalImported increased.
-        const prevTotal = editingProduct?.totalImported || 0;
-        const diff = finalTotalImported - prevTotal;
-        
-        if (diff > 0 && editingProduct) {
-             currentHistory.push({
-                id: uuidv4(),
-                date: now,
-                quantity: diff,
-                price: Number(formData.importPrice) || 0,
-                note: 'Điều chỉnh số liệu'
-            });
-        } else if (!editingProduct) {
-            // New product creation
-            if (finalTotalImported > 0) {
-                currentHistory.push({
-                    id: uuidv4(),
-                    date: now,
-                    quantity: finalTotalImported,
-                    price: Number(formData.importPrice) || 0,
-                    note: 'Khởi tạo'
-                });
-            }
-        }
-    }
-
-    const productData: Product = {
-      id: targetId || uuidv4(),
-      name: formData.name,
-      defaultPrice: Number(formData.defaultPrice) || 0,
-      importPrice: Number(formData.importPrice) || 0,
-      defaultWeight: 1, 
-      stockQuantity: finalStock,
-      totalImported: finalTotalImported, 
-      lastImportDate: now,
-      importHistory: currentHistory
-    };
-
-    await storageService.saveProduct(productData);
-    
-    if (editingProduct && !isMerge) {
-        setPendingProductUpdate(productData);
-        setShowSyncConfirm(true);
-    } else {
-        toast.success(isMerge ? 'Đã gộp kho thành công!' : 'Đã lưu sản phẩm');
-        setShowProductModal(false);
-    }
+      await storageService.saveProduct(productData);
+      
+      if (editingProduct && !isMerge) {
+          setPendingProductUpdate(productData);
+          setShowSyncConfirm(true);
+      } else {
+          toast.success('Đã lưu sản phẩm');
+      }
   };
 
   const handleConfirmSync = async () => {
@@ -660,125 +795,13 @@ const InventoryManager: React.FC = () => {
       )}
 
       {/* ADD/EDIT FORM MODAL */}
-      {showProductModal && (
-          <div className="fixed inset-0 z-[110] bg-gray-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
-              <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90vh]">
-                  <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-                      <h3 className="font-bold text-lg text-gray-800">{editingProduct ? 'Cập Nhật Sản Phẩm' : 'Tạo Sản Phẩm Mới'}</h3>
-                      <button onClick={() => setShowProductModal(false)} className="w-8 h-8 rounded-full bg-white text-gray-400 hover:text-gray-600 flex items-center justify-center"><i className="fas fa-times"></i></button>
-                  </div>
-                  
-                  <form onSubmit={handleSubmit} className="flex-grow overflow-y-auto p-6 space-y-5">
-                      {/* Name */}
-                      <div>
-                          <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Tên sản phẩm</label>
-                          <input 
-                              value={formData.name}
-                              onChange={e => setFormData({...formData, name: e.target.value})}
-                              className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:border-eco-500 outline-none font-bold text-gray-800"
-                              placeholder="VD: Gạo ST25"
-                              autoFocus={!editingProduct}
-                          />
-                      </div>
-
-                      {/* Prices */}
-                      <div className="grid grid-cols-2 gap-4">
-                          <div>
-                              <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Giá bán</label>
-                              <input 
-                                  type="number"
-                                  value={formData.defaultPrice}
-                                  onChange={e => setFormData({...formData, defaultPrice: Number(e.target.value)})}
-                                  className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:border-eco-500 outline-none font-bold"
-                              />
-                          </div>
-                          <div>
-                              <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Giá nhập (Vốn)</label>
-                              <input 
-                                  type="number"
-                                  value={formData.importPrice}
-                                  onChange={e => setFormData({...formData, importPrice: Number(e.target.value)})}
-                                  className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:border-eco-500 outline-none font-medium text-gray-600"
-                              />
-                          </div>
-                      </div>
-
-                      <hr className="border-gray-100" />
-
-                      {/* STOCK MANAGEMENT TABS */}
-                      {editingProduct && (
-                          <div className="flex bg-gray-100 p-1 rounded-xl">
-                              <button 
-                                  type="button"
-                                  onClick={() => { setEditTab('IMPORT'); setImportAmount(''); }}
-                                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${editTab === 'IMPORT' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-                              >
-                                  Nhập Hàng Về
-                              </button>
-                              <button 
-                                  type="button"
-                                  onClick={() => setEditTab('SET')}
-                                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${editTab === 'SET' ? 'bg-white text-orange-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-                              >
-                                  Điều Chỉnh Số Liệu
-                              </button>
-                          </div>
-                      )}
-
-                      {/* STOCK INPUT FIELDS */}
-                      <div className={`p-4 rounded-xl border ${editTab === 'IMPORT' ? 'bg-blue-50 border-blue-100' : 'bg-orange-50 border-orange-100'}`}>
-                          {editTab === 'IMPORT' && editingProduct ? (
-                              <>
-                                  <label className="block text-xs font-bold text-blue-700 uppercase mb-1">Số lượng hàng về (+)</label>
-                                  <div className="flex items-center gap-3">
-                                      <input 
-                                          type="number"
-                                          value={importAmount}
-                                          onChange={e => setImportAmount(e.target.value)}
-                                          placeholder="0"
-                                          className="w-full p-3 bg-white border border-blue-200 rounded-xl focus:border-blue-500 outline-none font-black text-xl text-blue-700 text-center placeholder-blue-200"
-                                          autoFocus
-                                      />
-                                  </div>
-                                  <div className="mt-2 text-xs text-blue-600 font-medium flex justify-between">
-                                      <span>Hiện tại: {editingProduct.stockQuantity}</span>
-                                      <span>Dự kiến: {(editingProduct.stockQuantity || 0) + (Number(importAmount) || 0)}</span>
-                                  </div>
-                              </>
-                          ) : (
-                              <div className="space-y-3">
-                                  <div>
-                                      <label className="block text-xs font-bold text-orange-700 uppercase mb-1">Tồn kho thực tế (Kiểm kê)</label>
-                                      <input 
-                                          type="number"
-                                          value={formData.stockQuantity}
-                                          onChange={e => setFormData({...formData, stockQuantity: Number(e.target.value)})}
-                                          className="w-full p-3 bg-white border border-orange-200 rounded-xl focus:border-orange-500 outline-none font-black text-xl text-orange-700 text-center"
-                                      />
-                                  </div>
-                                  <div>
-                                      <label className="block text-xs font-bold text-orange-600 uppercase mb-1">Tổng nhập (Total Imported)</label>
-                                      <input 
-                                          type="number"
-                                          value={formData.totalImported}
-                                          onChange={e => setFormData({...formData, totalImported: Number(e.target.value)})}
-                                          className="w-full p-2 bg-white border border-orange-200 rounded-lg focus:border-orange-500 outline-none font-bold text-gray-700 text-center"
-                                      />
-                                  </div>
-                                  <div className="text-[10px] text-orange-600 italic text-center">
-                                      * Đã bán (tự tính) = Tổng nhập - Tồn kho = {(Number(formData.totalImported) || 0) - (Number(formData.stockQuantity) || 0)}
-                                  </div>
-                              </div>
-                          )}
-                      </div>
-
-                      <button type="submit" className="w-full py-3.5 bg-black text-white rounded-xl font-bold shadow-lg hover:bg-gray-800 transition-transform active:scale-95">
-                          {editingProduct ? 'Lưu Thay Đổi' : 'Xác Nhận Tạo Mới'}
-                      </button>
-                  </form>
-              </div>
-          </div>
-      )}
+      <ProductEditModal 
+          isOpen={showProductModal}
+          onClose={() => setShowProductModal(false)}
+          product={editingProduct}
+          onSave={handleSaveProduct}
+          initialMode={editMode}
+      />
 
       <ConfirmModal 
         isOpen={showDeleteConfirm}
