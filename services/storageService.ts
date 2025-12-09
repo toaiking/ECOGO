@@ -1,4 +1,3 @@
-
 import { Order, OrderStatus, Product, Customer, BankConfig, Notification, ShopConfig, ImportRecord } from '../types';
 import { db } from '../firebaseConfig';
 import { v4 as uuidv4 } from 'uuid';
@@ -19,7 +18,8 @@ import {
   getDoc, 
   where, 
   Timestamp, 
-  increment 
+  increment,
+  runTransaction 
 } from "firebase/firestore";
 
 const ORDER_KEY = 'ecogo_orders_v3'; 
@@ -488,6 +488,10 @@ export const storageService = {
       return list.find(p => p.id === sku);
   },
 
+  getAllProducts: (): Product[] => {
+      return ensureProductsLoaded() || [];
+  },
+
   saveProduct: async (product: Product) => {
       let list = ensureProductsLoaded();
       const idx = list.findIndex(p => p.id === product.id);
@@ -505,6 +509,67 @@ export const storageService = {
       window.dispatchEvent(new Event('storage_' + PRODUCT_KEY));
 
       await safeCloudOp(() => setDoc(doc(db, "products", product.id), sanitize(product)));
+  },
+
+  // NEW: Atomic Stock Adjustment (Safe for Concurrency)
+  adjustStockAtomic: async (productId: string, delta: number, importInfo?: { price: number, note?: string }) => {
+      // 1. Local Update
+      const products = ensureProductsLoaded();
+      const product = products.find(p => p.id === productId);
+      
+      if (product) {
+          product.stockQuantity = (product.stockQuantity || 0) + delta;
+          if (delta > 0) {
+              product.totalImported = (product.totalImported || 0) + delta;
+              if (importInfo) {
+                  if (!product.importHistory) product.importHistory = [];
+                  product.importHistory.push({
+                      id: uuidv4(),
+                      date: Date.now(),
+                      quantity: delta,
+                      price: importInfo.price,
+                      note: importInfo.note
+                  });
+              }
+          }
+          localStorage.setItem(PRODUCT_KEY, JSON.stringify(products));
+          window.dispatchEvent(new Event('storage_' + PRODUCT_KEY));
+      }
+
+      // 2. Cloud Transaction
+      if (isOnline()) {
+          try {
+              await runTransaction(db, async (transaction) => {
+                  const ref = doc(db, "products", productId);
+                  const snap = await transaction.get(ref);
+                  
+                  if (snap.exists()) {
+                      const data = snap.data() as Product;
+                      // Use increment for atomic update on the counter
+                      const updates: any = { stockQuantity: increment(delta) };
+                      
+                      if (delta > 0) {
+                          updates.totalImported = increment(delta);
+                          if (importInfo) {
+                              const newHistory = [...(data.importHistory || [])];
+                              newHistory.push({
+                                  id: uuidv4(),
+                                  date: Date.now(),
+                                  quantity: delta,
+                                  price: importInfo.price,
+                                  note: importInfo.note || 'Adjustment'
+                              });
+                              updates.importHistory = newHistory;
+                          }
+                      }
+                      transaction.update(ref, updates);
+                  }
+              });
+          } catch (e: any) {
+              console.error("Stock Transaction Failed", e);
+              if (e.code === 'resource-exhausted') markQuotaExhausted();
+          }
+      }
   },
 
   deleteProduct: async (id: string) => {
@@ -767,7 +832,7 @@ export const storageService = {
               const updatedOrder = { 
                   ...order, 
                   items: newItems, 
-                  totalPrice: newTotal,
+                  totalPrice: o.totalPrice, // Use updated total if needed or keep existing logic
                   lastUpdatedBy: 'System (Sync)' 
               };
               ordersToUpdate.push(updatedOrder);
@@ -1172,19 +1237,82 @@ export const storageService = {
         await storageService.upsertCustomer(newCust);
     }
 
-    // 2. SAVE ORDER
+    // 2. ATOMIC SAVE ORDER & DEDUCT STOCK
+    
+    // --- Local Memory Update (Optimistic) ---
     let list = _memoryOrders || [];
     if (list.length === 0) {
         const local = localStorage.getItem(ORDER_KEY);
         if(local) list = JSON.parse(local);
     }
     list.unshift(orderWithMeta);
-    
     _memoryOrders = list;
     localStorage.setItem(ORDER_KEY, JSON.stringify(list));
     window.dispatchEvent(new Event('storage_' + ORDER_KEY));
 
-    await safeCloudOp(() => setDoc(doc(db, "orders", order.id), sanitize(orderWithMeta)));
+    // Update Local Stock Memory immediately
+    const products = ensureProductsLoaded();
+    order.items.forEach(item => {
+        if (item.productId) {
+            const p = products.find(p => p.id === item.productId);
+            if (p) {
+                p.stockQuantity = (p.stockQuantity || 0) - (item.quantity || 0);
+            }
+        }
+    });
+    localStorage.setItem(PRODUCT_KEY, JSON.stringify(products));
+    window.dispatchEvent(new Event('storage_' + PRODUCT_KEY));
+
+    // --- Cloud Update (Transactional) ---
+    if (isOnline()) {
+        try {
+            await runTransaction(db, async (transaction) => {
+                // A. Read all products involved
+                const productReads = [];
+                for (const item of orderWithMeta.items) {
+                    if (item.productId) {
+                        const ref = doc(db, "products", item.productId);
+                        productReads.push({ ref, item });
+                    }
+                }
+                
+                // Prefetch to ensure they exist in transaction scope
+                const uniqueProductRefs = new Map();
+                productReads.forEach(p => uniqueProductRefs.set(p.ref.path, p.ref));
+                
+                const refList = Array.from(uniqueProductRefs.values());
+                let productDocs: any[] = [];
+                
+                if (refList.length > 0) {
+                    productDocs = await Promise.all(refList.map(ref => transaction.get(ref)));
+                }
+                
+                const docMap = new Map(productDocs.map(d => [d.ref.path, d]));
+
+                // B. Deduct Stock
+                productReads.forEach((p) => {
+                    const snap = docMap.get(p.ref.path);
+                    if (snap && snap.exists()) {
+                        // Use Firestore increment for atomic decrement
+                        transaction.update(p.ref, { 
+                            stockQuantity: increment(-(p.item.quantity || 0)) 
+                        });
+                    }
+                });
+
+                // C. Create Order
+                const orderRef = doc(db, "orders", orderWithMeta.id);
+                transaction.set(orderRef, sanitize(orderWithMeta));
+            });
+        } catch (e: any) {
+            console.error("Order Transaction Failed:", e);
+            if (e.code === 'resource-exhausted') {
+                markQuotaExhausted();
+            } else {
+                console.warn("Could not sync order transaction to cloud. Local state preserved.");
+            }
+        }
+    }
   },
 
   updateStatus: async (id: string, status: OrderStatus, deliveryProof?: string, customer?: { name: string, address: string }) => {

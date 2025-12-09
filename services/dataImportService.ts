@@ -1,4 +1,3 @@
-
 import { v4 as uuidv4 } from 'uuid';
 import { RawPDFImportData, Order, OrderStatus, PaymentMethod, Customer, Product, OrderItem } from '../types';
 import { storageService, normalizeString, normalizePhone, generateProductSku } from './storageService';
@@ -119,7 +118,7 @@ export const dataImportService = {
             defaultPrice: 0,
             importPrice: 0, 
             defaultWeight: 1,
-            stockQuantity: 0, // Init 0, will add later
+            stockQuantity: 0, // Init 0, will go negative after order deduction, which is correct
             totalImported: 0,
             lastImportDate: Date.now()
         };
@@ -159,19 +158,9 @@ export const dataImportService = {
         for (const item of parsedItems) {
             const prod = getOrInitProduct(item.name);
             
-            // Logic: Cộng dồn tồn kho khi nhập
-            // Vì đây là Import hàng bán ra, nhưng trong context "nhập liệu từ PDF"
-            // thường PDF là danh sách đơn đã bán. 
-            // Tuy nhiên, logic ở InventoryManager là nhập kho.
-            // Ở đây ta cứ giả định sản phẩm này tồn tại để bán.
-            
-            // Nếu sản phẩm mới tạo (stock = 0), ta có thể set stock = quantity để tránh âm kho?
-            // Hoặc cứ để nó trừ kho khi bán.
-            // Để an toàn: Nếu sản phẩm mới tinh (totalImported=0), ta set stock = 50 mặc định
-            if (prod.totalImported === 0) {
-                 prod.stockQuantity = 50;
-                 prod.totalImported = 50;
-            }
+            // NOTE: We do NOT auto-increase stock here anymore. 
+            // The `saveOrder` transaction will deduct stock.
+            // This ensures atomic consistency.
 
             const itemPrice = prod.defaultPrice || 0;
             const itemTotal = itemPrice * item.quantity;
@@ -218,12 +207,17 @@ export const dataImportService = {
     }
 
     // C. Batch Save
-    // 1. Save Products (Iterate map)
+    // 1. Save Products (Iterate map) - ONLY SAVE NEW ONES to avoid race condition with saveOrder transaction
+    const existingProducts = storageService.getAllProducts();
+    
     for (const p of sessionProductMap.values()) {
-        await storageService.saveProduct(p);
+        const alreadyExists = existingProducts.some((curr: Product) => curr.id === p.id);
+        if (!alreadyExists) {
+            await storageService.saveProduct(p);
+        }
     }
 
-    // 2. Save Orders
+    // 2. Save Orders (Transactional stock deduction happens here)
     for (const o of ordersToSave) {
         await storageService.saveOrder(o);
     }

@@ -1,4 +1,3 @@
-
 import jsPDF from 'jspdf';
 import QRCode from 'qrcode';
 import { Order, PaymentMethod, OrderStatus, Product } from '../types';
@@ -230,10 +229,10 @@ export const pdfService = {
             const ty = hY + 3.5;
             doc.text("STT", xIdx + 1, ty);
             doc.text("KHÁCH - SĐT", xCust + 1, ty);
-            doc.text("ĐỊA CHỈ (IN ĐẬM)", xAddr + 1, ty);
+            doc.text("ĐỊA CHỈ", xAddr + 1, ty);
             doc.text("HÀNG HÓA (SL)", xItem + 1, ty);
             doc.text("GHI CHÚ", xNote + 1, ty);
-            doc.text("THU TIỀN", xPrice + wPrice - 1, ty, { align: 'right' });
+            doc.text("TỔNG TIỀN", xPrice + wPrice - 1, ty, { align: 'right' });
             
             doc.setTextColor(0, 0, 0); 
             return hY + hHeight;
@@ -272,14 +271,20 @@ export const pdfService = {
             doc.setFont(fontName, 'bold');
             let priceText = new Intl.NumberFormat('vi-VN').format(o.totalPrice);
             
-            // Payment Logic: Shown if Completed OR Verified
-            const isCompleted = o.status === OrderStatus.DELIVERED;
-            const isVerified = o.paymentVerified || o.paymentMethod === PaymentMethod.PAID;
-            
-            if (isCompleted || isVerified) {
-                if (o.paymentMethod === PaymentMethod.TRANSFER || o.paymentVerified) priceText += " (CK)";
-                else if (o.paymentMethod === PaymentMethod.CASH) priceText += " (TM)";
-                else if (o.paymentMethod === PaymentMethod.PAID) priceText += " (Đã TT)";
+            // Payment Logic: Clearly distinguish status for Manifest
+            if (o.paymentMethod === PaymentMethod.PAID) {
+                priceText += " (TM)";
+            } else if (o.paymentMethod === PaymentMethod.TRANSFER) {
+                if (o.paymentVerified) {
+                    priceText += " (CK Rồi)";
+                } else {
+                    priceText += " (CK)";
+                }
+            } else if (o.paymentMethod === PaymentMethod.CASH) {
+                // If CASH, assume COD unless status is Delivered (which implies collected)
+                // But generally on manifest "120.000" means collect 120k.
+                // We can add " (TM)" to be explicit if desired, but standard is just number.
+                // priceText += " (TM)"; 
             }
             
             const priceLines = doc.splitTextToSize(priceText, wPrice - 1.5);
