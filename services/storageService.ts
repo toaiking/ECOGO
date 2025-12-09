@@ -832,7 +832,7 @@ export const storageService = {
               const updatedOrder = { 
                   ...order, 
                   items: newItems, 
-                  totalPrice: o.totalPrice, // Use updated total if needed or keep existing logic
+                  totalPrice: newTotal,
                   lastUpdatedBy: 'System (Sync)' 
               };
               ordersToUpdate.push(updatedOrder);
