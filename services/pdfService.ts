@@ -273,7 +273,7 @@ export const pdfService = {
             
             // Payment Logic: Clearly distinguish status for Manifest
             if (o.paymentMethod === PaymentMethod.PAID) {
-                priceText += " (TM)";
+                priceText += " (Đã TT)";
             } else if (o.paymentMethod === PaymentMethod.TRANSFER) {
                 if (o.paymentVerified) {
                     priceText += " (CK Rồi)";
@@ -281,10 +281,7 @@ export const pdfService = {
                     priceText += " (CK)";
                 }
             } else if (o.paymentMethod === PaymentMethod.CASH) {
-                // If CASH, assume COD unless status is Delivered (which implies collected)
-                // But generally on manifest "120.000" means collect 120k.
-                // We can add " (TM)" to be explicit if desired, but standard is just number.
-                // priceText += " (TM)"; 
+                priceText += " (TM)"; 
             }
             
             const priceLines = doc.splitTextToSize(priceText, wPrice - 1.5);
