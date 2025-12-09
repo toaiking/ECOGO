@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import toast from 'react-hot-toast';
@@ -167,10 +168,17 @@ const OrderForm: React.FC = () => {
       setShowProductModal(true);
   };
 
-  const handleSaveProduct = async (productData: Product) => {
-      await storageService.saveProduct(productData);
+  const handleSaveProduct = async (productData: Product, isImportMode: boolean = false, importQty: number = 0) => {
+      if (isImportMode && editingProduct) {
+          await storageService.adjustStockAtomic(editingProduct.id, importQty, {
+              price: productData.importPrice || 0,
+              note: 'Nhập hàng thêm (Quick)'
+          });
+      } else {
+          await storageService.saveProduct(productData);
+      }
       toast.success("Đã cập nhật hàng hóa");
-      setEditingProduct(null); // Close modal triggers re-render via state update
+      setEditingProduct(null);
   };
 
   // --- VOICE & AI LOGIC ---
@@ -413,28 +421,6 @@ const OrderForm: React.FC = () => {
     if (!customerInfo.customerName || !customerInfo.address || validItems.length === 0) {
       toast.error('Thiếu tên, địa chỉ hoặc hàng hóa');
       return;
-    }
-
-    // 1. DEDUCT STOCK
-    for (const item of validItems) {
-        if (item.productId) {
-            const product = products.find(p => p.id === item.productId);
-            if (product) {
-                const currentStock = Number(product.stockQuantity) || 0;
-                // If totalImported is missing (old data), assume it matches stock to initialize it properly
-                const currentTotalImported = Number(product.totalImported) || currentStock; 
-                
-                const deductQty = Number(item.quantity) || 0;
-                const newStock = Math.max(0, currentStock - deductQty);
-                
-                // Update product in storage
-                await storageService.saveProduct({
-                    ...product,
-                    stockQuantity: newStock,
-                    totalImported: currentTotalImported
-                });
-            }
-        }
     }
 
     // 2. CREATE ORDER

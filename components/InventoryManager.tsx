@@ -218,7 +218,7 @@ export interface ProductEditModalProps {
     isOpen: boolean;
     onClose: () => void;
     product: Product | null;
-    onSave: (productData: Product) => Promise<void>;
+    onSave: (productData: Product, isImportMode?: boolean, importQty?: number) => Promise<void>;
     initialMode?: 'IMPORT' | 'SET';
 }
 
@@ -264,49 +264,47 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({ isOpen, onCl
         if (!formData.name) return;
 
         const now = Date.now();
-        let finalStock = 0;
-        let finalTotalImported = 0;
-        let currentHistory: ImportRecord[] = product?.importHistory ? [...product.importHistory] : [];
-        let targetId = product?.id;
-
-        if (!targetId) {
-            targetId = generateProductSku(formData.name);
+        let targetId = product?.id || generateProductSku(formData.name);
+        
+        // --- ATOMIC HANDLER FOR IMPORT ---
+        if (editTab === 'IMPORT' && product) {
+            const qtyToAdd = Number(importAmount) || 0;
+            if (qtyToAdd > 0) {
+                // Create a transient product object for basic info update (name/price)
+                // BUT we pass flag to use atomic update for Stock
+                const basicInfoUpdate: Product = {
+                    ...product,
+                    name: formData.name || product.name,
+                    defaultPrice: Number(formData.defaultPrice) || 0,
+                    importPrice: Number(formData.importPrice) || 0,
+                };
+                
+                await onSave(basicInfoUpdate, true, qtyToAdd);
+                onClose();
+                return;
+            }
         }
 
-        if (editTab === 'IMPORT') {
-            // MODE: IMPORT (Additive)
-            const qtyToAdd = Number(importAmount) || 0;
-            if (qtyToAdd !== 0) {
-                finalStock = (product?.stockQuantity || 0) + qtyToAdd;
-                finalTotalImported = (product?.totalImported || 0) + qtyToAdd;
-                
+        // --- STANDARD SAVE (SET/OVERWRITE) ---
+        let finalStock = 0;
+        let finalTotalImported = Number(formData.totalImported) || 0;
+        let currentHistory: ImportRecord[] = product?.importHistory ? [...product.importHistory] : [];
+
+        // Logic: Stock = New Total Imported - Frozen Sold
+        finalStock = Math.max(0, finalTotalImported - frozenSold);
+        
+        // Record difference in history
+        const prevTotal = product?.totalImported || 0;
+        const diff = finalTotalImported - prevTotal;
+        
+        if (diff > 0) {
                 currentHistory.push({
-                    id: uuidv4(),
-                    date: now,
-                    quantity: qtyToAdd,
-                    price: Number(formData.importPrice) || 0,
-                    note: 'Nhập hàng thêm'
-                });
-            }
-        } else {
-            // MODE: SET (Adjustment)
-            // Logic: Stock = New Total Imported - Frozen Sold
-            finalTotalImported = Number(formData.totalImported) || 0;
-            finalStock = Math.max(0, finalTotalImported - frozenSold);
-            
-            // Record difference in history
-            const prevTotal = product?.totalImported || 0;
-            const diff = finalTotalImported - prevTotal;
-            
-            if (diff > 0) {
-                 currentHistory.push({
-                    id: uuidv4(),
-                    date: now,
-                    quantity: diff,
-                    price: Number(formData.importPrice) || 0,
-                    note: product ? 'Điều chỉnh số liệu' : 'Khởi tạo'
-                });
-            }
+                id: uuidv4(),
+                date: now,
+                quantity: diff,
+                price: Number(formData.importPrice) || 0,
+                note: product ? 'Điều chỉnh số liệu' : 'Khởi tạo'
+            });
         }
 
         const productData: Product = {
@@ -321,7 +319,7 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({ isOpen, onCl
             importHistory: currentHistory
         };
 
-        await onSave(productData);
+        await onSave(productData, false, 0);
         onClose();
     };
 
@@ -537,25 +535,43 @@ const InventoryManager: React.FC = () => {
       setShowProductModal(true);
   };
 
-  const handleSaveProduct = async (productData: Product) => {
-      let isMerge = false;
-      const existing = storageService.getProductBySku(productData.id);
-      
-      // If we are creating new (editingProduct is null), but ID exists -> Merge case
-      if (!editingProduct && existing) {
-          if (!window.confirm(`Sản phẩm "${existing.name}" đã tồn tại. Bạn có muốn cập nhật và cộng dồn kho?`)) return;
-          isMerge = true;
-          // In real merging we might want to sum stock, but ProductEditModal returns the final state based on user input.
-          // We respect the user's input from the modal.
-      }
-
-      await storageService.saveProduct(productData);
-      
-      if (editingProduct && !isMerge) {
-          setPendingProductUpdate(productData);
-          setShowSyncConfirm(true);
+  const handleSaveProduct = async (productData: Product, isImportMode: boolean = false, importQty: number = 0) => {
+      // 1. ATOMIC IMPORT (Concurrency Safe)
+      if (isImportMode && editingProduct) {
+          await storageService.adjustStockAtomic(editingProduct.id, importQty, {
+              price: productData.importPrice || 0,
+              note: 'Nhập hàng thêm'
+          });
+          
+          // Also update basic info if changed (Name/Price), but keep stock as processed by atomic op
+          if (productData.name !== editingProduct.name || productData.defaultPrice !== editingProduct.defaultPrice) {
+               await storageService.saveProduct({
+                   ...editingProduct, // Keep original ID/Stock refs
+                   name: productData.name,
+                   defaultPrice: productData.defaultPrice,
+                   importPrice: productData.importPrice
+               });
+          }
+          toast.success(`Đã nhập thêm ${importQty} sản phẩm`);
+          setPendingProductUpdate(null); // No sync confirmation for stock only updates
       } else {
-          toast.success('Đã lưu sản phẩm');
+          // 2. STANDARD SAVE / OVERWRITE
+          let isMerge = false;
+          const existing = storageService.getProductBySku(productData.id);
+          
+          if (!editingProduct && existing) {
+              if (!window.confirm(`Sản phẩm "${existing.name}" đã tồn tại. Bạn có muốn cập nhật và cộng dồn kho?`)) return;
+              isMerge = true;
+          }
+
+          await storageService.saveProduct(productData);
+          
+          if (editingProduct && !isMerge) {
+              setPendingProductUpdate(productData);
+              setShowSyncConfirm(true);
+          } else {
+              toast.success('Đã lưu sản phẩm');
+          }
       }
   };
 
@@ -616,28 +632,12 @@ const InventoryManager: React.FC = () => {
 
   const handleQuickStock = async (e: React.MouseEvent, p: Product, amount: number) => {
       e.stopPropagation();
-      const current = p.stockQuantity || 0;
-      const newStock = Math.max(0, current + amount);
-      // For quick stock add button, we treat it as an import of +1
-      const newTotal = amount > 0 ? (p.totalImported || 0) + amount : (p.totalImported || 0);
-      
-      const newHistory = [...(p.importHistory || [])];
-      if (amount > 0) {
-          newHistory.push({
-              id: uuidv4(),
-              date: Date.now(),
-              quantity: amount,
-              price: p.importPrice || 0,
-              note: 'Quick Add'
-          });
-      }
-      
-      await storageService.saveProduct({ 
-          ...p, 
-          stockQuantity: newStock,
-          totalImported: newTotal,
-          importHistory: newHistory
+      // Use Atomic Adjustment for safety
+      await storageService.adjustStockAtomic(p.id, amount, { 
+          price: p.importPrice || 0, 
+          note: 'Quick Add' 
       });
+      toast.success(`Đã thêm ${amount} ${p.name}`);
   };
 
   return (

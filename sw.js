@@ -1,4 +1,5 @@
-const CACHE_NAME = 'ecogo-cache-v62';
+
+const CACHE_NAME = 'ecogo-cache-v70';
 const urlsToCache = [
   '/',
   '/index.html',

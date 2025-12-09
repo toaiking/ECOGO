@@ -1,8 +1,7 @@
-
 import jsPDF from 'jspdf';
 import QRCode from 'qrcode';
-import { Order, PaymentMethod, OrderStatus } from '../types';
-import { storageService } from './storageService';
+import { Order, PaymentMethod, OrderStatus, Product } from '../types';
+import { storageService, normalizeString } from './storageService';
 
 // --- VIETQR / EMVCO HELPER ---
 const BANK_BIN_MAP: Record<string, string> = {
@@ -133,8 +132,8 @@ const drawDashedLine = (doc: jsPDF, x1: number, y1: number, x2: number, y2: numb
 };
 
 export const pdfService = {
-    // --- MODE 1: SINGLE COLUMN LIST (EXCEL STYLE - COMPACT HIGH DENSITY) ---
-    // Target: ~45-50 orders per page
+    // --- MODE 1: SINGLE COLUMN LIST (HIGH DENSITY TABLE) ---
+    // Updated: High density (50 rows/page), Bold Address, Explicit Quantity, Payment Status
     generateCompactList: async (orders: Order[], batchId: string) => {
         const doc = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
         
@@ -154,17 +153,16 @@ export const pdfService = {
         const pageW = 210;
         const pageH = 297;
         const margin = 5; 
-        const headerH = 15;
+        const headerH = 12; 
         const tableW = pageW - (margin * 2); // 200mm
         
         // --- COLUMN WIDTHS (Total 200mm) ---
-        // STT | Khách | Địa chỉ | Hàng | Ghi chú | Tiền
         const wIdx = 8;
-        const wCust = 35;
-        const wAddr = 45;
-        const wItem = 55;
-        const wNote = 30;
-        const wPrice = tableW - wIdx - wCust - wAddr - wItem - wNote; // ~27mm
+        const wCust = 42; 
+        const wAddr = 65; // Wide for address
+        const wItem = 45; // Items
+        const wNote = 15; 
+        const wPrice = 25; 
 
         // X Positions
         const xIdx = margin;
@@ -177,9 +175,9 @@ export const pdfService = {
         let currentY = headerH + 5;
         
         // --- HIGH DENSITY SETTINGS ---
-        const fontSize = 7; // Reduced font size
-        const rowPadding = 1; // Minimal padding (1mm)
-        const lineHeight = 3; // Tight line height (3mm)
+        const fontSize = 7; 
+        const rowPadding = 1; 
+        const lineHeight = 3; 
 
         // Data Prep
         let totalAmount = 0;
@@ -199,26 +197,26 @@ export const pdfService = {
             doc.rect(0, 0, pageW, headerH, 'F');
 
             // Doc Title
-            doc.setFontSize(11);
+            doc.setFontSize(10);
             doc.setFont(fontName, 'bold');
             doc.setTextColor(0, 0, 0);
-            doc.text(`${batchId} (${new Date().toLocaleDateString('vi-VN')})`, margin, 8);
+            doc.text(`${batchId} (${new Date().toLocaleDateString('vi-VN')}) - Tổng: ${validOrders.length} đơn`, margin, 8);
             
             doc.setFontSize(8);
             doc.setFont(fontName, 'normal');
             doc.text(`Trang ${pageNo}`, pageW - margin, 8, { align: 'right' });
             
             // --- TABLE HEADER (BLACK BG) ---
-            const hY = 11;
-            const hHeight = 6;
+            const hY = 10;
+            const hHeight = 5;
             
-            doc.setFillColor(0, 0, 0); // Black Background
+            doc.setFillColor(0, 0, 0); 
             doc.rect(margin, hY, tableW, hHeight, 'F');
-            doc.setTextColor(255, 255, 255); // White text
+            doc.setTextColor(255, 255, 255); 
             doc.setFontSize(7);
             doc.setFont(fontName, 'bold');
             
-            // Dividers (White)
+            // Dividers
             doc.setDrawColor(255, 255, 255);
             doc.setLineWidth(0.2);
             doc.line(xCust, hY, xCust, hY + hHeight);
@@ -228,15 +226,15 @@ export const pdfService = {
             doc.line(xPrice, hY, xPrice, hY + hHeight);
 
             // Text
-            const ty = hY + 4;
-            doc.text("STT", xIdx + (wIdx/2), ty, { align: 'center' });
-            doc.text("KHÁCH HÀNG", xCust + 2, ty);
-            doc.text("ĐỊA CHỈ", xAddr + 2, ty);
-            doc.text("HÀNG HÓA", xItem + 2, ty);
-            doc.text("GHI CHÚ / COD", xNote + 2, ty);
-            doc.text("THU TIỀN", xPrice + wPrice - 2, ty, { align: 'right' });
+            const ty = hY + 3.5;
+            doc.text("STT", xIdx + 1, ty);
+            doc.text("KHÁCH - SĐT", xCust + 1, ty);
+            doc.text("ĐỊA CHỈ", xAddr + 1, ty);
+            doc.text("HÀNG HÓA (SL)", xItem + 1, ty);
+            doc.text("GHI CHÚ", xNote + 1, ty);
+            doc.text("TỔNG TIỀN", xPrice + wPrice - 1, ty, { align: 'right' });
             
-            doc.setTextColor(0, 0, 0); // Reset
+            doc.setTextColor(0, 0, 0); 
             return hY + hHeight;
         };
 
@@ -248,40 +246,58 @@ export const pdfService = {
             
             // --- PREPARE CONTENT ---
             doc.setFontSize(fontSize);
+            
+            // 1. Customer: Name - Phone (BOLD)
             doc.setFont(fontName, 'bold');
-            // Customer: Name \n Phone
-            const custText = `${o.customerName}\n${o.customerPhone}`;
-            const custLines = doc.splitTextToSize(custText, wCust - 2);
+            const custText = `${o.customerName} - ${o.customerPhone}`;
+            const custLines = doc.splitTextToSize(custText, wCust - 1.5);
             
+            // 2. Address (BOLD)
+            doc.setFont(fontName, 'bold');
+            const addrLines = doc.splitTextToSize(o.address, wAddr - 1.5);
+            
+            // 3. Items (Normal)
             doc.setFont(fontName, 'normal');
-            const addrLines = doc.splitTextToSize(o.address, wAddr - 2);
+            // Explicit Quantity Display: "Name (SL: 2)"
+            const itemsStr = o.items.map(it => `${it.name} (SL:${it.quantity})`).join(', ');
+            const itemsLines = doc.splitTextToSize(itemsStr, wItem - 1.5);
             
-            const itemsStr = o.items.map(it => `${it.name}${it.quantity > 1 ? ` (${it.quantity})` : ''}`).join(', ');
-            const itemsLines = doc.splitTextToSize(itemsStr, wItem - 2);
-            
-            // Note logic
+            // 4. Notes (Italic)
+            doc.setFont(fontName, 'italic');
             const noteText = o.notes || '';
-            const noteLines = doc.splitTextToSize(noteText, wNote - 2);
+            const noteLines = doc.splitTextToSize(noteText, wNote - 1.5);
             
-            // Price Logic
-            const isPaid = o.paymentVerified || o.paymentMethod === PaymentMethod.PAID;
-            let priceText = "";
-            let noteColText = "";
+            // 5. Price & Payment (Bold)
+            doc.setFont(fontName, 'bold');
+            let priceText = new Intl.NumberFormat('vi-VN').format(o.totalPrice);
             
-            if (isPaid) {
-                priceText = "ĐÃ TT";
-                noteColText = "CK/TT";
+            // Payment Logic: Clearly distinguish status for Manifest
+            if (o.paymentMethod === PaymentMethod.PAID) {
+                priceText += " (TM)";
+            } else if (o.paymentMethod === PaymentMethod.TRANSFER) {
+                if (o.paymentVerified) {
+                    priceText += " (CK Rồi)";
+                } else {
+                    priceText += " (CK)";
+                }
             } else if (o.paymentMethod === PaymentMethod.CASH) {
-                priceText = new Intl.NumberFormat('vi-VN').format(o.totalPrice);
-            } else {
-                priceText = "Chờ CK";
+                // If CASH, assume COD unless status is Delivered (which implies collected)
+                // But generally on manifest "120.000" means collect 120k.
+                // We can add " (TM)" to be explicit if desired, but standard is just number.
+                // priceText += " (TM)"; 
             }
             
-            // Combine note column
-            const finalNoteLines = doc.splitTextToSize(noteColText ? `${noteColText}\n${noteText}` : noteText, wNote - 2);
+            const priceLines = doc.splitTextToSize(priceText, wPrice - 1.5);
 
-            // Calc Height
-            const maxLines = Math.max(custLines.length, addrLines.length, itemsLines.length, finalNoteLines.length, 1);
+            // --- CALCULATE ROW HEIGHT ---
+            const maxLines = Math.max(
+                custLines.length, 
+                addrLines.length, 
+                itemsLines.length, 
+                noteLines.length,
+                priceLines.length,
+                1
+            );
             const rowHeight = (maxLines * lineHeight) + (rowPadding * 2);
 
             // Check Page Break
@@ -292,14 +308,12 @@ export const pdfService = {
             }
 
             // --- DRAW ROW ---
-            const textY = currentY + rowPadding + 2;
+            const textY = currentY + rowPadding + 2; 
 
-            // Borders
             doc.setDrawColor(0, 0, 0);
             doc.setLineWidth(0.1);
-            doc.rect(margin, currentY, tableW, rowHeight); // Outer box
+            doc.rect(margin, currentY, tableW, rowHeight); 
             
-            // Vertical Lines
             doc.line(xCust, currentY, xCust, currentY + rowHeight);
             doc.line(xAddr, currentY, xAddr, currentY + rowHeight);
             doc.line(xItem, currentY, xItem, currentY + rowHeight);
@@ -310,53 +324,81 @@ export const pdfService = {
             doc.setFont(fontName, 'bold');
             doc.text(`${i + 1}`, xIdx + (wIdx/2), textY, { align: 'center' });
 
-            // 2. Customer
+            // 2. Customer (Bold)
             doc.text(custLines, xCust + 1, textY);
 
-            // 3. Address
-            doc.setFont(fontName, 'normal');
+            // 3. Address (Bold)
             doc.text(addrLines, xAddr + 1, textY);
 
-            // 4. Items
+            // 4. Items (Normal)
+            doc.setFont(fontName, 'normal');
             doc.text(itemsLines, xItem + 1, textY);
 
-            // 5. Notes / COD Status
+            // 5. Notes (Italic)
             doc.setFont(fontName, 'italic');
-            doc.text(finalNoteLines, xNote + 1, textY);
-            doc.setFont(fontName, 'normal');
+            doc.text(noteLines, xNote + 1, textY);
 
-            // 6. Price
+            // 6. Price (Bold)
             doc.setFont(fontName, 'bold');
-            doc.text(priceText, xPrice + wPrice - 2, textY, { align: 'right' });
+            doc.text(priceLines, xPrice + wPrice - 1, textY, { align: 'right' });
 
             currentY += rowHeight;
         }
 
         // --- SUMMARY FOOTER ---
-        if (pageH - currentY < 20) {
+        // Ensure summary doesn't break awkwardly
+        if (pageH - currentY < 30) {
             doc.addPage();
-            currentY = 20;
+            currentY = 15;
         } else {
-            currentY += 5;
+            currentY += 2;
         }
+
+        doc.setDrawColor(0, 0, 0);
+        doc.setLineWidth(0.3);
+        doc.line(margin, currentY, margin + tableW, currentY);
+        currentY += 5;
 
         doc.setFontSize(9);
         doc.setFont(fontName, 'bold');
-        doc.text(`TỔNG KẾT DOANH THU: ${new Intl.NumberFormat('vi-VN').format(totalAmount)}đ`, margin, currentY);
+        doc.text(`TỔNG CỘNG (${validOrders.length} đơn): ${new Intl.NumberFormat('vi-VN').format(totalAmount)}đ`, margin, currentY);
         
         currentY += 5;
-        // Item Summary Grid
+        
         doc.setFontSize(7);
-        const summaryText = Object.entries(itemSummary)
+        doc.setFont(fontName, 'normal');
+        
+        // Get Products for Stats (Read directly from LocalStorage to avoid async/UI issues in this pure function)
+        let products: Product[] = [];
+        try {
+            products = JSON.parse(localStorage.getItem('ecogo_products_v1') || '[]');
+        } catch {}
+
+        const summaryParts = Object.entries(itemSummary)
             .sort((a,b) => a[0].localeCompare(b[0]))
-            .map(e => `${e[0]}: ${e[1]}`)
-            .join('  |  ');
+            .map(([name, qtyOrdered]) => {
+                // Find product by fuzzy name matching
+                const normName = normalizeString(name);
+                const p = products.find(p => normalizeString(p.name) === normName) 
+                       || products.find(p => normalizeString(p.name).includes(normName));
+                
+                if (p) {
+                    const imported = p.totalImported || 0;
+                    // Note: 'Balance' logic similar to Dashboard: (Total Imported - Ordered)
+                    // This assumes 'Imported' is relevant to the current batch/context.
+                    const remaining = imported - qtyOrdered;
+                    return `${name}: ${qtyOrdered}/${imported} (Dư ${remaining})`;
+                }
+                return `${name}: ${qtyOrdered}`;
+            });
+
+        const summaryText = "TỔNG HÀNG (Đặt/Nhập/Dư):  " + summaryParts.join('  |  ');
             
         const sumLines = doc.splitTextToSize(summaryText, tableW);
-        doc.text(sumLines, margin, currentY + 3);
+        doc.text(sumLines, margin, currentY);
 
         const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-        doc.save(`DS_FULL_${batchId}_${dateStr}.pdf`);
+        doc.save(`DS_${batchId}_${dateStr}.pdf`);
     },
 
     // --- MODE 2: INVOICE (8-UP) - Unchanged ---
