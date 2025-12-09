@@ -156,44 +156,178 @@ const PaymentAudit: React.FC = () => {
       await storageService.incrementReminderCount(ids);
   };
 
-  const generateAndShareQR = async (amount: number, content: string, title: string, relatedIds: string[]) => {
+  // UPDATED: Generate Image with Canvas
+  const generateAndShareQR = async (amount: number, content: string, title: string, relatedIds: string[], customerName: string, orderCount: number) => {
     if (!bankConfig || !bankConfig.accountNo) {
         toast.error("Thiếu thông tin Ngân hàng");
         return;
     }
     setIsSharing(true);
-    const toastId = toast.loading("Đang tạo QR...");
+    const toastId = toast.loading("Đang tạo Phiếu thanh toán...");
     try {
-        const url = `https://img.vietqr.io/image/${bankConfig.bankId}-${bankConfig.accountNo}-${bankConfig.template || 'compact2'}.png?amount=${amount}&addInfo=${encodeURIComponent(content)}&accountName=${encodeURIComponent(bankConfig.accountName)}`;
-        const response = await fetch(url);
-        const blob = await response.blob();
-        const file = new File([blob], `QR-${Date.now()}.png`, { type: "image/png" });
+        // 1. Get raw QR
+        const qrUrl = `https://img.vietqr.io/image/${bankConfig.bankId}-${bankConfig.accountNo}-${bankConfig.template || 'compact2'}.png?amount=${amount}&addInfo=${encodeURIComponent(content)}&accountName=${encodeURIComponent(bankConfig.accountName)}`;
         
-        await incrementReminder(relatedIds);
+        // 2. Load QR Image
+        const qrImg = new Image();
+        qrImg.crossOrigin = "Anonymous";
+        qrImg.src = qrUrl;
+        await new Promise((resolve, reject) => {
+            qrImg.onload = resolve;
+            qrImg.onerror = reject;
+        });
 
-        if (navigator.share) {
-            await navigator.share({ title: title, text: `Thanh toán ${content}`, files: [file] });
-            toast.dismiss(toastId);
-            toast.success("Đã mở chia sẻ!");
+        // 3. Setup Canvas
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error("Canvas error");
+
+        const W = 800;
+        const H = 1200;
+        canvas.width = W;
+        canvas.height = H;
+
+        // 4. Draw
+        // Background
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, W, H);
+        
+        // Header
+        const headerHeight = 140;
+        ctx.fillStyle = '#1e3a8a'; // Blue for Debt
+        ctx.fillRect(0, 0, W, headerHeight);
+        
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 40px Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('THANH TOÁN CÔNG NỢ', W / 2, headerHeight / 2);
+
+        // Shop Name
+        const shopConfig = await storageService.getShopConfig();
+        ctx.fillStyle = '#374151';
+        ctx.font = 'bold 32px Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        ctx.fillText((shopConfig?.shopName || 'ECOGO LOGISTICS').toUpperCase(), W / 2, headerHeight + 40);
+
+        // Amount
+        const amountBoxY = headerHeight + 100;
+        ctx.fillStyle = '#eff6ff'; // Light blue
+        
+        // Fallback for roundRect
+        if ((ctx as any).roundRect) {
+            ctx.beginPath();
+            (ctx as any).roundRect(100, amountBoxY, 600, 100, 20);
+            ctx.fill();
         } else {
-            await navigator.clipboard.writeText(url);
-            toast.dismiss(toastId);
-            toast.success("Đã copy link QR");
+            ctx.fillRect(100, amountBoxY, 600, 100);
         }
-    } catch (e) {
+
+        ctx.strokeStyle = '#bfdbfe';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        ctx.fillStyle = '#1e40af';
+        ctx.font = 'bold 60px Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`${new Intl.NumberFormat('vi-VN').format(amount)}đ`, W / 2, amountBoxY + 50);
+
+        // QR
+        const qrY = amountBoxY + 140;
+        const qrSize = 500;
+        ctx.drawImage(qrImg, (W - qrSize) / 2, qrY, qrSize, qrSize);
+
+        // Divider
+        const dividerY = qrY + qrSize + 40;
+        ctx.strokeStyle = '#e5e7eb';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([10, 10]);
+        ctx.beginPath();
+        ctx.moveTo(50, dividerY);
+        ctx.lineTo(W - 50, dividerY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Details
+        const infoY = dividerY + 50;
+        ctx.fillStyle = '#1f2937';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        
+        ctx.font = 'normal 28px Arial, sans-serif';
+        ctx.fillStyle = '#6b7280';
+        ctx.fillText('Khách hàng:', 80, infoY);
+        ctx.font = 'bold 28px Arial, sans-serif';
+        ctx.fillStyle = '#111827';
+        ctx.fillText(customerName, 300, infoY);
+
+        const row2Y = infoY + 50;
+        ctx.font = 'normal 28px Arial, sans-serif';
+        ctx.fillStyle = '#6b7280';
+        ctx.fillText('Số lượng đơn:', 80, row2Y);
+        ctx.font = 'bold 28px Arial, sans-serif';
+        ctx.fillStyle = '#111827';
+        ctx.fillText(`${orderCount} đơn hàng`, 300, row2Y);
+
+        // Footer
+        if (bankConfig) {
+            const footerY = H - 120;
+            ctx.fillStyle = '#f9fafb';
+            ctx.fillRect(0, footerY, W, 120);
+            ctx.fillStyle = '#4b5563';
+            ctx.font = 'italic 24px Arial, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(`Ngân hàng: ${bankConfig.bankId} - STK: ${bankConfig.accountNo}`, W / 2, footerY + 40);
+            ctx.fillText(`Chủ TK: ${bankConfig.accountName}`, W / 2, footerY + 80);
+        }
+
+        // 5. Share
+        canvas.toBlob(async (blob) => {
+            if (blob) {
+                const file = new File([blob], `debt-${Date.now()}.png`, { type: 'image/png' });
+                
+                await incrementReminder(relatedIds);
+
+                if (navigator.share) {
+                    await navigator.share({ 
+                        title: title, 
+                        text: `Thanh toán công nợ ${customerName}`, 
+                        files: [file] 
+                    });
+                    toast.dismiss(toastId);
+                    toast.success("Đã mở chia sẻ!");
+                } else {
+                    // Fallback
+                    const a = document.createElement('a');
+                    a.href = URL.createObjectURL(blob);
+                    a.download = `debt-${Date.now()}.png`;
+                    a.click();
+                    toast.success("Đã tải ảnh xuống");
+                    toast.dismiss(toastId);
+                }
+            }
+        });
+
+    } catch (e: any) {
         console.error(e);
         toast.dismiss(toastId);
-        toast.error("Lỗi chia sẻ (Trình duyệt không hỗ trợ)");
+        toast.error("Lỗi tạo ảnh: " + e.message);
     } finally {
         setIsSharing(false);
     }
   };
 
   const handleShareGroupQR = (group: CustomerDebtGroup) => {
-      const safeName = group.customerName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9 ]/g, '').toUpperCase().split(' ').slice(0,2).join(' ');
-      const desc = `TT ${safeName} ${group.orders.length} DON`;
+      // Use list of Order IDs instead of Customer Name for better reconciliation
+      // Format: "DH ID1 ID2 ID3..."
+      const idsStr = group.orders.map(o => o.id).join(' ');
+      const desc = `DH ${idsStr}`;
+      
       const ids = group.orders.map(o => o.id);
-      generateAndShareQR(group.totalAmount, desc, `Thanh toán tổng ${group.orders.length} đơn`, ids);
+      
+      generateAndShareQR(group.totalAmount, desc, `Thanh toán tổng ${group.orders.length} đơn`, ids, group.customerName, group.orders.length);
   };
 
   const handleSMS = async (group: CustomerDebtGroup) => {
@@ -204,11 +338,11 @@ const PaymentAudit: React.FC = () => {
      const ids = group.orders.map(o => o.id);
      await incrementReminder(ids);
      
-     const safeName = group.customerName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9 ]/g, '').toUpperCase().split(' ').slice(0, 2).join(' ');
-     const content = `TT ${safeName} ${group.orders.length} DON`;
+     const idsStr = ids.join(' ');
+     const content = `DH ${idsStr}`;
      const price = new Intl.NumberFormat('vi-VN').format(group.totalAmount);
      
-     const msg = `Chào ${group.customerName}, tiền hàng là ${price}đ. CK tới ${bankConfig.accountNo} (${bankConfig.bankId}) - ${bankConfig.accountName}. ND: ${content}. Tks!`;
+     const msg = `Chào ${group.customerName}, tổng tiền ${group.orders.length} đơn là ${price}đ. CK tới ${bankConfig.accountNo} (${bankConfig.bankId}). ND: ${content}. Tks!`;
      
      const ua = navigator.userAgent.toLowerCase();
      const isIOS = ua.indexOf('iphone') > -1 || ua.indexOf('ipad') > -1;
