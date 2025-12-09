@@ -1,4 +1,3 @@
-
 import { Order, OrderStatus, Product, Customer, BankConfig, Notification, ShopConfig, ImportRecord } from '../types';
 import { db } from '../firebaseConfig';
 import { v4 as uuidv4 } from 'uuid';
@@ -1388,10 +1387,12 @@ export const storageService = {
 
   updateOrderDetails: async (order: Order) => {
     let list = _memoryOrders || [];
+    // Ensure list is fresh if empty (e.g. reload)
     if (list.length === 0) {
         const local = localStorage.getItem(ORDER_KEY);
         if(local) list = JSON.parse(local);
     }
+    
     const idx = list.findIndex(o => o.id === order.id);
     if (idx >= 0) {
         const oldOrder = list[idx];
@@ -1399,7 +1400,7 @@ export const storageService = {
         // 1. CALCULATE STOCK DIFFERENCES
         const productDeltas = new Map<string, number>();
 
-        // Revert Old (Stock +)
+        // Revert Old (Stock +) - Using loose comparison for quantities just in case
         oldOrder.items.forEach(item => {
             if (item.productId) {
                 const current = productDeltas.get(item.productId) || 0;
@@ -1418,27 +1419,31 @@ export const storageService = {
         // 2. APPLY TO PRODUCTS (Memory & Cloud)
         const allProducts = ensureProductsLoaded();
         const batch = writeBatch(db); // For Cloud
-        let hasCloudUpdates = false;
+        let hasStockUpdates = false;
 
         for (const [prodId, delta] of productDeltas.entries()) {
-            if (delta === 0) continue;
+            // Precision check: ignore tiny floating point diffs if any
+            if (Math.abs(delta) < 0.0001) continue;
 
             // Update Memory
             const product = allProducts.find(p => p.id === prodId);
             if (product) {
-                product.stockQuantity = (product.stockQuantity || 0) + delta;
+                // Force Number type for safety
+                const currentStock = Number(product.stockQuantity) || 0;
+                const newStock = currentStock + delta;
+                product.stockQuantity = newStock;
                 
                 // Update Cloud (Optimized: Only update stock field)
                 if (isOnline()) {
                     const ref = doc(db, "products", prodId);
                     batch.update(ref, { stockQuantity: increment(delta) });
-                    hasCloudUpdates = true;
                 }
+                hasStockUpdates = true;
             }
         }
 
         // Save Product Memory Changes
-        if (productDeltas.size > 0) {
+        if (hasStockUpdates) {
             localStorage.setItem(PRODUCT_KEY, JSON.stringify(allProducts));
             window.dispatchEvent(new Event('storage_' + PRODUCT_KEY));
         }
@@ -1931,8 +1936,6 @@ export const storageService = {
       _memoryOrders = orders;
       localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
       window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-      
-      if (isOnline()) await batch.commit();
       
       return mergedGroupsCount;
   }

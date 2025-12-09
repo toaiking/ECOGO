@@ -246,7 +246,23 @@ const TrackingDashboard: React.FC = () => {
   const handleEdit = useCallback((order: Order) => { setEditingOrder(JSON.parse(JSON.stringify(order))); setActiveEditProductRow(null); setDetailOrder(null); }, []);
   const saveEdit = async (e: React.FormEvent) => { e.preventDefault(); if (editingOrder) { await storageService.updateOrderDetails(editingOrder); setEditingOrder(null); toast.success('Đã lưu thay đổi'); } };
   const updateEditItem = (index: number, field: keyof OrderItem, value: any) => { if (!editingOrder) return; const newItems = [...editingOrder.items]; newItems[index] = { ...newItems[index], [field]: value }; if (field === 'name') newItems[index].productId = undefined; const newTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0); setEditingOrder({ ...editingOrder, items: newItems, totalPrice: newTotal }); };
-  const selectProductForEditItem = (index: number, product: Product) => { if (!editingOrder) return; const newItems = [...editingOrder.items]; newItems[index] = { ...newItems[index], productId: product.id, name: product.name, price: product.defaultPrice }; const newTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0); setEditingOrder({ ...editingOrder, items: newItems, totalPrice: newTotal }); setActiveEditProductRow(null); };
+  
+  // FIX: Include importPrice to calculate profit correctly
+  const selectProductForEditItem = (index: number, product: Product) => { 
+      if (!editingOrder) return; 
+      const newItems = [...editingOrder.items]; 
+      newItems[index] = { 
+          ...newItems[index], 
+          productId: product.id, 
+          name: product.name, 
+          price: product.defaultPrice,
+          importPrice: product.importPrice // <--- IMPORTANT FIX
+      }; 
+      const newTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0); 
+      setEditingOrder({ ...editingOrder, items: newItems, totalPrice: newTotal }); 
+      setActiveEditProductRow(null); 
+  };
+
   const addEditItem = () => { if (!editingOrder) return; const newItems = [...editingOrder.items, { id: uuidv4(), name: '', quantity: 1, price: 0 }]; setEditingOrder({ ...editingOrder, items: newItems }); };
   const removeEditItem = (index: number) => { if (!editingOrder) return; const newItems = [...editingOrder.items]; newItems.splice(index, 1); const newTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0); setEditingOrder({ ...editingOrder, items: newItems, totalPrice: newTotal }); };
   
@@ -287,7 +303,23 @@ const TrackingDashboard: React.FC = () => {
   const handleBatchPrintClick = () => { if (filteredOrders.length === 0) { toast.error("Không có đơn hàng nào để in"); return; } setOrdersToPrint(filteredOrders); if (filteredOrders.length > 200) { setShowBatchSplitModal(true); } else { setShowPrintTypeModal(true); } };
   const handlePrintConfirm = async (type: 'LIST' | 'INVOICE') => { setShowPrintTypeModal(false); setShowBatchSplitModal(false); setIsPrinting(true); const batchName = filterBatch.length === 1 ? filterBatch[0] : `Batch_${new Date().getTime()}`; try { if (type === 'LIST') { await pdfService.generateCompactList(ordersToPrint, batchName); } else { await pdfService.generateInvoiceBatch(ordersToPrint, batchName); } toast.success("Đã tạo file PDF!"); if (isSelectionMode) clearSelection(); } catch (e: any) { console.error(e); const errorMessage = e instanceof Error ? e.message : String(e); toast.error(`Lỗi tạo PDF: ${errorMessage}`); } finally { setIsPrinting(false); setOrdersToPrint([]); } };
   const prepareSplitPrint = (subset: Order[]) => { setOrdersToPrint(subset); setShowBatchSplitModal(false); setShowPrintTypeModal(true); };
-  const handleReconcileFile = async (e: React.ChangeEvent<HTMLInputElement>) => { const files = e.target.files; const file = files && files[0]; if (!file) return; if (file.type !== 'application/pdf') { toast.error("Vui lòng chọn file PDF"); return; } setIsReconciling(true); try { const result = await reconciliationService.reconcileOrders(file, orders); setReconcileResult(result); if (result.matchedOrders.length === 0) { toast('Không tìm thấy giao dịch nào khớp.', { icon: '🔍' }); } else { toast.success(`Tìm thấy ${result.matchedOrders.length} giao dịch khớp!`); } } catch (error: any) { console.error(error); const errorMessage = error instanceof Error ? error.message : String(error); toast.error(`Lỗi đọc file PDF: ${errorMessage}`); } finally { setIsReconciling(false); } };
+  
+  const handleReconcileFile = async (e: React.ChangeEvent<HTMLInputElement>) => { 
+      const files = e.target.files; 
+      const file = files && files[0]; 
+      if (!file) return; 
+      if (file.type !== 'application/pdf') { toast.error("Vui lòng chọn file PDF"); return; } 
+      setIsReconciling(true); 
+      try { 
+          const result = await reconciliationService.reconcileOrders(file, orders); 
+          setReconcileResult(result); 
+          if (result.matchedOrders.length === 0) { toast('Không tìm thấy giao dịch nào khớp.', { icon: '🔍' }); } else { toast.success(`Tìm thấy ${result.matchedOrders.length} giao dịch khớp!`); } 
+      } catch (error: any) { 
+          console.error(error); 
+          const errorMessage = error instanceof Error ? error.message : String(error); 
+          toast.error(`Lỗi đọc file PDF: ${errorMessage}`); 
+      } finally { setIsReconciling(false); } 
+  };
   const confirmReconciliation = async () => { if (!reconcileResult || reconcileResult.matchedOrders.length === 0) return; const promises = reconcileResult.matchedOrders.map(order => storageService.updatePaymentVerification(order.id, true, { name: order.customerName })); await Promise.all(promises); toast.success(`Đã xác nhận thanh toán cho ${reconcileResult.matchedOrders.length} đơn!`); setShowReconcileModal(false); setReconcileResult(null); };
 
   const handleShowQR = useCallback(async (order: Order) => { const bankConfig = await storageService.getBankConfig(); if (!bankConfig || !bankConfig.accountNo) { toast.error("Vui lòng cài đặt thông tin Ngân hàng trước."); return; } const desc = `DH ${order.id}`; const url = `https://img.vietqr.io/image/${bankConfig.bankId}-${bankConfig.accountNo}-${bankConfig.template || 'compact2'}.png?amount=${order.totalPrice}&addInfo=${encodeURIComponent(desc)}&accountName=${encodeURIComponent(bankConfig.accountName)}`; setQrState({ isOpen: true, url, order }); }, []);
@@ -721,7 +753,79 @@ const TrackingDashboard: React.FC = () => {
           </div>
       )}
 
-      {/* ... (Other modals: ProductDetailModal, ProductEditModal, RoutePlannerModal, Reconcile, Bulk Status, Print, Split Batch, Floating Action, Confirm) ... */}
+      {/* RECONCILE MODAL */}
+      {showReconcileModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/60 backdrop-blur-sm p-4 animate-fade-in">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
+                <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                    <h3 className="font-bold text-lg text-gray-800">Đối soát Ngân hàng (Beta)</h3>
+                    <button onClick={() => { setShowReconcileModal(false); setReconcileResult(null); }} className="text-gray-400 hover:text-gray-600"><i className="fas fa-times"></i></button>
+                </div>
+                
+                <div className="p-6 flex-grow overflow-y-auto">
+                    {!reconcileResult ? (
+                        <div className="flex flex-col items-center justify-center h-48 space-y-4">
+                            <div className="w-16 h-16 bg-green-50 text-green-600 rounded-full flex items-center justify-center text-3xl mb-2">
+                                <i className="fas fa-file-pdf"></i>
+                            </div>
+                            <p className="text-sm text-gray-500 text-center max-w-xs">
+                                Tải lên sao kê PDF từ ngân hàng để tự động khớp lệnh chuyển khoản.
+                            </p>
+                            <label className="bg-black text-white px-6 py-3 rounded-xl font-bold text-sm cursor-pointer hover:bg-gray-800 transition-colors shadow-lg">
+                                {isReconciling ? 'Đang đọc...' : 'Chọn file PDF'}
+                                <input type="file" accept="application/pdf" className="hidden" onChange={handleReconcileFile} disabled={isReconciling} />
+                            </label>
+                        </div>
+                    ) : (
+                        <div className="space-y-4">
+                            <div className="bg-green-50 p-4 rounded-xl border border-green-100 flex justify-between items-center">
+                                <div>
+                                    <div className="text-xs font-bold text-green-600 uppercase">Đã tìm thấy</div>
+                                    <div className="text-xl font-black text-green-800">{reconcileResult.matchedOrders.length} giao dịch</div>
+                                </div>
+                                <div className="text-right">
+                                    <div className="text-xs font-bold text-green-600 uppercase">Tổng tiền</div>
+                                    <div className="text-xl font-black text-green-800">{new Intl.NumberFormat('vi-VN').format(reconcileResult.totalMatchedAmount)}đ</div>
+                                </div>
+                            </div>
+                            
+                            <div className="max-h-60 overflow-y-auto border border-gray-100 rounded-xl">
+                                {reconcileResult.matchedOrders.map(o => (
+                                    <div key={o.id} className="p-3 border-b border-gray-100 last:border-0 flex justify-between items-center text-sm">
+                                        <div>
+                                            <div className="font-bold text-gray-800">{o.customerName}</div>
+                                            <div className="text-xs text-gray-500">#{o.id}</div>
+                                        </div>
+                                        <div className="font-bold text-green-600">
+                                            {new Intl.NumberFormat('vi-VN').format(o.totalPrice)}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                            
+                            {reconcileResult.matchedOrders.length > 0 && (
+                                <button 
+                                    onClick={confirmReconciliation}
+                                    className="w-full py-3 bg-green-600 text-white font-bold rounded-xl shadow-lg hover:bg-green-700 transition-colors"
+                                >
+                                    Xác nhận Đã Thanh Toán ({reconcileResult.matchedOrders.length})
+                                </button>
+                            )}
+                            
+                            <button 
+                                onClick={() => setReconcileResult(null)}
+                                className="w-full py-3 bg-gray-100 text-gray-600 font-bold rounded-xl hover:bg-gray-200 transition-colors"
+                            >
+                                Chọn file khác
+                            </button>
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+      )}
+
+      {/* ... (Other modals: ProductDetailModal, ProductEditModal, RoutePlannerModal, Bulk Status, Print, Split Batch, Floating Action, Confirm) ... */}
       
       {viewingProduct && (
           <ProductDetailModal 
