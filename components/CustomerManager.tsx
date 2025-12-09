@@ -18,9 +18,9 @@ const CustomerManager: React.FC = () => {
   const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   
-  // Import State
+  // Import State (Moved from sidebar to Modal)
+  const [showImportModal, setShowImportModal] = useState(false);
   const [importText, setImportText] = useState('');
-  const [showImport, setShowImport] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [importProgress, setImportProgress] = useState(0); 
   const [importMode, setImportMode] = useState<'TEXT' | 'JSON'>('TEXT');
@@ -222,7 +222,7 @@ const CustomerManager: React.FC = () => {
             setImportProgress(100);
             toast.success(`Đã nhập ${parsedCustomers.length} khách! ${isLocalMode ? '(Chế độ Test)' : ''}`); 
             setImportText(''); 
-            setShowImport(false); 
+            setShowImportModal(false); 
 
         } catch (error) { 
             console.error(error); 
@@ -254,14 +254,19 @@ const CustomerManager: React.FC = () => {
     <div className="max-w-6xl mx-auto pb-20 animate-fade-in">
       <div className="flex justify-between items-center mb-6 px-2 sm:px-0">
           <h1 className="text-2xl font-black text-gray-800 tracking-tight">Quản Lý Khách Hàng</h1>
-          <button onClick={() => setShowDeleteAllConfirm(true)} className="bg-red-50 text-red-600 hover:bg-red-600 hover:text-white px-3 py-2 rounded-xl font-bold text-xs transition-colors border border-red-200 shadow-sm flex items-center">
-              <i className="fas fa-trash-alt mr-2"></i>Xóa Hết
-          </button>
+          <div className="flex gap-2">
+              <button onClick={() => setShowImportModal(true)} className="bg-eco-50 text-eco-700 hover:bg-eco-600 hover:text-white px-3 py-2 rounded-xl font-bold text-xs transition-colors border border-eco-200 shadow-sm flex items-center">
+                  <i className="fas fa-file-import mr-2"></i>Import Excel
+              </button>
+              <button onClick={() => setShowDeleteAllConfirm(true)} className="bg-red-50 text-red-600 hover:bg-red-600 hover:text-white px-3 py-2 rounded-xl font-bold text-xs transition-colors border border-red-200 shadow-sm flex items-center">
+                  <i className="fas fa-trash-alt mr-2"></i>Xóa Hết
+              </button>
+          </div>
       </div>
       
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
         
-        {/* LEFT COLUMN: ADD & IMPORT */}
+        {/* LEFT COLUMN: ADD CUSTOMER */}
         <div className="lg:col-span-4 space-y-6">
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
               <h3 className="text-lg font-bold text-gray-900 mb-4 border-b border-gray-100 pb-2">Thêm Khách Mới</h3>
@@ -288,59 +293,6 @@ const CustomerManager: React.FC = () => {
                   </div>
                   <button type="submit" className="w-full bg-black text-white py-3 rounded-xl hover:bg-gray-800 font-bold shadow-lg shadow-gray-200 transition-all active:scale-95">Lưu Khách Hàng</button>
               </form>
-          </div>
-
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-              <div className="flex justify-between items-center mb-4 cursor-pointer group" onClick={() => setShowImport(!showImport)}>
-                  <h3 className="text-lg font-bold text-gray-800 group-hover:text-eco-600 transition-colors">Nhập liệu (Import)</h3>
-                  <i className={`fas fa-chevron-down transition-transform ${showImport ? 'rotate-180' : ''} text-gray-400`}></i>
-              </div>
-              
-              {showImport && (
-                  <div className="space-y-3 animate-fade-in">
-                      <div className="flex items-center gap-2 bg-yellow-50 p-2 rounded-lg border border-yellow-100 mb-2">
-                          <input 
-                              type="checkbox" 
-                              id="devMode" 
-                              checked={isLocalMode} 
-                              onChange={e => setIsLocalMode(e.target.checked)} 
-                              className="w-4 h-4 text-eco-600 rounded focus:ring-eco-500 cursor-pointer"
-                          />
-                          <label htmlFor="devMode" className="text-xs font-bold text-yellow-800 cursor-pointer select-none flex-grow">
-                              Chế độ Test (Tắt Cloud Sync)
-                          </label>
-                      </div>
-
-                      <div className="flex gap-2 mb-2 p-1 bg-gray-100 rounded-lg">
-                          <button onClick={() => setImportMode('TEXT')} className={`flex-1 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${importMode === 'TEXT' ? 'bg-white text-black shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>Excel / Text</button>
-                          <button onClick={() => setImportMode('JSON')} className={`flex-1 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${importMode === 'JSON' ? 'bg-white text-black shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>JSON</button>
-                      </div>
-                      
-                      {importMode === 'TEXT' ? (
-                          <>
-                            <p className="text-[10px] text-gray-500 leading-relaxed italic bg-blue-50 p-2 rounded border border-blue-100">
-                                Copy từ Excel (không cần tiêu đề):<br/>
-                                <b>Tên | SĐT | Địa chỉ | Ưu tiên</b><br/>
-                                <i>Số điện thoại không bắt buộc.</i>
-                            </p>
-                            <textarea value={importText} onChange={e => setImportText(e.target.value)} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-xs font-mono h-48 focus:border-eco-500 outline-none whitespace-pre scrollbar-thin" placeholder={"Nguyen Van A\t0909123\tQuan 1\t1\nLe Thi B\t\tQuan 3\t2"} disabled={isImporting} />
-                          </>
-                      ) : (
-                          <>
-                            <p className="text-xs text-gray-500 leading-relaxed">Dán mảng JSON vào đây (cho dữ liệu lớn)</p>
-                            <textarea value={importText} onChange={e => setImportText(e.target.value)} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-xs font-mono h-48 focus:border-eco-500 outline-none scrollbar-thin" placeholder='[ {"name": "A", "phone": "", "priority": 1} ]' disabled={isImporting} />
-                          </>
-                      )}
-                      
-                      {isImporting && (
-                          <div className="w-full bg-gray-200 rounded-full h-2 mb-2 overflow-hidden">
-                              <div className="bg-eco-600 h-2 rounded-full transition-all duration-300 animate-pulse" style={{ width: `${importProgress}%` }}></div>
-                          </div>
-                      )}
-
-                      <button onClick={handleImport} type="button" disabled={isImporting} className={`w-full py-2.5 rounded-xl text-sm font-bold text-white transition-all shadow-md ${isImporting ? 'bg-gray-400 cursor-not-allowed' : 'bg-eco-600 hover:bg-eco-700'}`}>{isImporting ? `Đang nhập ${importProgress}%` : 'Bắt đầu Nhập'}</button>
-                  </div>
-              )}
           </div>
         </div>
         
@@ -487,6 +439,62 @@ const CustomerManager: React.FC = () => {
             </div>
         </div>
       </div>
+
+      {/* IMPORT MODAL */}
+      {showImportModal && (
+          <div className="fixed inset-0 z-[100] bg-gray-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+              <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
+                  <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                      <h3 className="font-bold text-lg text-gray-800">Nhập liệu Khách Hàng (Excel/Text)</h3>
+                      <button onClick={() => setShowImportModal(false)} className="text-gray-400 hover:text-gray-600"><i className="fas fa-times"></i></button>
+                  </div>
+                  
+                  <div className="p-6 space-y-4 overflow-y-auto">
+                      <div className="flex items-center gap-2 bg-yellow-50 p-2 rounded-lg border border-yellow-100">
+                          <input 
+                              type="checkbox" 
+                              id="devMode" 
+                              checked={isLocalMode} 
+                              onChange={e => setIsLocalMode(e.target.checked)} 
+                              className="w-4 h-4 text-eco-600 rounded focus:ring-eco-500 cursor-pointer"
+                          />
+                          <label htmlFor="devMode" className="text-xs font-bold text-yellow-800 cursor-pointer select-none flex-grow">
+                              Chế độ Test (Tắt Cloud Sync)
+                          </label>
+                      </div>
+
+                      <div className="flex gap-2 p-1 bg-gray-100 rounded-lg">
+                          <button onClick={() => setImportMode('TEXT')} className={`flex-1 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${importMode === 'TEXT' ? 'bg-white text-black shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>Excel / Text</button>
+                          <button onClick={() => setImportMode('JSON')} className={`flex-1 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${importMode === 'JSON' ? 'bg-white text-black shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>JSON</button>
+                      </div>
+                      
+                      {importMode === 'TEXT' ? (
+                          <>
+                            <p className="text-[10px] text-gray-500 leading-relaxed italic bg-blue-50 p-2 rounded border border-blue-100">
+                                Copy từ Excel (không cần tiêu đề):<br/>
+                                <b>Tên | SĐT | Địa chỉ | Ưu tiên</b><br/>
+                                <i>Số điện thoại không bắt buộc.</i>
+                            </p>
+                            <textarea value={importText} onChange={e => setImportText(e.target.value)} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-xs font-mono h-48 focus:border-eco-500 outline-none whitespace-pre scrollbar-thin" placeholder={"Nguyen Van A\t0909123\tQuan 1\t1\nLe Thi B\t\tQuan 3\t2"} disabled={isImporting} />
+                          </>
+                      ) : (
+                          <>
+                            <p className="text-xs text-gray-500 leading-relaxed">Dán mảng JSON vào đây (cho dữ liệu lớn)</p>
+                            <textarea value={importText} onChange={e => setImportText(e.target.value)} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-xs font-mono h-48 focus:border-eco-500 outline-none scrollbar-thin" placeholder='[ {"name": "A", "phone": "", "priority": 1} ]' disabled={isImporting} />
+                          </>
+                      )}
+                      
+                      {isImporting && (
+                          <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                              <div className="bg-eco-600 h-2 rounded-full transition-all duration-300 animate-pulse" style={{ width: `${importProgress}%` }}></div>
+                          </div>
+                      )}
+
+                      <button onClick={handleImport} type="button" disabled={isImporting} className={`w-full py-3 rounded-xl text-sm font-bold text-white transition-all shadow-md ${isImporting ? 'bg-gray-400 cursor-not-allowed' : 'bg-eco-600 hover:bg-eco-700'}`}>{isImporting ? `Đang nhập ${importProgress}%` : 'Bắt đầu Nhập'}</button>
+                  </div>
+              </div>
+          </div>
+      )}
 
       <ConfirmModal isOpen={showDeleteConfirm} title="Xóa khách hàng?" message="Hành động này sẽ xóa khách hàng khỏi danh bạ." onConfirm={confirmDelete} onCancel={() => setShowDeleteConfirm(false)} confirmLabel="Xóa" isDanger={true} />
       <ConfirmModal isOpen={showDeleteAllConfirm} title={`CẢNH BÁO: Xóa TẤT CẢ?`} message={`Bạn có chắc chắn muốn xóa toàn bộ danh sách khách hàng? \n\n ${isLocalMode ? 'Chế độ Test: Chỉ xóa trên máy này.' : 'Dữ liệu sẽ bị xóa cả trên Cloud (nếu có mạng).'}`} onConfirm={confirmDeleteAll} onCancel={() => setShowDeleteAllConfirm(false)} confirmLabel="XÓA SẠCH" isDanger={true} />

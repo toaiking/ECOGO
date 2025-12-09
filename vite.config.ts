@@ -11,6 +11,6 @@ export default defineConfig({
   },
   define: {
     'process.env': {},
-    '__APP_VERSION__': JSON.stringify("1.2.0")
+    '__APP_VERSION__': JSON.stringify("1.2.1")
   }
 });

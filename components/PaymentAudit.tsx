@@ -23,6 +23,9 @@ const PaymentAudit: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedBatch, setSelectedBatch] = useState('ALL');
   
+  // Selection State for Modal
+  const [selectedGroup, setSelectedGroup] = useState<CustomerDebtGroup | null>(null);
+
   // Confirm Modal State
   const [confirmData, setConfirmData] = useState<{isOpen: boolean, ids: string[], message: string}>({
       isOpen: false, ids: [], message: ''
@@ -33,35 +36,23 @@ const PaymentAudit: React.FC = () => {
 
   useEffect(() => {
     const unsub = storageService.subscribeOrders((allOrders) => {
-      // 1. DATA CLEANING: Strict Deduplication & Filtering
+      // 1. DATA CLEANING
       const validOrders = new Map<string, Order>();
-      
-      // REGEX: ID phải là 8 ký tự, chỉ chứa Chữ Hoa và Số (Ví dụ: A1B2C3D4)
       const validIdRegex = /^[A-Z0-9]{8}$/;
 
       if (allOrders && Array.isArray(allOrders)) {
           allOrders.forEach(o => {
               if (!o || !o.id) return;
-              
-              // STRICT ID CHECK
               if (!validIdRegex.test(o.id)) return;
-
-              // INTEGRITY CHECK: Đơn phải có tên khách và ít nhất 1 sản phẩm
               if (!o.customerName || !o.items || o.items.length === 0) return;
-
-              // Filter out Cancelled
               if (o.status === OrderStatus.CANCELLED) return;
-
-              // Filter for Payment Audit: Transfer & Not Verified
               if (o.paymentMethod !== PaymentMethod.TRANSFER) return;
               if (o.paymentVerified) return;
 
-              // Deduplicate by ID (Last write wins strategy usually implies latest data)
               validOrders.set(o.id, o); 
           });
       }
       
-      // Convert to array and Sort by newest first
       const sorted = Array.from(validOrders.values())
         .sort((a, b) => b.createdAt - a.createdAt);
       
@@ -95,16 +86,13 @@ const PaymentAudit: React.FC = () => {
   // --- LOGIC GỘP NHÓM KHÁCH HÀNG ---
   const customerGroups = useMemo(() => {
       const groups: Record<string, CustomerDebtGroup> = {};
-      const processedIds = new Set<string>(); // Prevent duplicate orders
+      const processedIds = new Set<string>(); 
 
       filteredOrders.forEach(o => {
           if (processedIds.has(o.id)) return;
           processedIds.add(o.id);
 
-          // Determine Key STRICTLY
           let key = '';
-
-          // Combine ID + Normalized Name to ensure different people with same ID get split
           if (o.customerId) {
                key = `${o.customerId}_${normalizeString(o.customerName)}`;
           } else if (o.customerPhone && o.customerPhone.length > 6) {
@@ -140,14 +128,7 @@ const PaymentAudit: React.FC = () => {
       return Object.values(groups).sort((a, b) => b.totalAmount - a.totalAmount);
   }, [filteredOrders]);
 
-  const handleConfirmGroup = (group: CustomerDebtGroup) => {
-      const ids = group.orders.map(o => o.id);
-      setConfirmData({
-          isOpen: true,
-          ids: ids,
-          message: `Xác nhận tiền về đủ ${new Intl.NumberFormat('vi-VN').format(group.totalAmount)}đ cho ${ids.length} đơn của ${group.customerName}?`
-      });
-  };
+  // --- ACTIONS ---
 
   const executeConfirm = async () => {
     if (confirmData.ids.length > 0) {
@@ -158,7 +139,17 @@ const PaymentAudit: React.FC = () => {
       await Promise.all(promises);
       toast.success(`Đã xác nhận tiền về!`);
       setConfirmData({ isOpen: false, ids: [], message: '' });
+      setSelectedGroup(null); // Close modal on success
     }
+  };
+
+  const handleConfirmGroup = (group: CustomerDebtGroup) => {
+      const ids = group.orders.map(o => o.id);
+      setConfirmData({
+          isOpen: true,
+          ids: ids,
+          message: `Xác nhận tiền về đủ ${new Intl.NumberFormat('vi-VN').format(group.totalAmount)}đ cho ${ids.length} đơn của ${group.customerName}?`
+      });
   };
 
   const incrementReminder = async (ids: string[]) => {
@@ -205,11 +196,20 @@ const PaymentAudit: React.FC = () => {
       generateAndShareQR(group.totalAmount, desc, `Thanh toán tổng ${group.orders.length} đơn`, ids);
   };
 
-  const handleSMS = async (phone: string, name: string, amount: number, content: string, relatedIds: string[]) => {
+  const handleSMS = async (group: CustomerDebtGroup) => {
+     const phone = group.customerPhone;
+     if (!phone) { toast.error("Khách không có SĐT"); return; }
      if (!bankConfig || !bankConfig.accountNo) { toast.error("Chưa có thông tin ngân hàng"); return; }
-     await incrementReminder(relatedIds);
-     const price = new Intl.NumberFormat('vi-VN').format(amount);
-     const msg = `Chào ${name}, tiền hàng là ${price}đ. CK tới ${bankConfig.accountNo} (${bankConfig.bankId}) - ${bankConfig.accountName}. ND: ${content}. Tks!`;
+     
+     const ids = group.orders.map(o => o.id);
+     await incrementReminder(ids);
+     
+     const safeName = group.customerName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9 ]/g, '').toUpperCase().split(' ').slice(0, 2).join(' ');
+     const content = `TT ${safeName} ${group.orders.length} DON`;
+     const price = new Intl.NumberFormat('vi-VN').format(group.totalAmount);
+     
+     const msg = `Chào ${group.customerName}, tiền hàng là ${price}đ. CK tới ${bankConfig.accountNo} (${bankConfig.bankId}) - ${bankConfig.accountName}. ND: ${content}. Tks!`;
+     
      const ua = navigator.userAgent.toLowerCase();
      const isIOS = ua.indexOf('iphone') > -1 || ua.indexOf('ipad') > -1;
      const separator = isIOS ? '&' : '?';
@@ -219,9 +219,9 @@ const PaymentAudit: React.FC = () => {
   const ReminderBadge = ({ count }: { count?: number }) => {
       if (!count || count === 0) return null;
       return (
-          <div className="flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-orange-50 text-orange-600 border border-orange-200 shadow-sm" title={`Đã nhắc ${count} lần`}>
+          <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-orange-100 text-orange-600 border border-orange-200">
               <i className="fas fa-bell text-[8px]"></i> {count}
-          </div>
+          </span>
       );
   }
 
@@ -242,7 +242,6 @@ const PaymentAudit: React.FC = () => {
         </div>
         
         <div className="flex items-center gap-3 w-full md:w-auto">
-            {/* Batch Filter Dropdown */}
             <div className="relative">
                 <select 
                     value={selectedBatch} 
@@ -257,7 +256,6 @@ const PaymentAudit: React.FC = () => {
                 <i className="fas fa-chevron-down absolute right-3 top-2.5 text-gray-400 text-xs pointer-events-none"></i>
             </div>
             
-            {/* Search Filter */}
             <div className="relative flex-grow md:flex-grow-0 md:w-64">
                  <i className="fas fa-search absolute left-3 top-2.5 text-gray-400 text-xs"></i>
                  <input 
@@ -270,88 +268,131 @@ const PaymentAudit: React.FC = () => {
         </div>
       </div>
 
-      {/* 2. MAIN LIST */}
-      {filteredOrders.length === 0 ? (
-           <div className="text-center py-12 flex flex-col items-center justify-center text-gray-300">
-               <i className="fas fa-check-circle text-5xl mb-3 opacity-20"></i>
-               <p className="text-sm font-medium">Tuyệt vời! Không có đơn nợ nào.</p>
-           </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {customerGroups.map(group => {
-                const isMulti = group.orders.length > 1;
-                return (
-                <div key={group.key} className={`bg-white rounded-2xl border border-gray-200 shadow-sm flex flex-col overflow-hidden transition-all hover:shadow-md hover:border-eco-300`}>
-                    
-                    {/* Header */}
-                    <div className="p-4 pb-2 bg-white">
-                        <div className="flex justify-between items-start">
-                            <div>
-                                <div className="flex items-center gap-2">
-                                    <div className="font-bold text-gray-900 text-base">{group.customerName}</div>
+      {/* 2. TABLE LIST */}
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+          {filteredOrders.length === 0 ? (
+               <div className="text-center py-20 flex flex-col items-center justify-center text-gray-300">
+                   <i className="fas fa-check-circle text-5xl mb-3 opacity-20"></i>
+                   <p className="text-sm font-medium">Tuyệt vời! Không có đơn nợ nào.</p>
+               </div>
+          ) : (
+            <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                    <thead className="bg-gray-100 text-gray-500 font-bold uppercase text-[10px] tracking-wider">
+                        <tr>
+                            <th className="p-3 text-center w-12">#</th>
+                            <th className="p-3">Khách Hàng</th>
+                            <th className="p-3 hidden sm:table-cell">SĐT / Liên hệ</th>
+                            <th className="p-3 text-center">Số đơn</th>
+                            <th className="p-3 text-center hidden sm:table-cell">Đã nhắc</th>
+                            <th className="p-3 text-right">Tổng nợ</th>
+                            <th className="p-3 text-center w-20"></th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                        {customerGroups.map((group, idx) => (
+                            <tr 
+                                key={group.key} 
+                                onClick={() => setSelectedGroup(group)}
+                                className="hover:bg-blue-50 cursor-pointer transition-colors group"
+                            >
+                                <td className="p-3 text-center font-bold text-gray-400 text-xs">{idx + 1}</td>
+                                <td className="p-3">
+                                    <div className="font-bold text-gray-800 text-sm">{group.customerName}</div>
+                                    <div className="sm:hidden text-[10px] text-gray-500 font-mono mt-0.5">{group.customerPhone}</div>
+                                </td>
+                                <td className="p-3 hidden sm:table-cell">
+                                    <span className="text-xs font-mono text-gray-600 bg-gray-100 px-2 py-1 rounded">{group.customerPhone || '---'}</span>
+                                </td>
+                                <td className="p-3 text-center">
+                                    <span className="text-xs font-bold bg-gray-100 text-gray-700 px-2 py-1 rounded-full">{group.orders.length}</span>
+                                </td>
+                                <td className="p-3 text-center hidden sm:table-cell">
                                     <ReminderBadge count={group.maxReminders} />
-                                    {isMulti && <span className="bg-red-50 text-red-600 text-[9px] font-bold px-1.5 py-0.5 rounded border border-red-100">{group.orders.length} đơn</span>}
-                                </div>
-                                <div className="flex items-center gap-3 mt-1">
-                                    <span className="text-xs text-gray-500 font-mono tracking-tight">{group.customerPhone || 'Không có SĐT'}</span>
-                                    {group.customerPhone && (
-                                        <div className="flex gap-2">
-                                            <a href={`tel:${group.customerPhone}`} className="text-gray-400 hover:text-green-600"><i className="fas fa-phone-alt text-xs"></i></a>
-                                            <a href={`https://zalo.me/${group.customerPhone}`} target="_blank" className="text-gray-400 hover:text-blue-600 font-bold text-[9px] border border-gray-300 rounded px-1">Z</a>
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-                            <div className="text-right">
-                                <div className="text-lg font-black text-eco-700">{new Intl.NumberFormat('vi-VN').format(group.totalAmount)}</div>
-                                <div className="text-[9px] font-bold text-gray-400 uppercase">Tổng nợ</div>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    {/* List of Orders (Always Expanded for Detail Visibility) */}
-                    <div className="flex-grow bg-gray-50/50 border-t border-gray-100 border-b">
-                        {group.orders.map((o, idx) => (
-                            <div key={o.id} className={`p-3 text-xs ${idx < group.orders.length - 1 ? 'border-b border-gray-100' : ''}`}>
-                                <div className="flex justify-between items-start gap-2 mb-1">
-                                    <div className="flex items-center gap-1.5">
-                                        <span className="font-mono font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded text-[10px]">#{o.id}</span>
-                                        {o.batchId && <span className="text-[9px] text-gray-400 border border-gray-200 px-1 rounded bg-white">{o.batchId}</span>}
-                                    </div>
-                                    <span className="font-bold text-gray-800">{new Intl.NumberFormat('vi-VN').format(o.totalPrice)}</span>
-                                </div>
-                                
-                                <div className="text-gray-600 leading-snug pl-1">
-                                    {o.items.map(i => `${i.name} (x${i.quantity})`).join(', ')}
-                                </div>
-                                {o.notes && <div className="text-[10px] text-gray-400 italic mt-0.5 pl-1"><i className="fas fa-comment-alt mr-1"></i>{o.notes}</div>}
-                            </div>
+                                </td>
+                                <td className="p-3 text-right">
+                                    <span className="font-black text-eco-600 text-sm">{new Intl.NumberFormat('vi-VN').format(group.totalAmount)}</span>
+                                </td>
+                                <td className="p-3 text-center">
+                                    <button className="text-gray-300 group-hover:text-blue-600 transition-colors">
+                                        <i className="fas fa-chevron-right"></i>
+                                    </button>
+                                </td>
+                            </tr>
                         ))}
-                    </div>
+                    </tbody>
+                </table>
+            </div>
+          )}
+      </div>
 
-                    {/* Actions */}
-                    <div className="p-3 bg-white flex items-center gap-2">
-                        <button onClick={() => handleConfirmGroup(group)} className="flex-grow bg-eco-600 hover:bg-eco-700 text-white py-2.5 rounded-xl font-bold text-xs shadow-md shadow-green-100 transition-transform active:scale-95 flex items-center justify-center gap-2">
-                            <i className="fas fa-check-circle"></i> Xác nhận tiền về
-                        </button>
-                        
-                        <button onClick={() => handleShareGroupQR(group)} disabled={isSharing} className="w-10 h-10 bg-blue-50 text-blue-600 rounded-xl hover:bg-blue-100 border border-blue-100 flex items-center justify-center transition-colors">
-                            <i className="fas fa-qrcode"></i>
-                        </button>
-                        
-                        <button onClick={() => {
-                            const safeName = group.customerName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9 ]/g, '').toUpperCase().split(' ').slice(0, 2).join(' ');
-                            const desc = `TT ${safeName} ${group.orders.length} DON`;
-                            const ids = group.orders.map(o => o.id);
-                            handleSMS(group.customerPhone, group.customerName, group.totalAmount, desc, ids);
-                        }} className="w-10 h-10 bg-orange-50 text-orange-600 rounded-xl hover:bg-orange-100 border border-orange-100 flex items-center justify-center transition-colors">
-                            <i className="fas fa-comment-dots"></i>
-                        </button>
-                    </div>
-                </div>
-                );
-            })}
-        </div>
+      {/* 3. DETAIL POPUP (MODAL) */}
+      {selectedGroup && (
+          <div className="fixed inset-0 z-[100] bg-gray-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in" onClick={() => setSelectedGroup(null)}>
+              <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
+                  {/* Header */}
+                  <div className="p-5 border-b border-gray-100 flex justify-between items-start bg-gray-50">
+                      <div>
+                          <div className="flex items-center gap-2">
+                              <h3 className="font-bold text-xl text-gray-800">{selectedGroup.customerName}</h3>
+                              <ReminderBadge count={selectedGroup.maxReminders} />
+                          </div>
+                          <div className="text-sm text-gray-500 font-mono mt-1 flex items-center gap-2">
+                              <i className="fas fa-phone-alt text-xs"></i> {selectedGroup.customerPhone || 'Không có SĐT'}
+                          </div>
+                      </div>
+                      <div className="text-right">
+                          <div className="text-[10px] font-bold text-gray-400 uppercase">Tổng nợ</div>
+                          <div className="text-xl font-black text-eco-600">{new Intl.NumberFormat('vi-VN').format(selectedGroup.totalAmount)}đ</div>
+                      </div>
+                  </div>
+
+                  {/* Order List */}
+                  <div className="flex-grow overflow-y-auto p-4 space-y-3 bg-gray-50/30">
+                      <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 px-1">Chi tiết đơn hàng ({selectedGroup.orders.length})</div>
+                      {selectedGroup.orders.map(o => (
+                          <div key={o.id} className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm">
+                              <div className="flex justify-between items-start mb-1">
+                                  <div className="flex items-center gap-2">
+                                      <span className="font-mono font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded text-[10px]">#{o.id}</span>
+                                      {o.batchId && <span className="text-[10px] text-gray-400 border border-gray-100 px-1.5 rounded">{o.batchId}</span>}
+                                  </div>
+                                  <span className="font-bold text-gray-800 text-sm">{new Intl.NumberFormat('vi-VN').format(o.totalPrice)}</span>
+                              </div>
+                              <div className="text-xs text-gray-700 leading-relaxed pl-1">
+                                  {o.items.map(i => `${i.name} (x${i.quantity})`).join(', ')}
+                              </div>
+                              {o.notes && <div className="text-[10px] text-orange-600 italic mt-1 bg-orange-50 px-2 py-1 rounded border border-orange-100 inline-block"><i className="fas fa-sticky-note mr-1"></i>{o.notes}</div>}
+                          </div>
+                      ))}
+                  </div>
+
+                  {/* Footer Actions */}
+                  <div className="p-4 bg-white border-t border-gray-100 grid grid-cols-2 gap-3">
+                      <button 
+                          onClick={() => handleConfirmGroup(selectedGroup)} 
+                          className="col-span-2 py-3 bg-eco-600 hover:bg-eco-700 text-white font-bold rounded-xl shadow-lg shadow-green-200 transition-transform active:scale-95 flex items-center justify-center gap-2"
+                      >
+                          <i className="fas fa-check-circle"></i> Xác nhận Đã nhận tiền
+                      </button>
+                      
+                      <button 
+                          onClick={() => handleShareGroupQR(selectedGroup)} 
+                          disabled={isSharing}
+                          className="py-3 bg-white border border-gray-200 hover:border-blue-300 hover:bg-blue-50 text-blue-700 font-bold rounded-xl transition-colors flex items-center justify-center gap-2 shadow-sm"
+                      >
+                          <i className="fas fa-qrcode"></i> Gửi mã QR
+                      </button>
+                      
+                      <button 
+                          onClick={() => handleSMS(selectedGroup)} 
+                          className="py-3 bg-white border border-gray-200 hover:border-orange-300 hover:bg-orange-50 text-orange-600 font-bold rounded-xl transition-colors flex items-center justify-center gap-2 shadow-sm"
+                      >
+                          <i className="fas fa-comment-dots"></i> Nhắn SMS
+                      </button>
+                  </div>
+              </div>
+          </div>
       )}
 
       {/* CONFIRM MODAL */}
