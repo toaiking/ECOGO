@@ -1,3 +1,4 @@
+
 import { Order, OrderStatus, Product, Customer, BankConfig, Notification, ShopConfig, ImportRecord } from '../types';
 import { db } from '../firebaseConfig';
 import { v4 as uuidv4 } from 'uuid';
@@ -513,7 +514,7 @@ export const storageService = {
 
   // NEW: Atomic Stock Adjustment (Safe for Concurrency)
   adjustStockAtomic: async (productId: string, delta: number, importInfo?: { price: number, note?: string }) => {
-      // 1. Local Update
+      // 1. Local Update (Optimistic)
       const products = ensureProductsLoaded();
       const product = products.find(p => p.id === productId);
       
@@ -566,8 +567,13 @@ export const storageService = {
                   }
               });
           } catch (e: any) {
-              console.error("Stock Transaction Failed", e);
-              if (e.code === 'resource-exhausted') markQuotaExhausted();
+              // CHANGE: Handle Quota Exceeded gracefully
+              if (e.code === 'resource-exhausted') {
+                  console.warn("Quota exceeded during transaction. Switching to offline mode.");
+                  markQuotaExhausted();
+              } else {
+                  console.error("Stock Transaction Failed", e);
+              }
           }
       }
   },
@@ -603,7 +609,11 @@ export const storageService = {
       const checkCommit = async () => {
           batchOps++;
           if (batchOps >= 300 && isOnline()) {
-              await batch.commit();
+              try {
+                  await batch.commit();
+              } catch (e: any) {
+                  if (e.code === 'resource-exhausted') markQuotaExhausted();
+              }
               batchOps = 0;
           }
       };
@@ -678,7 +688,13 @@ export const storageService = {
       }
 
       // Final commit
-      if (isOnline() && batchOps > 0) await batch.commit();
+      if (isOnline() && batchOps > 0) {
+          try {
+              await batch.commit();
+          } catch (e: any) {
+              if (e.code === 'resource-exhausted') markQuotaExhausted();
+          }
+      }
 
       // Update Local Storage
       _memoryProducts = products;
@@ -760,14 +776,27 @@ export const storageService = {
           
           // Commit in chunks
           if (batchOps >= 300) {
-              if (isOnline()) await batch.commit();
+              if (isOnline()) {
+                  try {
+                      await batch.commit();
+                  } catch (e: any) {
+                      if (e.code === 'resource-exhausted') {
+                          markQuotaExhausted();
+                          break;
+                      }
+                  }
+              }
               batchOps = 0;
           }
       }
 
       // Final commit
       if (isOnline() && batchOps > 0) {
-          await batch.commit();
+          try {
+              await batch.commit();
+          } catch (e: any) {
+              if (e.code === 'resource-exhausted') markQuotaExhausted();
+          }
       }
 
       // Update Local Storage
@@ -869,8 +898,9 @@ export const storageService = {
                   
                   try {
                       await batch.commit();
-                  } catch (e) {
+                  } catch (e: any) {
                       console.error("Failed to sync product to pending orders", e);
+                      if (e.code === 'resource-exhausted') markQuotaExhausted();
                   }
               }
           }
@@ -1387,17 +1417,79 @@ export const storageService = {
 
   updateOrderDetails: async (order: Order) => {
     let list = _memoryOrders || [];
+    // Ensure list is fresh if empty (e.g. reload)
     if (list.length === 0) {
         const local = localStorage.getItem(ORDER_KEY);
         if(local) list = JSON.parse(local);
     }
+    
     const idx = list.findIndex(o => o.id === order.id);
     if (idx >= 0) {
+        const oldOrder = list[idx];
+        
+        // 1. CALCULATE STOCK DIFFERENCES
+        const productDeltas = new Map<string, number>();
+
+        // Revert Old (Stock +) - Using loose comparison for quantities just in case
+        oldOrder.items.forEach(item => {
+            if (item.productId) {
+                const current = productDeltas.get(item.productId) || 0;
+                productDeltas.set(item.productId, current + (Number(item.quantity) || 0));
+            }
+        });
+
+        // Apply New (Stock -)
+        order.items.forEach(item => {
+            if (item.productId) {
+                const current = productDeltas.get(item.productId) || 0;
+                productDeltas.set(item.productId, current - (Number(item.quantity) || 0));
+            }
+        });
+
+        // 2. APPLY TO PRODUCTS (Memory & Cloud)
+        const allProducts = ensureProductsLoaded();
+        const batch = writeBatch(db); // For Cloud
+        let hasStockUpdates = false;
+
+        for (const [prodId, delta] of productDeltas.entries()) {
+            // Precision check: ignore tiny floating point diffs if any
+            if (Math.abs(delta) < 0.0001) continue;
+
+            // Update Memory
+            const product = allProducts.find(p => p.id === prodId);
+            if (product) {
+                // Force Number type for safety
+                const currentStock = Number(product.stockQuantity) || 0;
+                const newStock = currentStock + delta;
+                product.stockQuantity = newStock;
+                
+                // Update Cloud (Optimized: Only update stock field)
+                if (isOnline()) {
+                    const ref = doc(db, "products", prodId);
+                    batch.update(ref, { stockQuantity: increment(delta) });
+                }
+                hasStockUpdates = true;
+            }
+        }
+
+        // Save Product Memory Changes
+        if (hasStockUpdates) {
+            localStorage.setItem(PRODUCT_KEY, JSON.stringify(allProducts));
+            window.dispatchEvent(new Event('storage_' + PRODUCT_KEY));
+        }
+
+        // 3. SAVE ORDER
         list[idx] = order;
         _memoryOrders = list;
         localStorage.setItem(ORDER_KEY, JSON.stringify(list));
         window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-        await safeCloudOp(() => setDoc(doc(db, "orders", order.id), sanitize(order)));
+        
+        if (isOnline()) {
+            const orderRef = doc(db, "orders", order.id);
+            // Update order details. We use set with full object to handle potential structure changes.
+            batch.set(orderRef, sanitize(order)); 
+            await safeCloudOp(() => batch.commit());
+        }
     }
   },
 
@@ -1874,8 +1966,6 @@ export const storageService = {
       _memoryOrders = orders;
       localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
       window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-      
-      if (isOnline()) await batch.commit();
       
       return mergedGroupsCount;
   }

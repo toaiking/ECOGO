@@ -65,7 +65,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({ isOpen, 
     const profitPerUnit = product.defaultPrice - (product.importPrice || 0);
     const totalProfit = totalSold * profitPerUnit;
     
-    const percent = Math.min(100, (currentStock / (calculatedTotalImported || 1)) * 100);
+    const percent = calculatedTotalImported > 0 ? Math.min(100, (currentStock / calculatedTotalImported) * 100) : 0;
     const isLow = currentStock < 5;
 
     return (
@@ -492,15 +492,20 @@ const InventoryManager: React.FC = () => {
 
   // --- STATS ---
   const stats = useMemo(() => {
-      let totalStockValue = 0; // Vốn
-      let totalSalesValue = 0; // Giá bán
+      let capital = 0; // Vốn đang tồn
+      let projectedProfit = 0; // Lãi dự kiến (cho số tồn kho)
       let lowStock = 0;
+      
       products.forEach(p => {
-          totalStockValue += (p.importPrice || 0) * p.stockQuantity;
-          totalSalesValue += p.defaultPrice * p.stockQuantity;
-          if (p.stockQuantity < 5) lowStock++;
+          const stock = p.stockQuantity || 0;
+          capital += (p.importPrice || 0) * stock;
+          const profitPerUnit = p.defaultPrice - (p.importPrice || 0);
+          projectedProfit += profitPerUnit * stock;
+          
+          if (stock < 5) lowStock++;
       });
-      return { totalStockValue, totalSalesValue, lowStock, totalCount: products.length };
+      
+      return { capital, projectedProfit, lowStock, totalCount: products.length };
   }, [products]);
 
   // --- HANDLERS ---
@@ -598,7 +603,7 @@ const InventoryManager: React.FC = () => {
   };
   
   const handleCleanup = async () => {
-      if (!window.confirm("Hệ thống sẽ quét toàn bộ kho, tìm các sản phẩm trùng tên và gộp chúng lại làm một. Đồng thời cập nhật lại lịch sử đơn hàng.\n\nHành động này giúp kho gọn gàng và chính xác hơn.\n\nTiếp tục?")) return;
+      if (!window.confirm("Hệ thống sẽ quét toàn bộ kho, tìm các sản phẩm trùng tên và gộp chúng lại làm một. Đồng thời cập nhật lại lịch sử đơn hàng.\n\nTiếp tục?")) return;
       
       setIsProcessing(true);
       const toastId = toast.loading("Đang dọn dẹp kho...");
@@ -614,7 +619,7 @@ const InventoryManager: React.FC = () => {
   };
 
   const handleRecalculate = async () => {
-      if (!window.confirm("Hệ thống sẽ quét toàn bộ Đơn hàng để tính toán lượng ĐÃ BÁN.\n\nSau đó:\nTồn kho = Tổng Nhập - Đã Bán\n\nBạn có muốn đồng bộ lại không?")) return;
+      if (!window.confirm("Hệ thống sẽ quét toàn bộ Đơn hàng để tính toán lượng ĐÃ BÁN.\n\nTồn kho = Tổng Nhập - Đã Bán\n\nBạn có muốn đồng bộ lại không?")) return;
       
       setIsProcessing(true);
       const toastId = toast.loading("Đang tính toán lại...");
@@ -630,150 +635,151 @@ const InventoryManager: React.FC = () => {
       }
   };
 
-  const handleQuickStock = async (e: React.MouseEvent, p: Product, amount: number) => {
-      e.stopPropagation();
-      // Use Atomic Adjustment for safety
-      await storageService.adjustStockAtomic(p.id, amount, { 
-          price: p.importPrice || 0, 
-          note: 'Quick Add' 
-      });
-      toast.success(`Đã thêm ${amount} ${p.name}`);
-  };
-
   return (
-    <div className="max-w-7xl mx-auto pb-24 animate-fade-in px-2 sm:px-4">
-      {/* 1. HEADER & STATS BAR */}
-      <div className="flex flex-col md:flex-row gap-4 mb-6">
-          <div className="flex-1 bg-gradient-to-r from-gray-900 to-gray-800 rounded-2xl p-5 text-white shadow-lg flex items-center justify-between">
-              <div>
-                  <h2 className="text-2xl font-black">Kho Hàng</h2>
-                  <p className="text-gray-400 text-xs mt-1">Quản lý nhập xuất tồn</p>
+    <div className="max-w-7xl mx-auto pb-24 animate-fade-in relative">
+      
+      {/* 1. STICKY HEADER & COMPACT DASHBOARD */}
+      <div className="sticky top-0 z-30 bg-white/95 backdrop-blur-md shadow-sm border-b border-gray-200 transition-all">
+          <div className="flex flex-col">
+              
+              {/* Row 1: Title & Main Actions */}
+              <div className="px-4 py-3 flex justify-between items-center gap-3">
+                  <h2 className="text-xl font-black tracking-tight text-gray-800 shrink-0">Kho Hàng</h2>
+                  <div className="flex gap-2">
+                      <button onClick={handleCreate} className="bg-eco-600 hover:bg-eco-700 text-white px-3 py-1.5 rounded-lg font-bold text-sm shadow-sm flex items-center gap-1 active:scale-95 transition-all">
+                          <i className="fas fa-plus"></i> <span className="hidden sm:inline">Nhập</span>
+                      </button>
+                      <div className="flex bg-gray-100 rounded-lg p-0.5">
+                          <button onClick={handleCleanup} disabled={isProcessing} className="w-8 h-8 flex items-center justify-center rounded hover:bg-white text-gray-500 transition-colors" title="Dọn dẹp trùng">
+                              <i className="fas fa-broom text-xs"></i>
+                          </button>
+                          <button onClick={handleRecalculate} disabled={isProcessing} className="w-8 h-8 flex items-center justify-center rounded hover:bg-white text-gray-500 transition-colors" title="Đồng bộ lại">
+                              <i className="fas fa-sync-alt text-xs"></i>
+                          </button>
+                      </div>
+                  </div>
               </div>
-              <div className="text-right">
-                  <div className="text-3xl font-black text-eco-400">{stats.totalCount}</div>
-                  <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Sản phẩm</div>
+
+              {/* Row 2: Compact Stats & Search */}
+              <div className="bg-gray-50 px-4 py-2 flex flex-col sm:flex-row gap-2 border-t border-gray-100">
+                  {/* Stats Scroller (Pills) */}
+                  <div className="flex gap-2 overflow-x-auto no-scrollbar items-center text-[10px] sm:text-xs font-medium text-gray-500 whitespace-nowrap pr-2">
+                      <div className="flex items-center gap-1 bg-white px-2 py-1 rounded-full border border-gray-200 shadow-sm">
+                          <span>Tổng:</span>
+                          <span className="font-bold text-gray-800">{stats.totalCount}</span>
+                      </div>
+                      <div className="flex items-center gap-1 bg-white px-2 py-1 rounded-full border border-gray-200 shadow-sm">
+                          <span>Vốn:</span>
+                          <span className="font-bold text-blue-600">{new Intl.NumberFormat('vi-VN', { notation: "compact" }).format(stats.capital)}</span>
+                      </div>
+                      <div className="flex items-center gap-1 bg-white px-2 py-1 rounded-full border border-gray-200 shadow-sm">
+                          <span>Lãi dự kiến:</span>
+                          <span className="font-bold text-green-600">{new Intl.NumberFormat('vi-VN', { notation: "compact" }).format(stats.projectedProfit)}</span>
+                      </div>
+                      <div className="flex items-center gap-1 bg-white px-2 py-1 rounded-full border border-gray-200 shadow-sm">
+                          <span>Sắp hết:</span>
+                          <span className={`font-bold ${stats.lowStock > 0 ? 'text-red-500' : 'text-gray-400'}`}>{stats.lowStock}</span>
+                      </div>
+                  </div>
+
+                  {/* Search Input */}
+                  <div className="relative flex-grow max-w-md">
+                      <i className="fas fa-search text-gray-400 text-xs absolute left-3 top-2"></i>
+                      <input 
+                          value={searchTerm} 
+                          onChange={e => setSearchTerm(e.target.value)} 
+                          placeholder="Tìm sản phẩm..."
+                          className="w-full pl-8 pr-8 py-1.5 bg-white border border-gray-200 rounded-full text-xs font-bold text-gray-700 outline-none focus:border-eco-500 transition-colors focus:ring-1 focus:ring-eco-200"
+                      />
+                      {searchTerm && (
+                          <button onClick={() => setSearchTerm('')} className="absolute right-2 top-1.5 w-5 h-5 flex items-center justify-center text-gray-400 hover:text-red-500">
+                              <i className="fas fa-times text-xs"></i>
+                          </button>
+                      )}
+                  </div>
               </div>
-          </div>
-          
-          <div className="flex-1 bg-white rounded-2xl p-4 border border-gray-100 shadow-sm grid grid-cols-2 gap-4">
-               <div>
-                   <div className="text-xs font-bold text-gray-400 uppercase">Tổng vốn tồn</div>
-                   <div className="text-lg font-black text-gray-800">{new Intl.NumberFormat('vi-VN', { notation: "compact" }).format(stats.totalStockValue)}</div>
-               </div>
-               <div>
-                   <div className="text-xs font-bold text-gray-400 uppercase">Sắp hết hàng</div>
-                   <div className={`text-lg font-black ${stats.lowStock > 0 ? 'text-red-500' : 'text-green-500'}`}>{stats.lowStock}</div>
-               </div>
-               <div className="col-span-2 pt-2 border-t border-gray-50 flex gap-2">
-                   <button onClick={handleCreate} className="flex-1 bg-black text-white py-2 rounded-lg font-bold text-xs hover:bg-gray-800 transition-colors shadow-lg">
-                       <i className="fas fa-plus mr-1"></i> Nhập Hàng
-                   </button>
-                   
-                   {/* Tool Group */}
-                   <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
-                        <button 
-                            onClick={handleCleanup} 
-                            disabled={isProcessing} 
-                            className="px-3 py-1 bg-white text-purple-700 hover:bg-purple-50 rounded border border-gray-200 font-bold text-[10px] transition-colors shadow-sm"
-                            title="Rà soát & Gộp trùng"
-                        >
-                            {isProcessing ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-broom"></i>}
-                        </button>
-                        <button 
-                            onClick={handleRecalculate} 
-                            disabled={isProcessing} 
-                            className="px-3 py-1 bg-white text-blue-700 hover:bg-blue-50 rounded border border-gray-200 font-bold text-[10px] transition-colors shadow-sm"
-                            title="Tính lại từ đơn hàng"
-                        >
-                            {isProcessing ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-sync-alt"></i>}
-                        </button>
-                   </div>
-               </div>
           </div>
       </div>
 
-      {/* 2. MAIN CONTENT (LIST) */}
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden min-h-[500px] flex flex-col">
-          {/* Toolbar */}
-          <div className="p-4 border-b border-gray-100 flex flex-col sm:flex-row justify-between items-center gap-4 bg-gray-50/50">
-              <div className="relative w-full sm:w-80">
-                  <i className="fas fa-search absolute left-3 top-3 text-gray-400 text-xs"></i>
-                  <input 
-                      value={searchTerm} 
-                      onChange={e => setSearchTerm(e.target.value)} 
-                      placeholder="Tìm tên sản phẩm..."
-                      className="w-full pl-9 pr-4 py-2.5 bg-white border border-gray-200 rounded-xl text-sm font-medium outline-none focus:border-eco-500 transition-all shadow-sm"
-                  />
+      {/* 2. VIVID GRID LAYOUT */}
+      <div className="px-3 sm:px-4 py-4">
+          {filteredProducts.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-64 text-gray-400">
+                  <i className="fas fa-box-open text-4xl mb-3 opacity-20"></i>
+                  <p className="text-xs font-bold">Kho trống hoặc không tìm thấy</p>
               </div>
-          </div>
+          ) : (
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+                  {filteredProducts.map(p => {
+                      const total = p.totalImported || p.stockQuantity || 1;
+                      const current = p.stockQuantity || 0;
+                      // Don't let percentage exceed 100 visually
+                      const percent = total > 0 ? Math.min(100, (current / total) * 100) : 0;
+                      
+                      const isLow = current < 5;
+                      const sold = (p.totalImported || 0) - current;
 
-          {/* Table Header (Desktop) */}
-          <div className="hidden sm:grid grid-cols-[2fr_1fr_1.5fr_100px] gap-4 px-6 py-3 bg-gray-100 text-gray-500 font-bold uppercase text-[10px] tracking-wider border-b border-gray-200">
-              <div>Sản phẩm / Giá</div>
-              <div className="text-center">Vốn / Lãi dự kiến</div>
-              <div>Tình trạng kho</div>
-              <div className="text-right">Hành động</div>
-          </div>
-
-          {/* List Body */}
-          <div className="flex-grow overflow-y-auto">
-              {filteredProducts.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center h-64 text-gray-300">
-                      <i className="fas fa-box-open text-4xl mb-3 opacity-20"></i>
-                      <p className="text-sm font-medium">Kho hàng trống</p>
-                  </div>
-              ) : (
-                  <div className="divide-y divide-gray-50">
-                      {filteredProducts.map(p => {
-                          const total = p.totalImported || p.stockQuantity || 1;
-                          const percent = Math.min(100, (p.stockQuantity / total) * 100);
-                          const isLow = p.stockQuantity < 5;
-                          const profit = p.defaultPrice - (p.importPrice || 0);
-
-                          return (
-                              <div key={p.id} onClick={() => handleViewDetail(p)} className="group sm:grid sm:grid-cols-[2fr_1fr_1.5fr_100px] sm:gap-4 p-4 sm:px-6 hover:bg-blue-50/30 transition-colors cursor-pointer relative">
-                                  {/* Col 1: Name & Price */}
-                                  <div className="mb-2 sm:mb-0">
-                                      <div className="font-bold text-gray-800 text-sm mb-1 group-hover:text-blue-600 transition-colors">{p.name}</div>
-                                      <div className="flex items-center gap-2">
-                                          <span className="bg-green-50 text-green-700 px-1.5 py-0.5 rounded text-[10px] font-bold border border-green-100">
-                                              {new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}đ
-                                          </span>
-                                          <span className="text-[10px] text-gray-400">
-                                              Cập nhật: {new Date(p.lastImportDate).toLocaleDateString('vi-VN')}
-                                          </span>
-                                      </div>
-                                  </div>
-
-                                  {/* Col 2: Cost & Profit (Desktop Only) */}
-                                  <div className="hidden sm:flex flex-col items-center justify-center">
-                                      <div className="text-xs font-mono text-gray-500">{new Intl.NumberFormat('vi-VN').format(p.importPrice || 0)}</div>
-                                      <div className="text-[10px] text-green-600 font-bold">+{new Intl.NumberFormat('vi-VN').format(profit)}</div>
-                                  </div>
-
-                                  {/* Col 3: Stock Bar */}
-                                  <div className="mb-2 sm:mb-0 flex flex-col justify-center">
-                                      <div className="flex justify-between items-end mb-1">
-                                          <span className="text-[10px] font-bold text-gray-400 uppercase">Tồn kho</span>
-                                          <span className={`text-sm font-bold ${isLow ? 'text-red-600' : 'text-gray-900'}`}>{p.stockQuantity} <span className="text-gray-400 text-[10px] font-normal">/ {p.totalImported}</span></span>
-                                      </div>
-                                      <div className="w-full bg-gray-100 rounded-full h-1.5 overflow-hidden">
-                                          <div className={`h-full rounded-full transition-all duration-500 ${isLow ? 'bg-red-500' : 'bg-eco-500'}`} style={{ width: `${percent}%` }}></div>
-                                      </div>
-                                  </div>
-
-                                  {/* Col 4: Actions */}
-                                  <div className="flex items-center justify-end gap-2">
-                                      <button onClick={(e) => handleQuickStock(e, p, 1)} className="w-8 h-8 rounded-lg bg-white border border-gray-200 hover:bg-green-50 hover:border-green-200 hover:text-green-600 shadow-sm transition-all flex items-center justify-center">
-                                          <i className="fas fa-plus text-xs"></i>
-                                      </button>
+                      return (
+                          <div 
+                              key={p.id} 
+                              onClick={() => handleViewDetail(p)}
+                              className="bg-white rounded-2xl border border-gray-100 shadow-sm hover:shadow-lg hover:-translate-y-1 cursor-pointer flex flex-col justify-between overflow-hidden h-full active:scale-[0.98] transition-all duration-300 relative group"
+                          >
+                              {/* Edit Icon Overlay (Visible on Hover/Touch) */}
+                              <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <div className="w-6 h-6 rounded-full bg-gray-100 flex items-center justify-center text-gray-400 hover:text-blue-600 hover:bg-blue-50">
+                                      <i className="fas fa-pen text-[10px]"></i>
                                   </div>
                               </div>
-                          );
-                      })}
-                  </div>
-              )}
-          </div>
+
+                              {/* Top: Name */}
+                              <div className="p-4 pb-0 mb-3">
+                                  <h3 className="text-sm font-bold text-gray-800 leading-snug line-clamp-2 min-h-[2.5rem]" title={p.name}>
+                                      {p.name}
+                                  </h3>
+                              </div>
+
+                              {/* Middle: The "Vivid" Core */}
+                              <div className="px-4 pb-2">
+                                  <div className="flex items-center justify-between mb-1.5">
+                                      <span className={`text-3xl font-black tracking-tight leading-none ${isLow ? 'text-red-500' : 'text-gray-800'}`}>
+                                          {current}
+                                      </span>
+                                      <div className="flex flex-col items-end">
+                                          <span className="text-[9px] font-bold text-gray-400 uppercase">Tổng nhập</span>
+                                          <span className="text-xs font-bold text-gray-500">{total}</span>
+                                      </div>
+                                  </div>
+                                  
+                                  {/* Progress Bar */}
+                                  <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
+                                      <div 
+                                          className={`h-full rounded-full transition-all duration-500 ${isLow ? 'bg-gradient-to-r from-red-400 to-red-600' : 'bg-gradient-to-r from-emerald-400 to-emerald-600'}`} 
+                                          style={{ width: `${percent}%` }}
+                                      ></div>
+                                  </div>
+                              </div>
+
+                              {/* Bottom: Mini Dashboard Footer */}
+                              <div className="mt-2 bg-gray-50 border-t border-gray-100 grid grid-cols-3 divide-x divide-gray-200 py-2.5">
+                                  <div className="flex flex-col items-center">
+                                      <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wide">Giá Bán</span>
+                                      <span className="text-[11px] font-bold text-blue-600">{new Intl.NumberFormat('vi-VN', { notation: "compact" }).format(p.defaultPrice)}</span>
+                                  </div>
+                                  <div className="flex flex-col items-center">
+                                      <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wide">Đã Bán</span>
+                                      <span className="text-[11px] font-bold text-orange-600">{sold > 0 ? sold : '-'}</span>
+                                  </div>
+                                  <div className="flex flex-col items-center">
+                                      <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wide">Vốn</span>
+                                      <span className="text-[11px] font-bold text-gray-500">{new Intl.NumberFormat('vi-VN', { notation: "compact" }).format(p.importPrice || 0)}</span>
+                                  </div>
+                              </div>
+                          </div>
+                      );
+                  })}
+              </div>
+          )}
       </div>
 
       {/* DETAIL MODAL */}
