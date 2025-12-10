@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
 import { SmartParseResult, Order, OrderStatus, PaymentMethod, Product, Customer, RawPDFImportData } from "../types";
 
@@ -10,6 +11,65 @@ const getClient = () => {
     throw new Error("API Key is missing");
   }
   return new GoogleGenAI({ apiKey });
+};
+
+// NEW: Verify Address using Google Maps Grounding
+export const verifyAddress = async (addressQuery: string): Promise<{ address: string, mapLink?: string }> => {
+  const ai = getClient();
+  
+  const prompt = `
+    Verify and standardize this address location: "${addressQuery}".
+    If it is a valid location, return ONLY the official, fully formatted address string in Vietnamese.
+    If the input is vague, find the most likely specific location.
+    Do not add introductory text like "Địa chỉ là...". Just return the address string.
+  `;
+
+  try {
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: prompt,
+        config: {
+          tools: [{ googleMaps: {} }],
+        },
+      });
+
+      let text = response.text ? response.text.trim() : addressQuery;
+      // Cleanup any potential model conversational filler
+      text = text.replace(/^Địa chỉ: /i, '').replace(/\.$/, '');
+      
+      // Extract Google Maps Link from Grounding Metadata
+      let mapLink = undefined;
+      const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
+      
+      if (chunks) {
+          for (const chunk of chunks) {
+              // Priority 1: Check for Maps tool specific URI
+              // Note: The API might return 'googleMapsUri' or 'uri' inside the maps object
+              if (chunk.maps) {
+                  const mapsData = chunk.maps as any;
+                  if (mapsData.googleMapsUri) {
+                      mapLink = mapsData.googleMapsUri;
+                      break;
+                  }
+                  if (mapsData.uri) {
+                      mapLink = mapsData.uri;
+                      break;
+                  }
+              }
+              
+              // Priority 2: Fallback to Web chunk if it points to Google Maps
+              if (chunk.web && chunk.web.uri && chunk.web.uri.includes('google.com/maps')) {
+                  mapLink = chunk.web.uri;
+                  break;
+              }
+          }
+      }
+
+      return { address: text, mapLink };
+  } catch (error) {
+      console.error("Maps Grounding Error:", error);
+      throw new Error("Không thể xác minh địa điểm này.");
+  }
 };
 
 export const parseOrderText = async (

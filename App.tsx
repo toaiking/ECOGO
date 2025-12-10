@@ -9,7 +9,7 @@ import InventoryManager from './components/InventoryManager';
 import CustomerManager from './components/CustomerManager';
 import PaymentAudit from './components/PaymentAudit';
 import Login from './components/Login';
-import { Toaster } from 'react-hot-toast';
+import toast, { Toaster } from 'react-hot-toast';
 import { storageService } from './services/storageService';
 
 const App: React.FC = () => {
@@ -20,6 +20,10 @@ const App: React.FC = () => {
     if (user) {
       setIsAuthenticated(true);
     }
+
+    const handleQuota = () => toast.error("Hết băng thông Cloud trong ngày. Ứng dụng đã chuyển sang chế độ Offline (Dữ liệu an toàn trên máy).", { duration: 6000, icon: '🔥' });
+    window.addEventListener('quota_exhausted', handleQuota);
+    return () => window.removeEventListener('quota_exhausted', handleQuota);
   }, []);
 
   const handleLogin = () => {

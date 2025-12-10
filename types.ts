@@ -13,6 +13,16 @@ export enum PaymentMethod {
   PAID = 'PAID'        // Đã thanh toán trước
 }
 
+export interface CarrierData {
+  carrierId: string; // 'GHTK' | 'GHN' | 'VTP' | 'AHA'
+  carrierName: string;
+  trackingCode: string;
+  fee: number;
+  weight: number;
+  cod: number;
+  createdAt: number;
+}
+
 export interface OrderItem {
   id: string;
   productId?: string; // Link to inventory
@@ -41,6 +51,7 @@ export interface Order {
   deliveryProof?: string;
   lastUpdatedBy?: string; // Tên người xử lý trạng thái cuối cùng
   reminderCount?: number; // NEW: Number of times payment reminder sent
+  carrierData?: CarrierData; // NEW: Shipment info
 }
 
 export interface ImportRecord {
@@ -61,6 +72,7 @@ export interface Product {
   totalImported?: number; // Total Imported History
   lastImportDate: number; 
   importHistory?: ImportRecord[]; // NEW: Track distinct import batches
+  updatedAt?: number; // NEW: Timestamp for Delta Sync optimization
 }
 
 export interface Customer {

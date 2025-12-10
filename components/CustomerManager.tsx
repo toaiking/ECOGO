@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef, useDeferredValue } from 'react';
 import toast from 'react-hot-toast';
 import { Customer } from '../types';
 import { storageService } from '../services/storageService';
+import { verifyAddress } from '../services/geminiService';
 import ConfirmModal from './ConfirmModal';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -28,6 +29,7 @@ const CustomerManager: React.FC = () => {
 
   // Voice Search State
   const [isListeningSearch, setIsListeningSearch] = useState(false);
+  const [isVerifyingAddr, setIsVerifyingAddr] = useState(false); // Map verification state
 
   // VIRTUAL SCROLL CONFIGURATION
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -97,6 +99,42 @@ const CustomerManager: React.FC = () => {
     };
 
     recognition.start();
+  };
+
+  // --- ADDRESS VERIFICATION ---
+  const handleVerifyAddress = async () => {
+      const currentAddr = formData.address;
+      if (!currentAddr || currentAddr.trim().length < 5) {
+          toast.error("Vui lòng nhập địa chỉ sơ bộ trước.");
+          return;
+      }
+      
+      setIsVerifyingAddr(true);
+      const toastId = toast.loading("Đang tìm địa chỉ trên Google Maps...");
+      
+      try {
+          const result = await verifyAddress(currentAddr);
+          
+          setFormData(prev => ({ ...prev, address: result.address }));
+          
+          toast.success((t) => (
+              <div className="flex flex-col gap-1">
+                  <span className="font-bold">Đã chuẩn hóa địa chỉ!</span>
+                  <div className="text-xs text-gray-500">{result.address}</div>
+                  {result.mapLink && (
+                      <a href={result.mapLink} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 underline font-bold flex items-center gap-1 mt-1">
+                          <i className="fas fa-map-marked-alt"></i> Xem trên bản đồ
+                      </a>
+                  )}
+              </div>
+          ), { duration: 5000, icon: '📍' });
+          
+      } catch (e: any) {
+          toast.error(e.message || "Không tìm thấy địa điểm.");
+      } finally {
+          setIsVerifyingAddr(false);
+          toast.dismiss(toastId);
+      }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -285,7 +323,24 @@ const CustomerManager: React.FC = () => {
                   </div>
                   <div>
                       <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1 block">Địa chỉ</label>
-                      <textarea value={formData.address} onChange={e => setFormData({ ...formData, address: e.target.value })} className="w-full p-2.5 bg-gray-50 border-transparent focus:bg-white focus:border-eco-500 border rounded-lg outline-none transition-all resize-none text-sm" rows={2} placeholder="Số nhà, đường, quận..." />
+                      <div className="relative">
+                          <textarea 
+                              value={formData.address} 
+                              onChange={e => setFormData({ ...formData, address: e.target.value })} 
+                              className="w-full p-2.5 bg-gray-50 border-transparent focus:bg-white focus:border-eco-500 border rounded-lg outline-none transition-all resize-none text-sm pr-8" 
+                              rows={2} 
+                              placeholder="Số nhà, đường, quận..." 
+                          />
+                          <button
+                              type="button"
+                              onClick={handleVerifyAddress}
+                              disabled={isVerifyingAddr}
+                              className={`absolute right-2 top-2 w-6 h-6 rounded flex items-center justify-center transition-colors ${isVerifyingAddr ? 'text-gray-400' : 'text-red-500 hover:bg-red-50'}`}
+                              title="Gim địa chỉ Google Maps"
+                          >
+                              {isVerifyingAddr ? <i className="fas fa-spinner fa-spin text-xs"></i> : <i className="fas fa-map-marker-alt text-sm"></i>}
+                          </button>
+                      </div>
                   </div>
                   <div>
                       <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1 block">Độ ưu tiên (1-6000)</label>

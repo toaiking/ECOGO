@@ -1,8 +1,10 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { Order, OrderStatus, PaymentMethod, Customer } from '../types';
 import { storageService } from '../services/storageService';
 import { generateDeliveryMessage } from '../services/geminiService';
+import { CARRIERS, carrierService } from '../services/carrierService';
 
 interface Props {
   order: Order;
@@ -42,6 +44,9 @@ interface Props {
   
   // NEW: View Detail Handler for Compact Mode
   onViewDetail?: (order: Order) => void;
+
+  // NEW: Shipment Handler
+  onShip?: (order: Order) => void;
 }
 
 const statusConfig: Record<OrderStatus, { color: string; bg: string; label: string; icon: string }> = {
@@ -98,7 +103,7 @@ export const OrderCard: React.FC<Props> = ({
   isNewCustomer, onSplitBatch, priorityScore,
   customerData,
   isSelectionMode, isSelected, onToggleSelect, onLongPress,
-  onShowQR, onMoveBatch, onViewDetail
+  onShowQR, onMoveBatch, onViewDetail, onShip
 }) => {
   const [uploading, setUploading] = useState(false);
   const [showImageModal, setShowImageModal] = useState(false);
@@ -288,6 +293,11 @@ export const OrderCard: React.FC<Props> = ({
       }
   };
 
+  const handleCarrierBadgeClick = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      carrierService.printWaybill(order);
+  };
+
   const config = statusConfig[order.status];
   const isCompleted = order.status === OrderStatus.DELIVERED || order.status === OrderStatus.CANCELLED;
   
@@ -369,9 +379,31 @@ export const OrderCard: React.FC<Props> = ({
       );
   };
 
+  const CarrierInfoBadge = () => {
+      if (!order.carrierData) return null;
+      const c = CARRIERS.find(x => x.id === order.carrierData!.carrierId);
+      if (!c) return null;
+
+      return (
+          <div 
+            onClick={handleCarrierBadgeClick}
+            className={`flex items-center gap-1.5 px-2 py-1 rounded-lg border cursor-pointer hover:shadow-md transition-all ${c.color} bg-opacity-10 ${c.border} border-opacity-30`}
+            title="Bấm để in phiếu gửi"
+          >
+              <div className={`w-4 h-4 rounded-full ${c.color} flex items-center justify-center text-white text-[8px] font-bold`}>
+                  {c.shortName.substring(0,2)}
+              </div>
+              <div className="flex flex-col">
+                  <span className={`text-[9px] font-bold ${c.text}`}>{c.shortName}</span>
+                  <span className="text-[8px] font-mono text-gray-500 leading-none">{order.carrierData.trackingCode}</span>
+              </div>
+          </div>
+      );
+  };
+
   const CheckboxOverlay = () => { if (!isSelectionMode) return null; return (<div className={`absolute top-0 bottom-0 left-0 w-1.5 ${isSelected ? 'bg-eco-500' : 'bg-transparent'}`}></div>); }
 
-  const SelectTrigger = ({ compact = false }) => {
+  const SelectTrigger = ({ compact = false }: { compact?: boolean }) => {
     if (isSelectionMode) {
         return (
             <div className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${compact ? '' : 'mr-3'} flex-shrink-0 ${isSelected ? 'bg-eco-500 border-eco-500 text-white' : 'border-gray-300 bg-white'}`}>
@@ -465,7 +497,11 @@ export const OrderCard: React.FC<Props> = ({
                         <div className="flex justify-between items-end mt-1">
                              <div className="text-[10px] text-gray-400 truncate mr-2 max-w-[55%] font-bold">{order.address}</div>
                              <div className="flex items-center gap-2 flex-shrink-0">
-                                  <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${config.bg} ${config.color}`}>{config.label}</span>
+                                  {order.carrierData ? (
+                                      <CarrierInfoBadge />
+                                  ) : (
+                                      <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${config.bg} ${config.color}`}>{config.label}</span>
+                                  )}
                                   <div className="flex items-center gap-1.5 pl-1 border-l border-gray-100">
                                       <div className="relative" ref={actionMenuRef}>
                                           <button onClick={(e) => { e.stopPropagation(); setShowActionMenu(!showActionMenu); }} className="w-6 h-6 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 flex items-center justify-center" aria-label="Menu hành động"><i className="fas fa-ellipsis-v text-[10px]"></i></button>
@@ -522,9 +558,13 @@ export const OrderCard: React.FC<Props> = ({
 
               {/* Col 6: Status Badge */}
               <div className="flex justify-center">
-                  <span className={`text-[10px] font-bold uppercase px-2 py-1 rounded border border-transparent shadow-sm whitespace-nowrap ${config.bg} ${config.color} border-opacity-20`}>
-                      {config.label}
-                  </span>
+                  {order.carrierData ? (
+                      <CarrierInfoBadge />
+                  ) : (
+                      <span className={`text-[10px] font-bold uppercase px-2 py-1 rounded border border-transparent shadow-sm whitespace-nowrap ${config.bg} ${config.color} border-opacity-20`}>
+                          {config.label}
+                      </span>
+                  )}
               </div>
 
               {/* Col 7: Actions */}
@@ -606,9 +646,14 @@ export const OrderCard: React.FC<Props> = ({
         <div className="flex flex-col items-end gap-1 shrink-0">
             <div className="flex items-center gap-1">
                 <HeaderPaymentBadge />
-                <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded border border-transparent ${config.bg} ${config.color}`}>
-                    {config.label}
-                </span>
+                
+                {order.carrierData ? (
+                    <CarrierInfoBadge />
+                ) : (
+                    <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded border border-transparent ${config.bg} ${config.color}`}>
+                        {config.label}
+                    </span>
+                )}
             </div>
             {isSortMode && index !== undefined && (
                 <span className="text-[10px] font-mono text-gray-400 bg-gray-100 px-1 rounded">#{index + 1}</span>
@@ -672,13 +717,24 @@ export const OrderCard: React.FC<Props> = ({
                   <i className="fas fa-print"></i>
               </button>
 
-              <button 
-                  onClick={(e) => { e.stopPropagation(); requestQR(e); }} 
-                  className="flex items-center justify-center py-2 rounded-lg bg-gray-100 text-gray-600 hover:bg-blue-50 hover:text-blue-600 transition-colors"
-                  title="Mã QR"
-              >
-                  <i className="fas fa-qrcode"></i>
-              </button>
+              {/* Carrier Button Logic */}
+              {onShip && !order.carrierData && !isCompleted ? (
+                  <button 
+                      onClick={(e) => { e.stopPropagation(); onShip(order); }} 
+                      className="flex items-center justify-center py-2 rounded-lg bg-orange-50 text-orange-600 hover:bg-orange-100 transition-colors"
+                      title="Gửi vận chuyển"
+                  >
+                      <i className="fas fa-truck"></i>
+                  </button>
+              ) : (
+                  <button 
+                      onClick={(e) => { e.stopPropagation(); requestQR(e); }} 
+                      className="flex items-center justify-center py-2 rounded-lg bg-gray-100 text-gray-600 hover:bg-blue-50 hover:text-blue-600 transition-colors"
+                      title="Mã QR"
+                  >
+                      <i className="fas fa-qrcode"></i>
+                  </button>
+              )}
 
               <button 
                   onClick={nextStatus}

@@ -1,13 +1,15 @@
+
 import React, { useEffect, useState, useMemo, useRef, useDeferredValue, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import { v4 as uuidv4 } from 'uuid';
-import { Order, OrderStatus, PaymentMethod, OrderItem, Product, Customer, ShopConfig, BankConfig } from '../types';
+import { Order, OrderStatus, PaymentMethod, OrderItem, Product, Customer, ShopConfig, BankConfig, CarrierData } from '../types';
 import { storageService, normalizePhone, normalizeString } from '../services/storageService';
 import { pdfService } from '../services/pdfService';
 import { reconciliationService, ReconciliationResult } from '../services/reconciliationService';
 import { OrderCard } from './OrderCard';
 import ConfirmModal from './ConfirmModal';
 import RoutePlannerModal from './RoutePlannerModal'; 
+import ShipmentModal from './ShipmentModal'; // NEW
 import { generateDeliveryMessage } from '../services/geminiService';
 import { ProductDetailModal, ProductEditModal } from './InventoryManager';
 
@@ -88,6 +90,10 @@ const TrackingDashboard: React.FC = () => {
   const [editProductMode, setEditProductMode] = useState<'IMPORT' | 'SET'>('SET');
 
   const [showRoutePlanner, setShowRoutePlanner] = useState(false);
+  
+  // NEW: Shipment Modal State
+  const [showShipmentModal, setShowShipmentModal] = useState(false);
+  const [shipmentOrder, setShipmentOrder] = useState<Order | null>(null);
   
   const [moveBatchData, setMoveBatchData] = useState<{isOpen: boolean, targetBatch: string}>({ isOpen: false, targetBatch: '' });
   const [qrState, setQrState] = useState<{ isOpen: boolean, url: string, order: Order | null }>({ isOpen: false, url: '', order: null });
@@ -182,6 +188,24 @@ const TrackingDashboard: React.FC = () => {
       const url = `https://img.vietqr.io/image/${bankConfig.bankId}-${bankConfig.accountNo}-${bankConfig.template || 'compact2'}.png?amount=${order.totalPrice}&addInfo=${encodeURIComponent(desc)}&accountName=${encodeURIComponent(bankConfig.accountName)}`; 
       setQrState({ isOpen: true, url, order }); 
   }, []);
+
+  // NEW: SHIPMENT HANDLER
+  const handleShipOrder = (order: Order) => {
+      setShipmentOrder(order);
+      setShowShipmentModal(true);
+  };
+
+  const handleShipmentSuccess = async (carrierData: CarrierData) => {
+      if (shipmentOrder) {
+          // Update order with carrier info and set status to PICKED_UP
+          const updatedOrder = { ...shipmentOrder, carrierData, status: OrderStatus.PICKED_UP };
+          await storageService.updateOrderDetails(updatedOrder);
+          // Refresh details view if open
+          if (detailOrder?.id === shipmentOrder.id) {
+              setDetailOrder(updatedOrder);
+          }
+      }
+  };
 
   // SHARE QR LOGIC
   const handleShareQR = async () => {
@@ -407,7 +431,9 @@ const TrackingDashboard: React.FC = () => {
       setStatus: async (status: OrderStatus) => { if(detailOrder) { await storageService.updateStatus(detailOrder.id, status, undefined, {name: detailOrder.customerName, address: detailOrder.address}); setDetailOrder({...detailOrder, status}); } },
       confirmPayment: async () => { if(detailOrder) { await storageService.updatePaymentVerification(detailOrder.id, true, { name: detailOrder.customerName }); setDetailOrder({...detailOrder, paymentVerified: true}); toast.success("Đã xác nhận thanh toán"); } },
       splitBatch: () => { if(detailOrder) { handleSplitBatch(detailOrder); } },
-      showQR: () => { if(detailOrder) handleShowQR(detailOrder); }
+      showQR: () => { if(detailOrder) handleShowQR(detailOrder); },
+      // New:
+      ship: () => { if(detailOrder) handleShipOrder(detailOrder); }
   };
 
   // --- FILTER & SORT FUNCTIONS ---
@@ -946,10 +972,19 @@ const TrackingDashboard: React.FC = () => {
                               <i className="fas fa-print text-sm mb-1"></i>
                               <span className="text-[9px]">In</span>
                           </button>
-                          <button onClick={handleDetailAction.showQR} className="flex flex-col items-center justify-center p-2 rounded-lg bg-gray-50 hover:bg-gray-100 border border-gray-100 text-gray-600 transition-colors">
-                              <i className="fas fa-qrcode text-sm mb-1"></i>
-                              <span className="text-[9px]">QR</span>
-                          </button>
+                          {/* Replace QR button if eligible for shipping */}
+                          {!detailOrder.carrierData && detailOrder.status !== OrderStatus.DELIVERED && (
+                              <button onClick={handleDetailAction.ship} className="flex flex-col items-center justify-center p-2 rounded-lg bg-orange-50 hover:bg-orange-100 border border-orange-100 text-orange-600 transition-colors">
+                                  <i className="fas fa-truck text-sm mb-1"></i>
+                                  <span className="text-[9px]">Gửi</span>
+                              </button>
+                          )}
+                          {(detailOrder.carrierData || detailOrder.status === OrderStatus.DELIVERED) && (
+                              <button onClick={handleDetailAction.showQR} className="flex flex-col items-center justify-center p-2 rounded-lg bg-gray-50 hover:bg-gray-100 border border-gray-100 text-gray-600 transition-colors">
+                                  <i className="fas fa-qrcode text-sm mb-1"></i>
+                                  <span className="text-[9px]">QR</span>
+                              </button>
+                          )}
                           <button onClick={handleDetailAction.edit} className="flex flex-col items-center justify-center p-2 rounded-lg bg-gray-50 hover:bg-gray-100 border border-gray-100 text-gray-600 transition-colors">
                               <i className="fas fa-pen text-sm mb-1"></i>
                               <span className="text-[9px]">Sửa</span>
@@ -966,6 +1001,18 @@ const TrackingDashboard: React.FC = () => {
                   </div>
               </div>
           </div>
+      )}
+
+      {/* ... (Existing Modals) ... */}
+      
+      {/* Shipment Modal */}
+      {shipmentOrder && (
+          <ShipmentModal 
+              isOpen={showShipmentModal} 
+              onClose={() => setShowShipmentModal(false)}
+              order={shipmentOrder}
+              onSuccess={handleShipmentSuccess}
+          />
       )}
 
       {showStatsModal && (
@@ -1239,6 +1286,7 @@ const TrackingDashboard: React.FC = () => {
                         onShowQR={handleShowQR}
                         onMoveBatch={handleSingleMoveBatch}
                         onViewDetail={handleViewDetail}
+                        onShip={handleShipOrder} // Pass Handler
                     />
                 </div>
             );
@@ -1251,6 +1299,7 @@ const TrackingDashboard: React.FC = () => {
           </div>
       )}
 
+      {/* Editing Order Modal (Unchanged) */}
       {editingOrder && (<div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4 animate-fade-in"><div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl flex flex-col" ref={editModalRef}><div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50"><div><h3 className="text-xl font-bold text-gray-800">Chỉnh sửa</h3><p className="text-xs text-gray-500">ID: {editingOrder.id}</p></div><button onClick={() => setEditingOrder(null)} className="w-8 h-8 rounded-full bg-white text-gray-400 hover:text-red-500 hover:text-shadow-md flex items-center justify-center"><i className="fas fa-times"></i></button></div><form onSubmit={saveEdit} className="p-6 space-y-6 flex-grow overflow-y-auto"><div className="space-y-4"><h4 className="text-sm font-bold text-eco-600 uppercase tracking-wider border-b border-eco-100 pb-1">Khách hàng</h4><div className="grid grid-cols-1 md:grid-cols-2 gap-4"><div><label className="text-xs font-bold text-gray-500 mb-1 block">Tên khách</label><input value={editingOrder.customerName} onChange={e => setEditingOrder({...editingOrder, customerName: e.target.value})} className="w-full p-2.5 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all text-sm font-medium" /></div><div><label className="text-xs font-bold text-gray-500 mb-1 block">Số điện thoại</label><input value={editingOrder.customerPhone} onChange={e => setEditingOrder({...editingOrder, customerPhone: e.target.value})} className="w-full p-2.5 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all text-sm" /></div></div><div><label className="text-xs font-bold text-gray-500 mb-1 block">Địa chỉ</label><textarea value={editingOrder.address} onChange={e => setEditingOrder({...editingOrder, address: e.target.value})} className="w-full p-2.5 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all text-sm resize-none" rows={2} /></div></div><div className="space-y-3"><div className="flex justify-between items-center border-b border-eco-100 pb-1"><h4 className="text-sm font-bold text-eco-600 uppercase tracking-wider">Hàng hóa</h4><button type="button" onClick={addEditItem} className="text-xs font-bold text-eco-600 hover:text-eco-700 bg-eco-50 hover:bg-eco-100 px-2 py-1 rounded transition-colors">+ Thêm</button></div><div className="bg-gray-50 rounded-xl p-3 space-y-3">{editingOrder.items.map((item, idx) => { const selectedIds = editingOrder.items.filter((i, iIdx) => iIdx !== idx && i.productId).map(i => i.productId); const availableProducts = products.filter(p => !selectedIds.includes(p.id) && (!item.name || p.name.toLowerCase().includes(item.name.toLowerCase()))); return (<div key={idx} className="flex gap-2 items-start group/editItem relative product-dropdown-container"><div className="flex-grow relative"><input value={item.name} onChange={(e) => updateEditItem(idx, 'name', e.target.value)} onFocus={() => setActiveEditProductRow(idx)} className="w-full p-2 bg-white border border-gray-200 rounded-lg text-sm focus:border-eco-500 outline-none" placeholder="Tên hàng" />{activeEditProductRow === idx && (<div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-100 rounded-lg shadow-xl z-[70] max-h-40 overflow-y-auto">{availableProducts.length === 0 ? (<div className="p-2 text-xs text-gray-400 text-center">{products.length === 0 ? "Kho trống" : "Không tìm thấy"}</div>) : (availableProducts.map(p => (<div key={p.id} onClick={() => selectProductForEditItem(idx, p)} className="px-3 py-2 hover:bg-eco-50 cursor-pointer flex justify-between items-center border-b border-gray-50 last:border-0"><div className="text-sm font-medium text-gray-800">{p.name}</div><div className="text-xs font-bold text-eco-600">{new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}</div></div>)))}</div>)}</div><div className="w-16"><input type="number" step="any" value={item.quantity === 0 ? '' : item.quantity} onChange={(e) => updateEditItem(idx, 'quantity', e.target.value === '' ? 0 : Number(e.target.value))} className="w-full p-2 text-center bg-white border border-gray-200 rounded-lg text-sm font-bold focus:border-eco-500 outline-none" placeholder="SL" /></div><div className="w-24"><input type="number" step="any" value={item.price === 0 ? '' : item.price} onChange={(e) => updateEditItem(idx, 'price', e.target.value === '' ? 0 : Number(e.target.value))} className="w-full p-2 text-right bg-white border border-gray-200 rounded-lg text-sm font-bold text-gray-700 focus:border-eco-500 outline-none" placeholder="Giá" /></div>{editingOrder.items.length > 1 && (<button type="button" onClick={() => removeEditItem(idx)} className="w-9 h-9 flex items-center justify-center text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"><i className="fas fa-trash-alt"></i></button>)}</div>); })}</div></div><div className="space-y-4"><h4 className="text-sm font-bold text-eco-600 uppercase tracking-wider border-b border-eco-100 pb-1">Thanh toán & Ghi chú</h4><div className="grid grid-cols-2 gap-4"><div><label className="text-xs font-bold text-gray-500 mb-1 block">Tổng tiền</label><input type="number" value={editingOrder.totalPrice} onChange={e => setEditingOrder({...editingOrder, totalPrice: Number(e.target.value)})} className="w-full p-3 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all font-bold text-gray-800" /></div><div><label className="text-xs font-bold text-gray-500 mb-1 block">Hình thức</label><div className="relative"><select value={editingOrder.paymentMethod} onChange={e => setEditingOrder({...editingOrder, paymentMethod: e.target.value as PaymentMethod})} className="w-full p-3 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all appearance-none font-medium"><option value={PaymentMethod.CASH}>Tiền mặt (COD)</option><option value={PaymentMethod.TRANSFER}>Chuyển khoản</option><option value={PaymentMethod.PAID}>Đã thanh toán</option></select><i className="fas fa-chevron-down absolute right-3 top-3.5 text-gray-400 text-xs pointer-events-none"></i></div></div></div><div><label className="text-xs font-bold text-gray-500 mb-1 block">Ghi chú</label><input value={editingOrder.notes} onChange={e => setEditingOrder({...editingOrder, notes: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all text-sm" /></div><div className="pt-2"><label className="flex items-center gap-2 cursor-pointer p-3 bg-blue-50 rounded-lg border border-blue-100 hover:bg-blue-100 transition-colors"><input type="checkbox" checked={editingOrder.paymentVerified || false} onChange={e => setEditingOrder({...editingOrder, paymentVerified: e.target.checked})} className="w-5 h-5 text-eco-600 rounded focus:ring-eco-500" /><span className="text-sm font-bold text-blue-800">Đã xác nhận thanh toán (Tiền về)</span></label></div></div><div className="p-5 border-t border-gray-100 flex gap-3"><button type="button" onClick={() => setEditingOrder(null)} className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold rounded-xl transition-colors">Hủy</button><button type="submit" className="flex-1 py-3 bg-black hover:bg-gray-800 text-white font-bold rounded-xl shadow-lg transition-transform active:scale-95">Lưu Thay Đổi</button></div></form></div></div>)}
 
       {/* Confirm Modals */}

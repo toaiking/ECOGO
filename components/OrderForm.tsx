@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import toast from 'react-hot-toast';
 import { Order, OrderStatus, Product, Customer, PaymentMethod, OrderItem } from '../types';
 import { storageService, generateProductSku, normalizeString } from '../services/storageService';
-import { parseOrderText } from '../services/geminiService';
+import { parseOrderText, verifyAddress } from '../services/geminiService';
 import { differenceInDays } from 'date-fns';
 import { ProductEditModal } from './InventoryManager';
 
@@ -31,6 +31,7 @@ const OrderForm: React.FC = () => {
   // AI & Voice State
   const [isListening, setIsListening] = useState(false);
   const [isProcessingAI, setIsProcessingAI] = useState(false);
+  const [isVerifyingAddr, setIsVerifyingAddr] = useState(false); // New state for Maps
 
   // Quick Add/Edit Product Modal State
   const [showProductModal, setShowProductModal] = useState(false);
@@ -179,6 +180,43 @@ const OrderForm: React.FC = () => {
       }
       toast.success("Đã cập nhật hàng hóa");
       setEditingProduct(null);
+  };
+
+  const handleVerifyAddress = async () => {
+      const currentAddr = customerInfo.address;
+      if (!currentAddr || currentAddr.trim().length < 5) {
+          toast.error("Vui lòng nhập địa chỉ sơ bộ trước.");
+          return;
+      }
+      
+      setIsVerifyingAddr(true);
+      const toastId = toast.loading("Đang tìm địa chỉ trên Google Maps...");
+      
+      try {
+          const result = await verifyAddress(currentAddr);
+          
+          // Update the address field with the cleaner result
+          setCustomerInfo(prev => ({ ...prev, address: result.address }));
+          
+          // Show success message with link
+          toast.success((t) => (
+              <div className="flex flex-col gap-1">
+                  <span className="font-bold">Đã chuẩn hóa địa chỉ!</span>
+                  <div className="text-xs text-gray-500">{result.address}</div>
+                  {result.mapLink && (
+                      <a href={result.mapLink} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 underline font-bold flex items-center gap-1 mt-1">
+                          <i className="fas fa-map-marked-alt"></i> Xem trên bản đồ
+                      </a>
+                  )}
+              </div>
+          ), { duration: 5000, icon: '📍' });
+          
+      } catch (e: any) {
+          toast.error(e.message || "Không tìm thấy địa điểm.");
+      } finally {
+          setIsVerifyingAddr(false);
+          toast.dismiss(toastId);
+      }
   };
 
   // --- VOICE & AI LOGIC ---
@@ -499,50 +537,69 @@ const OrderForm: React.FC = () => {
             {/* --- LEFT SIDE: FORM INPUT (70%) --- */}
             {/* Logic: Hidden on Mobile if Stats Tab active. Always Flex on Desktop/Tablet (SM+) */}
             <div className={`${mobileTab === 'FORM' ? 'flex' : 'hidden'} sm:flex sm:w-[70%] flex-col h-full overflow-hidden relative`}>
-                {/* 1. HEADER */}
-                <div className="px-4 py-3 bg-gradient-to-r from-gray-50 to-white border-b border-gray-100 flex justify-between items-center shrink-0">
-                    <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 rounded-full bg-eco-100 text-eco-600 flex items-center justify-center shadow-sm">
-                            <i className="fas fa-plus-circle"></i>
-                        </div>
-                        <h2 className="text-base font-black text-gray-800 hidden sm:block">Tạo Đơn Hàng</h2>
-                    </div>
-                    
-                    <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
-                        {/* BATCH SELECTOR */}
-                        <div className="relative" ref={batchWrapperRef}>
-                            <div className="flex items-center bg-white border border-gray-200 rounded-lg px-2 py-1.5 shadow-sm hover:border-eco-400 transition-colors cursor-pointer" onClick={() => setShowBatchSuggestions(!showBatchSuggestions)}>
-                                <span className="text-[9px] font-bold text-gray-400 uppercase mr-1 hidden sm:inline">Lô:</span>
-                                <input 
-                                    value={batchId}
-                                    onChange={(e) => setBatchId(e.target.value)}
-                                    className="w-24 text-xs font-bold text-eco-700 outline-none bg-transparent"
-                                    placeholder="LÔ-HÔM-NAY"
-                                />
-                                <i className="fas fa-chevron-down text-[10px] text-gray-400 ml-1"></i>
-                            </div>
-                            {showBatchSuggestions && existingBatches.length > 0 && (
-                                <div className="absolute top-full right-0 mt-1 w-48 bg-white border border-gray-100 rounded-lg shadow-xl z-50 overflow-hidden">
-                                    {existingBatches.map(b => (
-                                        <div key={b} onClick={() => selectBatch(b)} className="px-3 py-2 hover:bg-eco-50 cursor-pointer text-xs font-medium text-gray-700 border-b border-gray-50 last:border-0 flex justify-between">
-                                            {b} {batchId === b && <i className="fas fa-check text-eco-600"></i>}
-                                        </div>
-                                    ))}
+                
+                {/* 1. STICKY HEADER WITH PRIMARY ACTIONS (NEW DESIGN) */}
+                <div className="flex flex-col shrink-0 bg-white shadow-sm z-20 border-b border-gray-200 relative">
+                    {/* Row 1: Brand/Title & Utility Tools */}
+                    <div className="px-4 py-2 flex justify-between items-center border-b border-gray-50 bg-gray-50/30">
+                       <div className="flex items-center gap-2">
+                           <div className="w-7 h-7 rounded-full bg-eco-100 flex items-center justify-center text-eco-600"><i className="fas fa-plus-circle text-sm"></i></div>
+                           <div className="font-bold text-gray-800 hidden sm:block">Tạo Đơn</div>
+                           <div className="relative" ref={batchWrapperRef}>
+                                <div className="flex items-center bg-white border border-gray-200 rounded-lg px-2 py-1 shadow-sm hover:border-eco-400 transition-colors cursor-pointer" onClick={() => setShowBatchSuggestions(!showBatchSuggestions)}>
+                                    <input 
+                                        value={batchId}
+                                        onChange={(e) => setBatchId(e.target.value)}
+                                        className="w-20 text-[10px] font-bold text-eco-700 outline-none bg-transparent"
+                                        placeholder="LÔ-HÔM-NAY"
+                                    />
+                                    <i className="fas fa-chevron-down text-[8px] text-gray-400 ml-1"></i>
                                 </div>
-                            )}
-                        </div>
+                                {showBatchSuggestions && existingBatches.length > 0 && (
+                                    <div className="absolute top-full left-0 mt-1 w-40 bg-white border border-gray-100 rounded-lg shadow-xl z-50 overflow-hidden">
+                                        {existingBatches.map(b => (
+                                            <div key={b} onClick={() => selectBatch(b)} className="px-3 py-2 hover:bg-eco-50 cursor-pointer text-xs font-medium text-gray-700 border-b border-gray-50 last:border-0 flex justify-between">
+                                                {b} {batchId === b && <i className="fas fa-check text-eco-600"></i>}
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                       </div>
+                       
+                       <div className="flex items-center gap-2">
+                           <button onClick={handlePasteFromMessenger} className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-100 flex items-center justify-center transition-colors" title="Dán từ Messenger">
+                               <i className="fab fa-facebook-messenger"></i>
+                           </button>
+                           <button onClick={handleVoiceInput} disabled={isListening} className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${isListening ? 'bg-red-500 text-white animate-pulse' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                               <i className={`fas ${isListening ? 'fa-microphone-slash' : 'fa-microphone'}`}></i>
+                           </button>
+                           <button onClick={resetForm} className="w-8 h-8 rounded-lg bg-gray-50 text-gray-400 hover:bg-red-50 hover:text-red-500 flex items-center justify-center transition-colors" title="Làm mới">
+                               <i className="fas fa-trash-alt text-xs"></i>
+                           </button>
+                       </div>
+                    </div>
 
-                        <button onClick={handlePasteFromMessenger} className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-100 flex items-center justify-center transition-colors" title="Dán từ Messenger">
-                            <i className="fab fa-facebook-messenger"></i>
-                        </button>
-                        <button onClick={handleVoiceInput} disabled={isListening} className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${isListening ? 'bg-red-500 text-white animate-pulse' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
-                            <i className={`fas ${isListening ? 'fa-microphone-slash' : 'fa-microphone'}`}></i>
+                    {/* Row 2: PRIMARY ACTION BAR (Price & Submit) - ALWAYS VISIBLE */}
+                    <div className="px-4 py-2 flex gap-3 items-center bg-white">
+                        <div className="flex-col min-w-[80px]">
+                            <div className="text-[9px] text-gray-400 font-bold uppercase tracking-wider">Tổng tiền</div>
+                            <div className="text-xl font-black text-eco-700 leading-none">
+                                {new Intl.NumberFormat('vi-VN').format(totalPrice)}<span className="text-xs font-medium text-gray-400 ml-0.5">đ</span>
+                            </div>
+                        </div>
+                        <button 
+                            onClick={handleSubmit}
+                            className="flex-grow bg-black hover:bg-gray-800 text-white rounded-xl py-3 px-4 font-bold text-sm shadow-lg shadow-gray-200 flex items-center justify-center gap-2 active:scale-95 transition-all"
+                        >
+                            <span>LÊN ĐƠN NGAY</span>
+                            <i className="fas fa-paper-plane text-xs"></i>
                         </button>
                     </div>
                 </div>
 
                 {/* 2. SCROLLABLE FORM AREA */}
-                <form onSubmit={handleSubmit} className="flex-grow overflow-y-auto p-3 space-y-3">
+                <form onSubmit={handleSubmit} className="flex-grow overflow-y-auto p-3 space-y-3 pb-20">
                     
                     {/* A. CUSTOMER INFO (Compact Grid) */}
                     <div className="bg-gray-50/50 p-3 rounded-xl border border-gray-100">
@@ -581,13 +638,28 @@ const OrderForm: React.FC = () => {
                         </div>
                         
                         <div className="mb-2">
-                            <input
-                                value={customerInfo.address}
-                                onChange={(e) => setCustomerInfo({...customerInfo, address: e.target.value})}
-                                required
-                                className={`${inputClass} font-medium text-gray-700`}
-                                placeholder="Địa chỉ giao hàng (Số nhà, đường, phường...)"
-                            />
+                            <div className="relative flex items-center">
+                                <input
+                                    value={customerInfo.address}
+                                    onChange={(e) => setCustomerInfo({...customerInfo, address: e.target.value})}
+                                    required
+                                    className={`${inputClass} font-medium text-gray-700 pr-10`}
+                                    placeholder="Địa chỉ giao hàng..."
+                                />
+                                <button
+                                    type="button"
+                                    onClick={handleVerifyAddress}
+                                    disabled={isVerifyingAddr}
+                                    className={`absolute right-1 top-1 w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${isVerifyingAddr ? 'text-gray-400 cursor-wait' : 'text-red-500 hover:bg-red-50'}`}
+                                    title="Gim địa chỉ Google Maps"
+                                >
+                                    {isVerifyingAddr ? (
+                                        <i className="fas fa-spinner fa-spin"></i>
+                                    ) : (
+                                        <i className="fas fa-map-marker-alt"></i>
+                                    )}
+                                </button>
+                            </div>
                         </div>
 
                         <div className="flex gap-2 items-center">
@@ -697,23 +769,6 @@ const OrderForm: React.FC = () => {
                         })}
                     </div>
                 </form>
-
-                {/* 3. FOOTER (TOTAL & ACTION) */}
-                <div className="p-3 bg-white border-t border-gray-200 shrink-0">
-                    <div className="flex justify-between items-end mb-3">
-                        <div className="text-xs text-gray-400 font-medium">{items.length} mặt hàng</div>
-                        <div className="text-2xl font-black text-gray-900 leading-none">
-                            {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(totalPrice)}
-                        </div>
-                    </div>
-                    <div className="flex gap-2">
-                        <button type="button" onClick={resetForm} className="px-4 py-3 rounded-xl bg-gray-100 text-gray-600 font-bold text-xs hover:bg-gray-200 transition-colors">Hủy</button>
-                        <button onClick={handleSubmit} className="flex-grow bg-black text-white py-3 rounded-xl font-bold text-sm shadow-lg hover:bg-gray-800 transition-transform active:scale-95 flex items-center justify-center gap-2">
-                            <span>Lên Đơn & Trừ Kho</span>
-                            <i className="fas fa-paper-plane text-xs"></i>
-                        </button>
-                    </div>
-                </div>
             </div>
 
             {/* --- RIGHT SIDE: BATCH STATS TABLE (30% or Mobile Tab) --- */}

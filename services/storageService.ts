@@ -69,6 +69,21 @@ const markQuotaExhausted = () => {
 
 const isOnline = () => !!db && !_quotaExhausted;
 
+// Helper to detect quota errors reliably
+const isQuotaError = (e: any): boolean => {
+    if (!e) return false;
+    // Check various error structures
+    const code = e.code || '';
+    const msg = (e.message || '').toLowerCase();
+    const str = String(e).toLowerCase();
+    
+    return code === 'resource-exhausted' || 
+           msg.includes('quota exceeded') || 
+           msg.includes('resource-exhausted') || 
+           msg.includes('usage limits') ||
+           str.includes('quota');
+};
+
 // --- PERFORMANCE OPTIMIZATION: IN-MEMORY CACHE ---
 let _memoryCustomers: Customer[] | null = null;
 let _memoryOrders: Order[] | null = null;
@@ -82,6 +97,7 @@ let _idIndex: Map<string, Customer> | null = null;
 // Debounce timers
 let _customerSaveTimer: any = null;
 let _orderSaveTimer: any = null;
+let _productSaveTimer: any = null;
 
 const invalidateIndices = () => {
     _phoneIndex = null;
@@ -284,7 +300,7 @@ const safeCloudOp = async (operation: () => Promise<any>) => {
     try {
         await operation();
     } catch (error: any) {
-        if (error.code === 'resource-exhausted') {
+        if (isQuotaError(error)) {
             markQuotaExhausted();
         } else {
             console.error("Cloud Op Failed:", error);
@@ -433,7 +449,7 @@ export const storageService = {
                     totalSynced += chunk.length;
                     await delay(500); 
                 } catch (e: any) {
-                    if (e.code === 'resource-exhausted') {
+                    if (isQuotaError(e)) {
                          markQuotaExhausted();
                          throw new Error("Hết hạn mức Firebase. Đã dừng đồng bộ.");
                     }
@@ -453,32 +469,86 @@ export const storageService = {
     }
   },
 
-  // --- PRODUCTS ---
+  // --- PRODUCTS (DELTA SYNC ENGINE) ---
   subscribeProducts: (callback: (products: Product[]) => void) => {
-    const load = () => { 
-        try {
-            const data = localStorage.getItem(PRODUCT_KEY); 
-            _memoryProducts = data ? JSON.parse(data) : [];
-            callback(_memoryProducts || []); 
-        } catch { callback([]); }
-    };
-    load();
+    const list = ensureProductsLoaded();
+    if (list) callback(list);
 
     if (isOnline()) {
-        const q = query(collection(db, "products"));
-        return onSnapshot(q, (snapshot) => {
-            const list: Product[] = [];
-            snapshot.forEach(d => list.push(d.data() as Product));
-            _memoryProducts = list;
-            localStorage.setItem(PRODUCT_KEY, JSON.stringify(list));
-            callback(list);
-        }, (err) => {
-            if (err.code === 'resource-exhausted') {
-                markQuotaExhausted();
+        const fetchDelta = async () => {
+            try {
+                // Find latest update time in local storage
+                const maxUpdatedAt = list ? Math.max(...list.map(p => p.updatedAt || 0)) : 0;
+                
+                // Only fetch items updated since then
+                const q = query(collection(db, "products"), where("updatedAt", ">", maxUpdatedAt));
+                const snapshot = await getDocs(q);
+                
+                if (!snapshot.empty) {
+                    const currentList = ensureProductsLoaded() || [];
+                    const productMap = new Map<string, Product>();
+                    currentList.forEach(p => productMap.set(p.id, p));
+
+                    let changesCount = 0;
+                    snapshot.forEach(doc => {
+                        const data = doc.data() as Product;
+                        // Determine if cloud data is actually newer (in case of clock skew)
+                        const existing = productMap.get(data.id);
+                        if (!existing || (data.updatedAt || 0) > (existing.updatedAt || 0)) {
+                            productMap.set(data.id, data);
+                            changesCount++;
+                        }
+                    });
+
+                    const newList = Array.from(productMap.values());
+                    _memoryProducts = newList;
+                    localStorage.setItem(PRODUCT_KEY, JSON.stringify(newList));
+                    callback(newList);
+                }
+
+                // Setup realtime listener for NEW updates
+                const now = Date.now();
+                const rtQuery = query(collection(db, "products"), where("updatedAt", ">", now));
+                
+                return onSnapshot(rtQuery, (snap) => {
+                    if(snap.empty) return;
+                    const current = ensureProductsLoaded() || [];
+                    const map = new Map(current.map(p => [p.id, p]));
+                    
+                    snap.forEach(d => {
+                        const data = d.data() as Product;
+                        map.set(data.id, data);
+                    });
+                    
+                    const updatedList = Array.from(map.values());
+                    _memoryProducts = updatedList;
+                    callback(updatedList);
+                    
+                    if (_productSaveTimer) clearTimeout(_productSaveTimer);
+                    _productSaveTimer = setTimeout(() => {
+                        localStorage.setItem(PRODUCT_KEY, JSON.stringify(updatedList));
+                    }, 2000);
+                }, (error) => {
+                    if (isQuotaError(error)) {
+                        markQuotaExhausted();
+                    }
+                });
+
+            } catch (e: any) {
+                if (isQuotaError(e)) {
+                    markQuotaExhausted();
+                } else {
+                    console.warn("Product delta sync skipped/failed:", e.message);
+                }
             }
-        });
+        };
+        fetchDelta();
     } else {
-        const handler = () => load();
+        const handler = () => {
+            const data = localStorage.getItem(PRODUCT_KEY); 
+            const list = data ? JSON.parse(data) : [];
+            callback(list);
+        };
         window.addEventListener('storage_' + PRODUCT_KEY, handler);
         return () => window.removeEventListener('storage_' + PRODUCT_KEY, handler);
     }
@@ -494,39 +564,46 @@ export const storageService = {
   },
 
   saveProduct: async (product: Product) => {
+      const productToSave = { ...product, updatedAt: Date.now() }; // Set updated timestamp
+      
       let list = ensureProductsLoaded();
-      const idx = list.findIndex(p => p.id === product.id);
+      const idx = list.findIndex(p => p.id === productToSave.id);
       
       if (idx >= 0) {
-          // Update existing
-          list[idx] = product; 
+          list[idx] = productToSave; 
       } else {
-          // Create new
-          list.push(product);
+          list.push(productToSave);
       }
       
       _memoryProducts = list;
-      localStorage.setItem(PRODUCT_KEY, JSON.stringify(list));
+      
+      // Debounced Local Save
       window.dispatchEvent(new Event('storage_' + PRODUCT_KEY));
+      if (_productSaveTimer) clearTimeout(_productSaveTimer);
+      _productSaveTimer = setTimeout(() => {
+          localStorage.setItem(PRODUCT_KEY, JSON.stringify(list));
+      }, 1000);
 
-      await safeCloudOp(() => setDoc(doc(db, "products", product.id), sanitize(product)));
+      await safeCloudOp(() => setDoc(doc(db, "products", productToSave.id), sanitize(productToSave)));
   },
 
   // NEW: Atomic Stock Adjustment (Safe for Concurrency)
   adjustStockAtomic: async (productId: string, delta: number, importInfo?: { price: number, note?: string }) => {
+      const now = Date.now();
       // 1. Local Update (Optimistic)
       const products = ensureProductsLoaded();
       const product = products.find(p => p.id === productId);
       
       if (product) {
           product.stockQuantity = (product.stockQuantity || 0) + delta;
+          product.updatedAt = now;
           if (delta > 0) {
               product.totalImported = (product.totalImported || 0) + delta;
               if (importInfo) {
                   if (!product.importHistory) product.importHistory = [];
                   product.importHistory.push({
                       id: uuidv4(),
-                      date: Date.now(),
+                      date: now,
                       quantity: delta,
                       price: importInfo.price,
                       note: importInfo.note
@@ -546,8 +623,10 @@ export const storageService = {
                   
                   if (snap.exists()) {
                       const data = snap.data() as Product;
-                      // Use increment for atomic update on the counter
-                      const updates: any = { stockQuantity: increment(delta) };
+                      const updates: any = { 
+                          stockQuantity: increment(delta),
+                          updatedAt: now // Update timestamp in transaction
+                      };
                       
                       if (delta > 0) {
                           updates.totalImported = increment(delta);
@@ -555,7 +634,7 @@ export const storageService = {
                               const newHistory = [...(data.importHistory || [])];
                               newHistory.push({
                                   id: uuidv4(),
-                                  date: Date.now(),
+                                  date: now,
                                   quantity: delta,
                                   price: importInfo.price,
                                   note: importInfo.note || 'Adjustment'
@@ -567,8 +646,7 @@ export const storageService = {
                   }
               });
           } catch (e: any) {
-              // CHANGE: Handle Quota Exceeded gracefully
-              if (e.code === 'resource-exhausted') {
+              if (isQuotaError(e)) {
                   console.warn("Quota exceeded during transaction. Switching to offline mode.");
                   markQuotaExhausted();
               } else {
@@ -592,10 +670,9 @@ export const storageService = {
       const products = ensureProductsLoaded();
       const orders = ensureOrdersLoaded();
       
-      // 1. Group products by Normalized Name
       const productGroups = new Map<string, Product[]>();
       products.forEach(p => {
-          const key = generateProductSku(p.name); // Using standard SKU gen as the key
+          const key = generateProductSku(p.name);
           if (!productGroups.has(key)) productGroups.set(key, []);
           productGroups.get(key)!.push(p);
       });
@@ -605,15 +682,10 @@ export const storageService = {
       const batch = writeBatch(db);
       let batchOps = 0;
       
-      // Helper to commit batch if full
       const checkCommit = async () => {
           batchOps++;
           if (batchOps >= 300 && isOnline()) {
-              try {
-                  await batch.commit();
-              } catch (e: any) {
-                  if (e.code === 'resource-exhausted') markQuotaExhausted();
-              }
+              try { await batch.commit(); } catch (e: any) { if (isQuotaError(e)) markQuotaExhausted(); }
               batchOps = 0;
           }
       };
@@ -621,10 +693,7 @@ export const storageService = {
       for (const [key, group] of productGroups.entries()) {
           if (group.length <= 1) continue;
 
-          // MERGE LOGIC
-          // Sort group: Keep the one with most stock or oldest import as Primary
           group.sort((a, b) => (b.stockQuantity || 0) - (a.stockQuantity || 0));
-          
           const primary = group[0];
           const duplicates = group.slice(1);
           
@@ -632,29 +701,21 @@ export const storageService = {
           let totalImported = primary.totalImported || 0;
           let latestPrice = primary.defaultPrice;
           let latestImportPrice = primary.importPrice;
-          
-          // NEW: Merge Import History
           const mergedHistory: ImportRecord[] = [...(primary.importHistory || [])];
 
           for (const dup of duplicates) {
               totalStock += (dup.stockQuantity || 0);
               totalImported += (dup.totalImported || 0);
-              
-              // If dup has newer update, maybe take its price? For now, keep primary or max.
               latestPrice = Math.max(latestPrice, dup.defaultPrice);
               latestImportPrice = Math.max(latestImportPrice || 0, dup.importPrice || 0);
-              
-              if (dup.importHistory) {
-                  mergedHistory.push(...dup.importHistory);
-              }
+              if (dup.importHistory) mergedHistory.push(...dup.importHistory);
 
-              // 2. Fix Orders referencing duplicate product IDs
               orders.forEach(o => {
                   let orderChanged = false;
                   o.items.forEach(item => {
                       if (item.productId === dup.id) {
                           item.productId = primary.id;
-                          item.name = primary.name; // Normalize name in order too
+                          item.name = primary.name;
                           orderChanged = true;
                       }
                   });
@@ -664,22 +725,20 @@ export const storageService = {
                   }
               });
 
-              // 3. Delete Duplicate Product
               if (isOnline()) batch.delete(doc(db, "products", dup.id));
               const idx = products.findIndex(p => p.id === dup.id);
               if (idx >= 0) products.splice(idx, 1);
           }
           
-          // Sort history by date
           mergedHistory.sort((a,b) => a.date - b.date);
 
-          // 4. Update Primary Product
           primary.stockQuantity = totalStock;
           primary.totalImported = totalImported;
           primary.defaultPrice = latestPrice;
           primary.importPrice = latestImportPrice;
           primary.importHistory = mergedHistory;
-          primary.id = key; // Enforce Standard SKU as ID if possible (Careful with this if key != primary.id)
+          primary.id = key;
+          primary.updatedAt = Date.now(); // Update timestamp
           
           if (isOnline()) batch.set(doc(db, "products", primary.id), sanitize(primary));
           
@@ -687,16 +746,10 @@ export const storageService = {
           await checkCommit();
       }
 
-      // Final commit
       if (isOnline() && batchOps > 0) {
-          try {
-              await batch.commit();
-          } catch (e: any) {
-              if (e.code === 'resource-exhausted') markQuotaExhausted();
-          }
+          try { await batch.commit(); } catch (e: any) { if (isQuotaError(e)) markQuotaExhausted(); }
       }
 
-      // Update Local Storage
       _memoryProducts = products;
       localStorage.setItem(PRODUCT_KEY, JSON.stringify(products));
       window.dispatchEvent(new Event('storage_' + PRODUCT_KEY));
@@ -709,18 +762,28 @@ export const storageService = {
   },
 
   // --- TOOL: RECALCULATE INVENTORY FROM ORDERS ---
+  // FULL SCAN REQUIRED FOR ACCURACY
   recalculateInventoryFromOrders: async (): Promise<number> => {
       const products = ensureProductsLoaded();
-      const orders = ensureOrdersLoaded();
-      let updatedCount = 0;
+      let allOrders = ensureOrdersLoaded();
+      
+      // If online, force fetch ALL orders to ensure accuracy, bypassing the 400 limit
+      if (isOnline()) {
+          try {
+              const snap = await getDocs(collection(db, "orders"));
+              allOrders = [];
+              snap.forEach(d => allOrders.push(d.data() as Order));
+          } catch(e) {
+              if (isQuotaError(e)) markQuotaExhausted();
+              console.warn("Full scan failed, using partial order history.");
+          }
+      }
 
-      // 1. Map: ProductID -> Total Sold Quantity
+      let updatedCount = 0;
       const soldMap = new Map<string, number>();
       
-      orders.forEach(o => {
-          // Ignore cancelled orders
+      allOrders.forEach(o => {
           if (o.status === OrderStatus.CANCELLED) return;
-          
           o.items.forEach(item => {
               if (item.productId) {
                   const currentSold = soldMap.get(item.productId) || 0;
@@ -732,74 +795,50 @@ export const storageService = {
       const batch = writeBatch(db);
       let batchOps = 0;
 
-      // 2. Iterate Products and Recalculate
       for (const p of products) {
           const totalSold = soldMap.get(p.id) || 0;
-          
-          // Calculate Imported from History if available
           const historyImport = (p.importHistory || []).reduce((sum, h) => sum + (Number(h.quantity) || 0), 0);
           
           let totalImported = Number(p.totalImported) || 0;
           const currentStock = Number(p.stockQuantity) || 0;
 
-          // DECISION LOGIC: Determine the most accurate Total Imported
-          // RULE 1: If History exists, it is the SOURCE OF TRUTH for Total Imported.
           if (historyImport > 0) {
               totalImported = historyImport;
           }
-          // RULE 2: Legacy Fallback (No history)
-          // If no history, and Total Imported seems undefined or clearly wrong (less than what we have + sold),
-          // we reset Total Imported to match reality (Stock + Sold).
-          // This "freezes" the current stock as correct and sets the baseline Import.
           else if (totalImported < (currentStock + totalSold)) {
               totalImported = currentStock + totalSold;
           }
 
-          // FINAL CALCULATION
-          // Stock = Total Imported - Total Sold
           const calculatedStock = Math.max(0, totalImported - totalSold);
           
-          // Check if update needed
           if (calculatedStock !== currentStock || totalImported !== p.totalImported) {
               p.stockQuantity = calculatedStock;
               p.totalImported = totalImported;
+              p.updatedAt = Date.now(); // Mark updated
               
               if (isOnline()) {
                   batch.update(doc(db, "products", p.id), { 
                       stockQuantity: calculatedStock,
-                      totalImported: totalImported
+                      totalImported: totalImported,
+                      updatedAt: Date.now()
                   });
                   batchOps++;
               }
               updatedCount++;
           }
           
-          // Commit in chunks
           if (batchOps >= 300) {
               if (isOnline()) {
-                  try {
-                      await batch.commit();
-                  } catch (e: any) {
-                      if (e.code === 'resource-exhausted') {
-                          markQuotaExhausted();
-                          break;
-                      }
-                  }
+                  try { await batch.commit(); } catch (e: any) { if (isQuotaError(e)) { markQuotaExhausted(); break; } }
               }
               batchOps = 0;
           }
       }
 
-      // Final commit
       if (isOnline() && batchOps > 0) {
-          try {
-              await batch.commit();
-          } catch (e: any) {
-              if (e.code === 'resource-exhausted') markQuotaExhausted();
-          }
+          try { await batch.commit(); } catch (e: any) { if (isQuotaError(e)) markQuotaExhausted(); }
       }
 
-      // Update Local Storage
       _memoryProducts = products;
       localStorage.setItem(PRODUCT_KEY, JSON.stringify(products));
       window.dispatchEvent(new Event('storage_' + PRODUCT_KEY));
@@ -810,16 +849,11 @@ export const storageService = {
   getProductOrderHistory: (productId: string): { order: Order, quantity: number }[] => {
       const orders = ensureOrdersLoaded();
       const history: { order: Order, quantity: number }[] = [];
-      
       orders.forEach(o => {
           if (o.status === OrderStatus.CANCELLED) return;
           const item = o.items.find(i => i.productId === productId);
-          if (item) {
-              history.push({ order: o, quantity: item.quantity });
-          }
+          if (item) history.push({ order: o, quantity: item.quantity });
       });
-      
-      // Sort by newest
       return history.sort((a,b) => b.order.createdAt - a.order.createdAt);
   },
 
@@ -827,30 +861,16 @@ export const storageService = {
   syncProductToPendingOrders: async (product: Product) => {
       const orders = ensureOrdersLoaded() || [];
       const pendingStatuses = [OrderStatus.PENDING, OrderStatus.PICKED_UP, OrderStatus.IN_TRANSIT];
-      
       const ordersToUpdate: Order[] = [];
 
       for (const order of orders) {
-          // Skip completed orders
           if (!pendingStatuses.includes(order.status)) continue;
-
           let hasChanges = false;
-          
-          // Check items in order
           const newItems = order.items.map(item => {
               if (item.productId === product.id) {
-                  // Only update if something actually changed
-                  if (item.name !== product.name || 
-                      item.price !== product.defaultPrice || 
-                      item.importPrice !== product.importPrice) {
-                      
+                  if (item.name !== product.name || item.price !== product.defaultPrice || item.importPrice !== product.importPrice) {
                       hasChanges = true;
-                      return {
-                          ...item,
-                          name: product.name,
-                          price: product.defaultPrice,
-                          importPrice: product.importPrice
-                      };
+                      return { ...item, name: product.name, price: product.defaultPrice, importPrice: product.importPrice };
                   }
               }
               return item;
@@ -858,50 +878,31 @@ export const storageService = {
 
           if (hasChanges) {
               const newTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0);
-              const updatedOrder = { 
-                  ...order, 
-                  items: newItems, 
-                  totalPrice: newTotal,
-                  lastUpdatedBy: 'System (Sync)' 
-              };
+              const updatedOrder = { ...order, items: newItems, totalPrice: newTotal, lastUpdatedBy: 'System (Sync)' };
               ordersToUpdate.push(updatedOrder);
           }
       }
 
       if (ordersToUpdate.length > 0) {
-          // Batch Update Memory
           const currentOrders = ensureOrdersLoaded() || [];
           ordersToUpdate.forEach(updatedOrder => {
               const idx = currentOrders.findIndex(o => o.id === updatedOrder.id);
               if (idx >= 0) currentOrders[idx] = updatedOrder;
           });
-          
           _memoryOrders = currentOrders;
           localStorage.setItem(ORDER_KEY, JSON.stringify(currentOrders));
           window.dispatchEvent(new Event('storage_' + ORDER_KEY));
 
-          // Batch Update Cloud
           if (isOnline()) {
               const CHUNK = 300;
               for (let i = 0; i < ordersToUpdate.length; i += CHUNK) {
                   const chunk = ordersToUpdate.slice(i, i + CHUNK);
                   const batch = writeBatch(db);
-                  
                   chunk.forEach(o => {
                       const ref = doc(db, "orders", o.id);
-                      batch.update(ref, { 
-                          items: o.items, 
-                          totalPrice: o.totalPrice,
-                          lastUpdatedBy: 'System (Product Sync)' 
-                      });
+                      batch.update(ref, { items: o.items, totalPrice: o.totalPrice, lastUpdatedBy: 'System (Product Sync)' });
                   });
-                  
-                  try {
-                      await batch.commit();
-                  } catch (e: any) {
-                      console.error("Failed to sync product to pending orders", e);
-                      if (e.code === 'resource-exhausted') markQuotaExhausted();
-                  }
+                  try { await batch.commit(); } catch (e: any) { if (isQuotaError(e)) markQuotaExhausted(); }
               }
           }
           return ordersToUpdate.length;
@@ -909,7 +910,7 @@ export const storageService = {
       return 0;
   },
 
-  // --- CUSTOMERS (DELTA SYNC ENGINE) ---
+  // --- CUSTOMERS (DELTA SYNC) ---
   subscribeCustomers: (callback: (customers: Customer[]) => void) => {
       const list = ensureCustomersLoaded();
       if (list) callback(list);
@@ -926,20 +927,17 @@ export const storageService = {
                       const customerMap = new Map<string, Customer>();
                       currentList.forEach(c => customerMap.set(c.id, c));
 
-                      let changesCount = 0;
                       snapshot.forEach(doc => {
                           const data = doc.data() as Customer;
                           const existing = customerMap.get(data.id);
                           if (!existing || (data.updatedAt || 0) > (existing.updatedAt || 0)) {
                               customerMap.set(data.id, data);
-                              changesCount++;
                           }
                       });
 
                       const newList = Array.from(customerMap.values());
                       _memoryCustomers = newList;
                       invalidateIndices();
-                      
                       callback(newList);
                       localStorage.setItem(CUSTOMER_KEY, JSON.stringify(newList));
                   }
@@ -951,42 +949,20 @@ export const storageService = {
                       if(snap.empty) return;
                       const current = ensureCustomersLoaded() || [];
                       const map = new Map(current.map(c => [c.id, c]));
-                      
-                      snap.forEach(d => {
-                          const data = d.data() as Customer;
-                          map.set(data.id, data);
-                      });
-                      
+                      snap.forEach(d => { const data = d.data() as Customer; map.set(data.id, data); });
                       const updatedList = Array.from(map.values());
                       _memoryCustomers = updatedList;
                       invalidateIndices();
                       callback(updatedList);
-                      
                       if (_customerSaveTimer) clearTimeout(_customerSaveTimer);
-                      _customerSaveTimer = setTimeout(() => {
-                          localStorage.setItem(CUSTOMER_KEY, JSON.stringify(updatedList));
-                      }, 2000);
-                  }, (error) => {
-                      if (error.code === 'resource-exhausted') {
-                          markQuotaExhausted();
-                      }
-                  });
+                      _customerSaveTimer = setTimeout(() => { localStorage.setItem(CUSTOMER_KEY, JSON.stringify(updatedList)); }, 2000);
+                  }, (error) => { if (isQuotaError(error)) markQuotaExhausted(); });
 
-              } catch (e: any) {
-                  if (e.code === 'resource-exhausted') {
-                      markQuotaExhausted();
-                  } else {
-                      console.warn("Delta sync skipped/failed:", e.message);
-                  }
-              }
+              } catch (e: any) { if (isQuotaError(e)) markQuotaExhausted(); }
           };
-
           fetchDelta();
       } else {
-          const handler = () => {
-              const list = ensureCustomersLoaded();
-              if (list) callback(list);
-          };
+          const handler = () => { const list = ensureCustomersLoaded(); if (list) callback(list); };
           window.addEventListener('storage_' + CUSTOMER_KEY, handler);
           return () => window.removeEventListener('storage_' + CUSTOMER_KEY, handler);
       }
@@ -995,16 +971,12 @@ export const storageService = {
   searchCustomers: async (term: string): Promise<Customer[]> => {
       const list = ensureCustomersLoaded();
       if (!list || !term) return [];
-      
       const lowerTerm = term.toLowerCase().trim();
       const results: Customer[] = [];
       const MAX_RESULTS = 10;
-      
       for (const c of list) {
           if (results.length >= MAX_RESULTS) break;
-          if (c.name.toLowerCase().includes(lowerTerm) || 
-              (c.phone && c.phone.includes(lowerTerm)) || 
-              c.address.toLowerCase().includes(lowerTerm)) {
+          if (c.name.toLowerCase().includes(lowerTerm) || (c.phone && c.phone.includes(lowerTerm)) || c.address.toLowerCase().includes(lowerTerm)) {
               results.push(c);
           }
       }
@@ -1014,21 +986,15 @@ export const storageService = {
   upsertCustomer: async (customer: Customer) => {
       const list = ensureCustomersLoaded() || [];
       const idx = list.findIndex(c => c.id === customer.id);
-      
       const customerToSave = { ...customer, updatedAt: Date.now() };
       
-      if (idx >= 0) list[idx] = customerToSave; 
-      else list.push(customerToSave);
+      if (idx >= 0) list[idx] = customerToSave; else list.push(customerToSave);
       
       _memoryCustomers = list;
       invalidateIndices();
-
       window.dispatchEvent(new Event('storage_' + CUSTOMER_KEY));
-      
       if (_customerSaveTimer) clearTimeout(_customerSaveTimer);
-      _customerSaveTimer = setTimeout(() => {
-           localStorage.setItem(CUSTOMER_KEY, JSON.stringify(list));
-      }, 1000);
+      _customerSaveTimer = setTimeout(() => { localStorage.setItem(CUSTOMER_KEY, JSON.stringify(list)); }, 1000);
 
       await safeCloudOp(() => setDoc(doc(db, "customers", customerToSave.id), sanitize(customerToSave)));
   },
@@ -1038,10 +1004,8 @@ export const storageService = {
       list = list.filter(c => c.id !== id);
       _memoryCustomers = list;
       invalidateIndices();
-      
       window.dispatchEvent(new Event('storage_' + CUSTOMER_KEY));
       localStorage.setItem(CUSTOMER_KEY, JSON.stringify(list));
-
       await safeCloudOp(() => deleteDoc(doc(db, "customers", id)));
   },
 
@@ -1050,7 +1014,6 @@ export const storageService = {
       invalidateIndices();
       localStorage.removeItem(CUSTOMER_KEY);
       window.dispatchEvent(new Event('storage_' + CUSTOMER_KEY));
-
       if (!skipCloud && isOnline()) {
           const q = query(collection(db, "customers"));
           const snapshot = await getDocs(q);
@@ -1063,15 +1026,12 @@ export const storageService = {
   markAllCustomersAsOld: async () => {
       const list = ensureCustomersLoaded() || [];
       if (list.length === 0) return 0;
-
       const batchSize = 300;
       let updatedCount = 0;
-
       for (let i = 0; i < list.length; i += batchSize) {
           const chunk = list.slice(i, i + batchSize);
           const batch = writeBatch(db);
           let hasBatchUpdates = false;
-
           chunk.forEach(c => {
               c.isLegacy = true; 
               c.updatedAt = Date.now();
@@ -1080,44 +1040,30 @@ export const storageService = {
                   hasBatchUpdates = true;
               }
           });
-          
           updatedCount += chunk.length;
-          if (isOnline() && hasBatchUpdates) {
-              await batch.commit();
-          }
+          if (isOnline() && hasBatchUpdates) { await batch.commit(); }
       }
-
       _memoryCustomers = list;
       localStorage.setItem(CUSTOMER_KEY, JSON.stringify(list));
       window.dispatchEvent(new Event('storage_' + CUSTOMER_KEY));
-      
       return updatedCount;
   },
 
   importCustomersBatch: async (customers: Customer[], isLocalMode: boolean) => {
       const existing = ensureCustomersLoaded() || [];
       const map = new Map(existing.map(c => [c.id, c]));
-
-      customers.forEach(c => {
-         const toSave = { ...c, updatedAt: Date.now() };
-         map.set(c.id, toSave);
-      });
-
+      customers.forEach(c => { const toSave = { ...c, updatedAt: Date.now() }; map.set(c.id, toSave); });
       const newList = Array.from(map.values());
       _memoryCustomers = newList;
       invalidateIndices();
-      
       localStorage.setItem(CUSTOMER_KEY, JSON.stringify(newList));
       window.dispatchEvent(new Event('storage_' + CUSTOMER_KEY));
-
       if (isOnline() && !isLocalMode) {
           const CHUNK = 300;
           for (let i = 0; i < customers.length; i += CHUNK) {
               const chunk = customers.slice(i, i + CHUNK);
               const batch = writeBatch(db);
-              chunk.forEach(c => {
-                   batch.set(doc(db, "customers", c.id), sanitize({ ...c, updatedAt: Date.now() }));
-              });
+              chunk.forEach(c => { batch.set(doc(db, "customers", c.id), sanitize({ ...c, updatedAt: Date.now() })); });
               await batch.commit();
               await delay(200);
           }
@@ -1127,7 +1073,6 @@ export const storageService = {
   generatePerformanceData: async (count: number) => {
       const start = performance.now();
       const newCustomers: Customer[] = [];
-      
       for (let i = 0; i < count; i++) {
           const id = `PERF_${Math.floor(Math.random() * 1000000)}_${i}`;
           newCustomers.push({
@@ -1139,9 +1084,7 @@ export const storageService = {
               priorityScore: Math.floor(Math.random() * 1000)
           });
       }
-      
       await storageService.importCustomersBatch(newCustomers, true);
-      
       return { count, duration: Math.round(performance.now() - start) };
   },
 
@@ -1154,7 +1097,7 @@ export const storageService = {
 
   findMatchingCustomer, 
 
-  // --- ORDERS ---
+  // --- ORDERS (MERGE SYNC ENGINE) ---
   subscribeOrders: (callback: (orders: Order[]) => void) => {
     const load = () => { 
         try {
@@ -1166,15 +1109,28 @@ export const storageService = {
     load();
 
     if (isOnline()) {
-        const q = query(collection(db, "orders")); 
+        // BANDWIDTH OPTIMIZATION: Limit to recent 400 orders
+        const q = query(collection(db, "orders"), orderBy("createdAt", "desc"), limit(400)); 
         return onSnapshot(q, (snapshot) => {
-            const list: Order[] = [];
-            snapshot.forEach(d => list.push(d.data() as Order));
-            _memoryOrders = list;
-            localStorage.setItem(ORDER_KEY, JSON.stringify(list));
-            callback(list);
+            const fetchedOrders: Order[] = [];
+            snapshot.forEach(d => fetchedOrders.push(d.data() as Order));
+            
+            // MERGE LOGIC: Combine new fetched orders with existing local memory
+            // This ensures we don't lose old history that is not in the top 400
+            const local = ensureOrdersLoaded() || [];
+            const orderMap = new Map(local.map(o => [o.id, o]));
+            
+            // Update/Add fetched orders
+            fetchedOrders.forEach(o => orderMap.set(o.id, o));
+            
+            // Convert back to list and sort
+            const mergedList = Array.from(orderMap.values()).sort((a,b) => b.createdAt - a.createdAt);
+            
+            _memoryOrders = mergedList;
+            localStorage.setItem(ORDER_KEY, JSON.stringify(mergedList));
+            callback(mergedList);
         }, (err) => {
-            if (err.code === 'resource-exhausted') {
+            if (isQuotaError(err)) {
                 markQuotaExhausted();
             }
         });
@@ -1196,80 +1152,48 @@ export const storageService = {
     let address = order.address;
 
     if (!customerId) {
-        // Try to find matching customer (Passing name to fuzzy match)
         const existing = findMatchingCustomer(customerPhone, address, undefined, customerName);
-        
         if (existing) {
-             // NAME COLLISION CHECK: Same phone but different name?
              if (!areNamesSimilar(existing.name, customerName)) {
-                 // Collision Detected! Create a new distinct ID
                  let suffix = 2;
                  let baseId = existing.id;
                  if (baseId.includes('-')) baseId = baseId.split('-')[0];
-                 
                  let newId = `${baseId}-${suffix}`;
                  const allCustomers = ensureCustomersLoaded() || [];
-                 // Ensure uniqueness in memory
-                 while (allCustomers.some(c => c.id === newId)) {
-                     suffix++;
-                     newId = `${baseId}-${suffix}`;
-                 }
-                 
+                 while (allCustomers.some(c => c.id === newId)) { suffix++; newId = `${baseId}-${suffix}`; }
                  customerId = newId;
-                 
-                 // Create new customer record
                  const newCust: Customer = {
-                     id: newId,
-                     name: customerName,
-                     phone: customerPhone,
-                     address: address,
-                     lastOrderDate: Date.now(),
-                     totalOrders: 0, // Will be incremented below
-                     priorityScore: 999
+                     id: newId, name: customerName, phone: customerPhone, address: address,
+                     lastOrderDate: Date.now(), totalOrders: 0, priorityScore: 999
                  };
                  await storageService.upsertCustomer(newCust);
              } else {
                  customerId = existing.id;
              }
         } else {
-             // New Customer
              customerId = generateCustomerId(customerName, customerPhone, address);
         }
     }
     
-    // Final ID check
     orderWithMeta.customerId = customerId;
 
-    // Update customer stats
     const existingCust = ensureCustomersLoaded()?.find(c => c.id === customerId);
     if (existingCust) {
         const newTotal = (existingCust.totalOrders || 0) + 1;
         const updatedCust = { 
-            ...existingCust, 
-            lastOrderDate: Date.now(),
-            totalOrders: newTotal,
-            name: customerName, // Update latest name
-            address: address, // Update latest address
-            phone: customerPhone
+            ...existingCust, lastOrderDate: Date.now(), totalOrders: newTotal,
+            name: customerName, address: address, phone: customerPhone
         };
         await storageService.upsertCustomer(updatedCust);
     } else {
-        // Create new if not exist (fallback)
         const newCust: Customer = {
-            id: customerId!,
-            name: customerName,
-            phone: customerPhone,
-            address: address,
-            lastOrderDate: Date.now(),
-            totalOrders: 1,
-            priorityScore: 999
+            id: customerId!, name: customerName, phone: customerPhone, address: address,
+            lastOrderDate: Date.now(), totalOrders: 1, priorityScore: 999
         };
         await storageService.upsertCustomer(newCust);
     }
 
     // 2. ATOMIC SAVE ORDER & DEDUCT STOCK
-    
-    // --- Local Memory Update (Optimistic) ---
     let list = _memoryOrders || [];
     if (list.length === 0) {
         const local = localStorage.getItem(ORDER_KEY);
@@ -1280,7 +1204,6 @@ export const storageService = {
     localStorage.setItem(ORDER_KEY, JSON.stringify(list));
     window.dispatchEvent(new Event('storage_' + ORDER_KEY));
 
-    // Update Local Stock Memory immediately
     const products = ensureProductsLoaded();
     order.items.forEach(item => {
         if (item.productId) {
@@ -1293,11 +1216,9 @@ export const storageService = {
     localStorage.setItem(PRODUCT_KEY, JSON.stringify(products));
     window.dispatchEvent(new Event('storage_' + PRODUCT_KEY));
 
-    // --- Cloud Update (Transactional) ---
     if (isOnline()) {
         try {
             await runTransaction(db, async (transaction) => {
-                // A. Read all products involved
                 const productReads = [];
                 for (const item of orderWithMeta.items) {
                     if (item.productId) {
@@ -1306,41 +1227,27 @@ export const storageService = {
                     }
                 }
                 
-                // Prefetch to ensure they exist in transaction scope
                 const uniqueProductRefs = new Map();
                 productReads.forEach(p => uniqueProductRefs.set(p.ref.path, p.ref));
-                
                 const refList = Array.from(uniqueProductRefs.values());
                 let productDocs: any[] = [];
-                
                 if (refList.length > 0) {
                     productDocs = await Promise.all(refList.map(ref => transaction.get(ref)));
                 }
-                
                 const docMap = new Map(productDocs.map(d => [d.ref.path, d]));
 
-                // B. Deduct Stock
                 productReads.forEach((p) => {
                     const snap = docMap.get(p.ref.path);
                     if (snap && snap.exists()) {
-                        // Use Firestore increment for atomic decrement
-                        transaction.update(p.ref, { 
-                            stockQuantity: increment(-(p.item.quantity || 0)) 
-                        });
+                        transaction.update(p.ref, { stockQuantity: increment(-(p.item.quantity || 0)) });
                     }
                 });
 
-                // C. Create Order
                 const orderRef = doc(db, "orders", orderWithMeta.id);
                 transaction.set(orderRef, sanitize(orderWithMeta));
             });
         } catch (e: any) {
-            console.error("Order Transaction Failed:", e);
-            if (e.code === 'resource-exhausted') {
-                markQuotaExhausted();
-            } else {
-                console.warn("Could not sync order transaction to cloud. Local state preserved.");
-            }
+            if (isQuotaError(e)) { markQuotaExhausted(); } else { console.error("Order Transaction Failed:", e); }
         }
     }
   },
@@ -1354,34 +1261,18 @@ export const storageService = {
     const index = list.findIndex(o => o.id === id);
     if (index >= 0) {
         const currentUser = storageService.getCurrentUser() || 'Unknown';
-        
-        // Local Update
-        const updated = { 
-            ...list[index], 
-            status, 
-            lastUpdatedBy: currentUser
-        };
-        
-        // If a new proof is provided, update it. Otherwise keep existing.
-        if (deliveryProof !== undefined) {
-            updated.deliveryProof = deliveryProof;
-        }
+        const updated = { ...list[index], status, lastUpdatedBy: currentUser };
+        if (deliveryProof !== undefined) updated.deliveryProof = deliveryProof;
 
         list[index] = updated;
         _memoryOrders = list;
         localStorage.setItem(ORDER_KEY, JSON.stringify(list));
         window.dispatchEvent(new Event('storage_' + ORDER_KEY));
 
-        // Cloud Update
-        // Create payload dynamically to avoid undefined values
         const payload: any = { status, lastUpdatedBy: currentUser };
-        if (deliveryProof !== undefined) {
-            payload.deliveryProof = deliveryProof;
-        }
+        if (deliveryProof !== undefined) payload.deliveryProof = deliveryProof;
 
         await safeCloudOp(() => updateDoc(doc(db, "orders", id), payload));
-        
-        // Notify if delivered
         if (status === OrderStatus.DELIVERED && customer) {
             storageService.addNotification({
                 title: 'Giao hàng thành công',
@@ -1395,75 +1286,41 @@ export const storageService = {
 
   deleteDeliveryProof: async (id: string) => {
       let list = _memoryOrders || [];
-      if (list.length === 0) {
-          const local = localStorage.getItem(ORDER_KEY);
-          if(local) list = JSON.parse(local);
-      }
+      if (list.length === 0) { const local = localStorage.getItem(ORDER_KEY); if(local) list = JSON.parse(local); }
       const index = list.findIndex(o => o.id === id);
       if (index >= 0) {
           const currentUser = storageService.getCurrentUser() || 'Unknown';
           const updated = { ...list[index] };
           delete updated.deliveryProof;
           updated.lastUpdatedBy = currentUser;
-          
           list[index] = updated;
           _memoryOrders = list;
           localStorage.setItem(ORDER_KEY, JSON.stringify(list));
           window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-
           await safeCloudOp(() => updateDoc(doc(db, "orders", id), { deliveryProof: deleteField(), lastUpdatedBy: currentUser }));
       }
   },
 
   updateOrderDetails: async (order: Order) => {
     let list = _memoryOrders || [];
-    // Ensure list is fresh if empty (e.g. reload)
-    if (list.length === 0) {
-        const local = localStorage.getItem(ORDER_KEY);
-        if(local) list = JSON.parse(local);
-    }
-    
+    if (list.length === 0) { const local = localStorage.getItem(ORDER_KEY); if(local) list = JSON.parse(local); }
     const idx = list.findIndex(o => o.id === order.id);
     if (idx >= 0) {
         const oldOrder = list[idx];
-        
-        // 1. CALCULATE STOCK DIFFERENCES
         const productDeltas = new Map<string, number>();
+        oldOrder.items.forEach(item => { if (item.productId) { const current = productDeltas.get(item.productId) || 0; productDeltas.set(item.productId, current + (Number(item.quantity) || 0)); } });
+        order.items.forEach(item => { if (item.productId) { const current = productDeltas.get(item.productId) || 0; productDeltas.set(item.productId, current - (Number(item.quantity) || 0)); } });
 
-        // Revert Old (Stock +) - Using loose comparison for quantities just in case
-        oldOrder.items.forEach(item => {
-            if (item.productId) {
-                const current = productDeltas.get(item.productId) || 0;
-                productDeltas.set(item.productId, current + (Number(item.quantity) || 0));
-            }
-        });
-
-        // Apply New (Stock -)
-        order.items.forEach(item => {
-            if (item.productId) {
-                const current = productDeltas.get(item.productId) || 0;
-                productDeltas.set(item.productId, current - (Number(item.quantity) || 0));
-            }
-        });
-
-        // 2. APPLY TO PRODUCTS (Memory & Cloud)
         const allProducts = ensureProductsLoaded();
-        const batch = writeBatch(db); // For Cloud
+        const batch = writeBatch(db); 
         let hasStockUpdates = false;
 
         for (const [prodId, delta] of productDeltas.entries()) {
-            // Precision check: ignore tiny floating point diffs if any
             if (Math.abs(delta) < 0.0001) continue;
-
-            // Update Memory
             const product = allProducts.find(p => p.id === prodId);
             if (product) {
-                // Force Number type for safety
                 const currentStock = Number(product.stockQuantity) || 0;
-                const newStock = currentStock + delta;
-                product.stockQuantity = newStock;
-                
-                // Update Cloud (Optimized: Only update stock field)
+                product.stockQuantity = currentStock + delta;
                 if (isOnline()) {
                     const ref = doc(db, "products", prodId);
                     batch.update(ref, { stockQuantity: increment(delta) });
@@ -1472,13 +1329,11 @@ export const storageService = {
             }
         }
 
-        // Save Product Memory Changes
         if (hasStockUpdates) {
             localStorage.setItem(PRODUCT_KEY, JSON.stringify(allProducts));
             window.dispatchEvent(new Event('storage_' + PRODUCT_KEY));
         }
 
-        // 3. SAVE ORDER
         list[idx] = order;
         _memoryOrders = list;
         localStorage.setItem(ORDER_KEY, JSON.stringify(list));
@@ -1486,7 +1341,6 @@ export const storageService = {
         
         if (isOnline()) {
             const orderRef = doc(db, "orders", order.id);
-            // Update order details. We use set with full object to handle potential structure changes.
             batch.set(orderRef, sanitize(order)); 
             await safeCloudOp(() => batch.commit());
         }
@@ -1495,10 +1349,7 @@ export const storageService = {
 
   updatePaymentVerification: async (id: string, verified: boolean, customer?: { name: string }) => {
       let list = _memoryOrders || [];
-      if (list.length === 0) {
-          const local = localStorage.getItem(ORDER_KEY);
-          if(local) list = JSON.parse(local);
-      }
+      if (list.length === 0) { const local = localStorage.getItem(ORDER_KEY); if(local) list = JSON.parse(local); }
       const idx = list.findIndex(o => o.id === id);
       if (idx >= 0) {
           list[idx] = { ...list[idx], paymentVerified: verified };
@@ -1506,41 +1357,22 @@ export const storageService = {
           localStorage.setItem(ORDER_KEY, JSON.stringify(list));
           window.dispatchEvent(new Event('storage_' + ORDER_KEY));
           await safeCloudOp(() => updateDoc(doc(db, "orders", id), { paymentVerified: verified }));
-          
           if (verified && customer) {
-              storageService.addNotification({
-                  title: 'Tiền đã về',
-                  message: `Đã xác nhận thanh toán đơn ${id} của ${customer.name}.`,
-                  type: 'success',
-                  relatedOrderId: id
-              });
+              storageService.addNotification({ title: 'Tiền đã về', message: `Đã xác nhận thanh toán đơn ${id} của ${customer.name}.`, type: 'success', relatedOrderId: id });
           }
       }
   },
 
   deleteOrder: async (id: string, customer?: { name: string, address: string }) => {
       let list = _memoryOrders || [];
-      if (list.length === 0) {
-           const local = localStorage.getItem(ORDER_KEY);
-           if(local) list = JSON.parse(local);
-      }
+      if (list.length === 0) { const local = localStorage.getItem(ORDER_KEY); if(local) list = JSON.parse(local); }
       const orderToDelete = list.find(o => o.id === id);
       list = list.filter(o => o.id !== id);
       _memoryOrders = list;
       localStorage.setItem(ORDER_KEY, JSON.stringify(list));
       window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-
       await safeCloudOp(() => deleteDoc(doc(db, "orders", id)));
-      
-      if (customer) {
-          storageService.addNotification({
-              title: 'Đã xóa đơn hàng',
-              message: `Đơn ${id} của ${customer.name} đã bị xóa.`,
-              type: 'warning'
-          });
-      }
-
-      // Decrement customer order count if possible
+      if (customer) { storageService.addNotification({ title: 'Đã xóa đơn hàng', message: `Đơn ${id} của ${customer.name} đã bị xóa.`, type: 'warning' }); }
       if (orderToDelete && orderToDelete.customerId) {
            const cust = ensureCustomersLoaded()?.find(c => c.id === orderToDelete.customerId);
            if (cust && (cust.totalOrders || 0) > 0) {
@@ -1555,7 +1387,6 @@ export const storageService = {
       _memoryOrders = list;
       localStorage.setItem(ORDER_KEY, JSON.stringify(list));
       window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-      
       if (isOnline()) {
           const batch = writeBatch(db);
           ids.forEach(id => batch.delete(doc(db, "orders", id)));
@@ -1565,31 +1396,21 @@ export const storageService = {
 
   splitOrderToNextBatch: async (id: string, currentBatch: string) => {
     let nextBatch = '';
-    
-    // Logic: Nếu Lô1 -> Lô1-S -> Lô1-S1 -> Lô1-S2
     if (!currentBatch || currentBatch.trim() === '') {
         const today = new Date().toISOString().slice(0, 10);
         nextBatch = `LÔ-${today}-S`;
     } else {
-        // Check suffixes
         const sRegex = /-S(\d*)$/;
         const match = currentBatch.match(sRegex);
-        
         if (match) {
-            // Đã có suffix S hoặc S1, S2...
-            const numPart = match[1]; // "" hoặc "1", "2"...
+            const numPart = match[1]; 
             let nextNum = 1;
-            if (numPart !== "") {
-                nextNum = parseInt(numPart) + 1;
-            }
-            // Replace old suffix with new suffix
+            if (numPart !== "") nextNum = parseInt(numPart) + 1;
             nextBatch = currentBatch.replace(sRegex, `-S${nextNum}`);
         } else {
-            // Chưa có suffix -> Thêm -S
             nextBatch = `${currentBatch}-S`;
         }
     }
-
     const list = _memoryOrders || [];
     const idx = list.findIndex(o => o.id === id);
     if (idx >= 0) {
@@ -1604,7 +1425,6 @@ export const storageService = {
   splitOrdersBatch: async (items: {id: string, batchId: string}[]) => {
       const list = _memoryOrders || [];
       const batch = writeBatch(db);
-      
       items.forEach(item => {
           let nextBatch = '';
           if (!item.batchId || item.batchId.trim() === '') {
@@ -1622,25 +1442,21 @@ export const storageService = {
                   nextBatch = `${item.batchId}-S`;
               }
           }
-
           const idx = list.findIndex(o => o.id === item.id);
           if (idx >= 0) {
               list[idx].batchId = nextBatch;
               if (isOnline()) batch.update(doc(db, "orders", item.id), { batchId: nextBatch });
           }
       });
-
       _memoryOrders = list;
       localStorage.setItem(ORDER_KEY, JSON.stringify(list));
       window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-      
       if (isOnline()) await batch.commit();
   },
 
   moveOrdersBatch: async (ids: string[], targetBatch: string) => {
       const list = _memoryOrders || [];
       const batch = writeBatch(db);
-      
       ids.forEach(id => {
           const idx = list.findIndex(o => o.id === id);
           if (idx >= 0) {
@@ -1648,24 +1464,19 @@ export const storageService = {
               if (isOnline()) batch.update(doc(db, "orders", id), { batchId: targetBatch });
           }
       });
-
       _memoryOrders = list;
       localStorage.setItem(ORDER_KEY, JSON.stringify(list));
       window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-      
       if (isOnline()) await batch.commit();
   },
 
   renameBatch: async (oldName: string, newName: string) => {
       const list = ensureOrdersLoaded() || [];
       const affected = list.filter(o => o.batchId === oldName);
-      
       affected.forEach(o => o.batchId = newName);
-      
       _memoryOrders = list;
       localStorage.setItem(ORDER_KEY, JSON.stringify(list));
       window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-
       if (isOnline()) {
           const CHUNK = 300;
           for (let i = 0; i < affected.length; i += CHUNK) {
@@ -1681,12 +1492,9 @@ export const storageService = {
       _memoryOrders = orders;
       localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
       window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-      
       if (isOnline()) {
           const batch = writeBatch(db);
-          orders.forEach(o => {
-              batch.set(doc(db, "orders", o.id), sanitize(o));
-          });
+          orders.forEach(o => { batch.set(doc(db, "orders", o.id), sanitize(o)); });
           await batch.commit();
       }
   },
@@ -1694,7 +1502,6 @@ export const storageService = {
   incrementReminderCount: async (ids: string[]) => {
       const list = ensureOrdersLoaded() || [];
       const batch = writeBatch(db);
-      
       ids.forEach(id => {
           const idx = list.findIndex(o => o.id === id);
           if (idx >= 0) {
@@ -1702,24 +1509,18 @@ export const storageService = {
               if (isOnline()) batch.update(doc(db, "orders", id), { reminderCount: increment(1) });
           }
       });
-      
       _memoryOrders = list;
       localStorage.setItem(ORDER_KEY, JSON.stringify(list));
       window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-      
       if (isOnline()) await batch.commit();
   },
   
-  autoSortOrders: async (filteredOrders: Order[]) => {
-      // Simple TSP-like sort or heuristics
-      return filteredOrders.length;
-  },
+  autoSortOrders: async (filteredOrders: Order[]) => { return filteredOrders.length; },
   
   learnRoutePriority: async (sortedOrders: Order[]) => {
       const list = ensureCustomersLoaded() || [];
       const batch = writeBatch(db);
       let updates = 0;
-      
       sortedOrders.forEach((o, idx) => {
           if (o.customerId) {
               const cust = list.find(c => c.id === o.customerId);
@@ -1733,7 +1534,6 @@ export const storageService = {
               }
           }
       });
-      
       if (updates > 0) {
           _memoryCustomers = list;
           localStorage.setItem(CUSTOMER_KEY, JSON.stringify(list));
@@ -1744,31 +1544,20 @@ export const storageService = {
   // --- NOTIFICATIONS ---
   subscribeNotifications: (callback: (notifs: Notification[]) => void) => {
       if (isOnline()) {
-          const q = query(collection(db, "notifications"), orderBy('createdAt', 'desc'), limit(50));
+          const q = query(collection(db, "notifications"), orderBy('createdAt', 'desc'), limit(40));
           return onSnapshot(q, (snapshot) => {
               const list: Notification[] = [];
               snapshot.forEach(d => list.push(d.data() as Notification));
               callback(list);
-          }, (err) => {
-            if (err.code === 'resource-exhausted') markQuotaExhausted();
-          });
+          }, (err) => { if (isQuotaError(err)) markQuotaExhausted(); });
       } else {
-          try {
-             const local = localStorage.getItem(NOTIF_KEY);
-             callback(local ? JSON.parse(local) : []);
-          } catch { callback([]); }
+          try { const local = localStorage.getItem(NOTIF_KEY); callback(local ? JSON.parse(local) : []); } catch { callback([]); }
           return () => {};
       }
   },
 
   addNotification: async (notif: Omit<Notification, 'id' | 'createdAt' | 'isRead'>) => {
-      const newNotif: Notification = {
-          ...notif,
-          id: uuidv4(),
-          createdAt: Date.now(),
-          isRead: false
-      };
-      
+      const newNotif: Notification = { ...notif, id: uuidv4(), createdAt: Date.now(), isRead: false };
       if (isOnline()) {
           await safeCloudOp(() => setDoc(doc(db, "notifications", newNotif.id), sanitize(newNotif)));
       } else {
@@ -1782,9 +1571,7 @@ export const storageService = {
 
   markNotificationRead: async (id: string) => {
       window.dispatchEvent(new CustomEvent('local_notif_read', { detail: id }));
-      if (isOnline()) {
-          await safeCloudOp(() => updateDoc(doc(db, "notifications", id), { isRead: true }));
-      }
+      if (isOnline()) { await safeCloudOp(() => updateDoc(doc(db, "notifications", id), { isRead: true })); }
   },
 
   markAllNotificationsRead: async () => {
@@ -1811,7 +1598,6 @@ export const storageService = {
   },
   
   fetchLongTermStats: async () => {
-      // For simple stats, we just return all orders
       return ensureOrdersLoaded() || [];
   },
 
@@ -1819,17 +1605,13 @@ export const storageService = {
   fixDuplicateCustomerIds: async () => {
       const orders = ensureOrdersLoaded() || [];
       const customers = ensureCustomersLoaded() || [];
-      
-      // Map CustomerID -> Groups of names
       const idMap = new Map<string, Map<string, Order[]>>();
 
       orders.forEach(o => {
           if (!o.customerId) return;
           if (!idMap.has(o.customerId)) idMap.set(o.customerId, new Map());
-          
           const nameKey = normalizeString(o.customerName);
           const group = idMap.get(o.customerId)!;
-          
           if (!group.has(nameKey)) group.set(nameKey, []);
           group.get(nameKey)!.push(o);
       });
@@ -1838,78 +1620,44 @@ export const storageService = {
       const batch = writeBatch(db);
 
       for (const [custId, nameGroups] of idMap.entries()) {
-          if (nameGroups.size <= 1) continue; // No conflict
-
-          // Find the dominant name (most orders)
+          if (nameGroups.size <= 1) continue;
           let maxCount = 0;
           let dominantKey = '';
-          nameGroups.forEach((list, key) => {
-              if (list.length > maxCount) {
-                  maxCount = list.length;
-                  dominantKey = key;
-              }
-          });
+          nameGroups.forEach((list, key) => { if (list.length > maxCount) { maxCount = list.length; dominantKey = key; } });
 
-          // Process other groups (the conflicts)
           let suffix = 2;
           for (const [key, list] of nameGroups.entries()) {
-              if (key === dominantKey) continue; // Keep dominant as original ID
-
-              // Generate new ID
+              if (key === dominantKey) continue;
               let newId = `${custId}-${suffix}`;
-              while (customers.some(c => c.id === newId)) {
-                  suffix++;
-                  newId = `${custId}-${suffix}`;
-              }
+              while (customers.some(c => c.id === newId)) { suffix++; newId = `${custId}-${suffix}`; }
               suffix++;
 
-              // Create new customer record based on the first order of this group
               const sampleOrder = list[0];
               const newCustomer: Customer = {
-                  id: newId,
-                  name: sampleOrder.customerName,
-                  phone: normalizePhone(sampleOrder.customerPhone),
-                  address: sampleOrder.address,
-                  lastOrderDate: Date.now(), // approximation
-                  priorityScore: 999
+                  id: newId, name: sampleOrder.customerName, phone: normalizePhone(sampleOrder.customerPhone),
+                  address: sampleOrder.address, lastOrderDate: Date.now(), priorityScore: 999
               };
               
-              // Update Memory
               await storageService.upsertCustomer(newCustomer);
-
-              // Update Orders
               list.forEach(o => {
                   o.customerId = newId;
-                  // Update Memory
                   const idx = orders.findIndex(x => x.id === o.id);
                   if (idx >= 0) orders[idx] = o;
-                  
-                  // Update Cloud
-                  if (isOnline()) {
-                      batch.update(doc(db, "orders", o.id), { customerId: newId });
-                  }
+                  if (isOnline()) batch.update(doc(db, "orders", o.id), { customerId: newId });
               });
-              
               fixedCount++;
           }
       }
-
-      // Persist Memory Changes
       localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
       window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-
-      // Commit Cloud
       if (isOnline()) await batch.commit();
-      
       return fixedCount;
   },
 
-  // --- TOOL: MERGE DUPLICATE CUSTOMERS (SAME PHONE -> MERGE TO 1 ID) ---
+  // --- TOOL: MERGE DUPLICATE CUSTOMERS ---
   mergeCustomersByPhone: async () => {
       const customers = ensureCustomersLoaded() || [];
       const orders = ensureOrdersLoaded() || [];
-      
-      // Group by normalized phone
       const phoneMap = new Map<string, Customer[]>();
       customers.forEach(c => {
           if(c.phone && c.phone.length > 5) {
@@ -1924,49 +1672,32 @@ export const storageService = {
       
       for (const [phone, group] of phoneMap.entries()) {
           if (group.length <= 1) continue;
-          
-          // Sort by order count (Keep the one with most orders/history)
           group.sort((a,b) => (b.totalOrders || 0) - (a.totalOrders || 0));
           const primary = group[0];
           const duplicates = group.slice(1);
           
-          // Merge Duplicates
           for (const dup of duplicates) {
-              // 1. Update Orders pointing to duplicate
               orders.forEach(o => {
                   if (o.customerId === dup.id) {
                       o.customerId = primary.id;
-                      // Update cloud
                       if (isOnline()) batch.update(doc(db, "orders", o.id), { customerId: primary.id });
                   }
               });
-              
-              // 2. Sum up total orders
               primary.totalOrders = (primary.totalOrders || 0) + (dup.totalOrders || 0);
-              
-              // 3. Delete Duplicate Customer
-              // Remove from memory
               const idx = customers.findIndex(c => c.id === dup.id);
               if (idx >= 0) customers.splice(idx, 1);
-              // Remove from cloud
               if (isOnline()) batch.delete(doc(db, "customers", dup.id));
           }
-          
-          // Update Primary Customer Stats
           if (isOnline()) batch.update(doc(db, "customers", primary.id), { totalOrders: primary.totalOrders });
-          
           mergedGroupsCount++;
       }
 
-      // Save changes
       _memoryCustomers = customers;
       localStorage.setItem(CUSTOMER_KEY, JSON.stringify(customers));
       window.dispatchEvent(new Event('storage_' + CUSTOMER_KEY));
-      
       _memoryOrders = orders;
       localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
       window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-      
       return mergedGroupsCount;
   }
 };
