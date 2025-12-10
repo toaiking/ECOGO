@@ -296,14 +296,18 @@ const sanitize = <T>(obj: T): T => {
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 const safeCloudOp = async (operation: () => Promise<any>) => {
-    if (!isOnline()) return;
+    // UPDATED: Less aggressive blocking. 
+    // Allow writes to queue if DB exists, even if network is technically offline (handled by Firestore SDK persistence)
+    if (_quotaExhausted) return;
+    if (!db) return; // If SDK failed to init completely
+
     try {
         await operation();
     } catch (error: any) {
         if (isQuotaError(error)) {
             markQuotaExhausted();
         } else {
-            console.error("Cloud Op Failed:", error);
+            console.error("Cloud Op Failed (Queued or Error):", error);
         }
     }
 };
@@ -615,45 +619,36 @@ export const storageService = {
       }
 
       // 2. Cloud Transaction
-      if (isOnline()) {
-          try {
-              await runTransaction(db, async (transaction) => {
-                  const ref = doc(db, "products", productId);
-                  const snap = await transaction.get(ref);
+      await safeCloudOp(async () => {
+          await runTransaction(db, async (transaction) => {
+              const ref = doc(db, "products", productId);
+              const snap = await transaction.get(ref);
+              
+              if (snap.exists()) {
+                  const data = snap.data() as Product;
+                  const updates: any = { 
+                      stockQuantity: increment(delta),
+                      updatedAt: now // Update timestamp in transaction
+                  };
                   
-                  if (snap.exists()) {
-                      const data = snap.data() as Product;
-                      const updates: any = { 
-                          stockQuantity: increment(delta),
-                          updatedAt: now // Update timestamp in transaction
-                      };
-                      
-                      if (delta > 0) {
-                          updates.totalImported = increment(delta);
-                          if (importInfo) {
-                              const newHistory = [...(data.importHistory || [])];
-                              newHistory.push({
-                                  id: uuidv4(),
-                                  date: now,
-                                  quantity: delta,
-                                  price: importInfo.price,
-                                  note: importInfo.note || 'Adjustment'
-                              });
-                              updates.importHistory = newHistory;
-                          }
+                  if (delta > 0) {
+                      updates.totalImported = increment(delta);
+                      if (importInfo) {
+                          const newHistory = [...(data.importHistory || [])];
+                          newHistory.push({
+                              id: uuidv4(),
+                              date: now,
+                              quantity: delta,
+                              price: importInfo.price,
+                              note: importInfo.note || 'Adjustment'
+                          });
+                          updates.importHistory = newHistory;
                       }
-                      transaction.update(ref, updates);
                   }
-              });
-          } catch (e: any) {
-              if (isQuotaError(e)) {
-                  console.warn("Quota exceeded during transaction. Switching to offline mode.");
-                  markQuotaExhausted();
-              } else {
-                  console.error("Stock Transaction Failed", e);
+                  transaction.update(ref, updates);
               }
-          }
-      }
+          });
+      });
   },
 
   deleteProduct: async (id: string) => {
@@ -878,7 +873,7 @@ export const storageService = {
 
           if (hasChanges) {
               const newTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0);
-              const updatedOrder = { ...order, items: newItems, totalPrice: newTotal, lastUpdatedBy: 'System (Sync)' };
+              const updatedOrder = { ...order, items: newItems, totalPrice: newTotal, lastUpdatedBy: 'System (Sync)', updatedAt: Date.now() };
               ordersToUpdate.push(updatedOrder);
           }
       }
@@ -893,18 +888,23 @@ export const storageService = {
           localStorage.setItem(ORDER_KEY, JSON.stringify(currentOrders));
           window.dispatchEvent(new Event('storage_' + ORDER_KEY));
 
-          if (isOnline()) {
+          await safeCloudOp(async () => {
               const CHUNK = 300;
               for (let i = 0; i < ordersToUpdate.length; i += CHUNK) {
                   const chunk = ordersToUpdate.slice(i, i + CHUNK);
                   const batch = writeBatch(db);
                   chunk.forEach(o => {
                       const ref = doc(db, "orders", o.id);
-                      batch.update(ref, { items: o.items, totalPrice: o.totalPrice, lastUpdatedBy: 'System (Product Sync)' });
+                      batch.update(ref, { 
+                          items: o.items, 
+                          totalPrice: o.totalPrice, 
+                          lastUpdatedBy: 'System (Product Sync)',
+                          updatedAt: Date.now() 
+                      });
                   });
-                  try { await batch.commit(); } catch (e: any) { if (isQuotaError(e)) markQuotaExhausted(); }
+                  await batch.commit();
               }
-          }
+          });
           return ordersToUpdate.length;
       }
       return 0;
@@ -1144,7 +1144,7 @@ export const storageService = {
   saveOrder: async (order: Order) => {
     // 1. UPDATE CUSTOMER STATS FIRST
     const currentUser = storageService.getCurrentUser() || 'Unknown';
-    const orderWithMeta = { ...order, lastUpdatedBy: currentUser };
+    const orderWithMeta = { ...order, lastUpdatedBy: currentUser, updatedAt: Date.now() };
 
     let customerId = order.customerId;
     let customerName = order.customerName;
@@ -1216,7 +1216,7 @@ export const storageService = {
     localStorage.setItem(PRODUCT_KEY, JSON.stringify(products));
     window.dispatchEvent(new Event('storage_' + PRODUCT_KEY));
 
-    if (isOnline()) {
+    await safeCloudOp(async () => {
         try {
             await runTransaction(db, async (transaction) => {
                 const productReads = [];
@@ -1249,7 +1249,7 @@ export const storageService = {
         } catch (e: any) {
             if (isQuotaError(e)) { markQuotaExhausted(); } else { console.error("Order Transaction Failed:", e); }
         }
-    }
+    });
   },
 
   updateStatus: async (id: string, status: OrderStatus, deliveryProof?: string, customer?: { name: string, address: string }) => {
@@ -1261,7 +1261,7 @@ export const storageService = {
     const index = list.findIndex(o => o.id === id);
     if (index >= 0) {
         const currentUser = storageService.getCurrentUser() || 'Unknown';
-        const updated = { ...list[index], status, lastUpdatedBy: currentUser };
+        const updated = { ...list[index], status, lastUpdatedBy: currentUser, updatedAt: Date.now() };
         if (deliveryProof !== undefined) updated.deliveryProof = deliveryProof;
 
         list[index] = updated;
@@ -1269,7 +1269,7 @@ export const storageService = {
         localStorage.setItem(ORDER_KEY, JSON.stringify(list));
         window.dispatchEvent(new Event('storage_' + ORDER_KEY));
 
-        const payload: any = { status, lastUpdatedBy: currentUser };
+        const payload: any = { status, lastUpdatedBy: currentUser, updatedAt: Date.now() };
         if (deliveryProof !== undefined) payload.deliveryProof = deliveryProof;
 
         await safeCloudOp(() => updateDoc(doc(db, "orders", id), payload));
@@ -1293,11 +1293,12 @@ export const storageService = {
           const updated = { ...list[index] };
           delete updated.deliveryProof;
           updated.lastUpdatedBy = currentUser;
+          updated.updatedAt = Date.now();
           list[index] = updated;
           _memoryOrders = list;
           localStorage.setItem(ORDER_KEY, JSON.stringify(list));
           window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-          await safeCloudOp(() => updateDoc(doc(db, "orders", id), { deliveryProof: deleteField(), lastUpdatedBy: currentUser }));
+          await safeCloudOp(() => updateDoc(doc(db, "orders", id), { deliveryProof: deleteField(), lastUpdatedBy: currentUser, updatedAt: Date.now() }));
       }
   },
 
@@ -1334,16 +1335,19 @@ export const storageService = {
             window.dispatchEvent(new Event('storage_' + PRODUCT_KEY));
         }
 
-        list[idx] = order;
+        // CRITICAL FIX: Update timestamp so sync knows this is newer
+        const orderToSave = { ...order, updatedAt: Date.now() };
+
+        list[idx] = orderToSave;
         _memoryOrders = list;
         localStorage.setItem(ORDER_KEY, JSON.stringify(list));
         window.dispatchEvent(new Event('storage_' + ORDER_KEY));
         
-        if (isOnline()) {
-            const orderRef = doc(db, "orders", order.id);
-            batch.set(orderRef, sanitize(order)); 
-            await safeCloudOp(() => batch.commit());
-        }
+        await safeCloudOp(async () => {
+            const orderRef = doc(db, "orders", orderToSave.id);
+            batch.set(orderRef, sanitize(orderToSave)); 
+            await batch.commit();
+        });
     }
   },
 
@@ -1352,11 +1356,11 @@ export const storageService = {
       if (list.length === 0) { const local = localStorage.getItem(ORDER_KEY); if(local) list = JSON.parse(local); }
       const idx = list.findIndex(o => o.id === id);
       if (idx >= 0) {
-          list[idx] = { ...list[idx], paymentVerified: verified };
+          list[idx] = { ...list[idx], paymentVerified: verified, updatedAt: Date.now() };
           _memoryOrders = list;
           localStorage.setItem(ORDER_KEY, JSON.stringify(list));
           window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-          await safeCloudOp(() => updateDoc(doc(db, "orders", id), { paymentVerified: verified }));
+          await safeCloudOp(() => updateDoc(doc(db, "orders", id), { paymentVerified: verified, updatedAt: Date.now() }));
           if (verified && customer) {
               storageService.addNotification({ title: 'Tiền đã về', message: `Đã xác nhận thanh toán đơn ${id} của ${customer.name}.`, type: 'success', relatedOrderId: id });
           }
@@ -1387,11 +1391,11 @@ export const storageService = {
       _memoryOrders = list;
       localStorage.setItem(ORDER_KEY, JSON.stringify(list));
       window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-      if (isOnline()) {
+      await safeCloudOp(async () => {
           const batch = writeBatch(db);
           ids.forEach(id => batch.delete(doc(db, "orders", id)));
           await batch.commit();
-      }
+      });
   },
 
   splitOrderToNextBatch: async (id: string, currentBatch: string) => {
@@ -1415,10 +1419,11 @@ export const storageService = {
     const idx = list.findIndex(o => o.id === id);
     if (idx >= 0) {
         list[idx].batchId = nextBatch;
+        list[idx].updatedAt = Date.now();
         _memoryOrders = list;
         localStorage.setItem(ORDER_KEY, JSON.stringify(list));
         window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-        await safeCloudOp(() => updateDoc(doc(db, "orders", id), { batchId: nextBatch }));
+        await safeCloudOp(() => updateDoc(doc(db, "orders", id), { batchId: nextBatch, updatedAt: Date.now() }));
     }
   },
 
@@ -1445,13 +1450,14 @@ export const storageService = {
           const idx = list.findIndex(o => o.id === item.id);
           if (idx >= 0) {
               list[idx].batchId = nextBatch;
-              if (isOnline()) batch.update(doc(db, "orders", item.id), { batchId: nextBatch });
+              list[idx].updatedAt = Date.now();
+              batch.update(doc(db, "orders", item.id), { batchId: nextBatch, updatedAt: Date.now() });
           }
       });
       _memoryOrders = list;
       localStorage.setItem(ORDER_KEY, JSON.stringify(list));
       window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-      if (isOnline()) await batch.commit();
+      await safeCloudOp(() => batch.commit());
   },
 
   moveOrdersBatch: async (ids: string[], targetBatch: string) => {
@@ -1461,42 +1467,43 @@ export const storageService = {
           const idx = list.findIndex(o => o.id === id);
           if (idx >= 0) {
               list[idx].batchId = targetBatch;
-              if (isOnline()) batch.update(doc(db, "orders", id), { batchId: targetBatch });
+              list[idx].updatedAt = Date.now();
+              batch.update(doc(db, "orders", id), { batchId: targetBatch, updatedAt: Date.now() });
           }
       });
       _memoryOrders = list;
       localStorage.setItem(ORDER_KEY, JSON.stringify(list));
       window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-      if (isOnline()) await batch.commit();
+      await safeCloudOp(() => batch.commit());
   },
 
   renameBatch: async (oldName: string, newName: string) => {
       const list = ensureOrdersLoaded() || [];
       const affected = list.filter(o => o.batchId === oldName);
-      affected.forEach(o => o.batchId = newName);
+      affected.forEach(o => { o.batchId = newName; o.updatedAt = Date.now(); });
       _memoryOrders = list;
       localStorage.setItem(ORDER_KEY, JSON.stringify(list));
       window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-      if (isOnline()) {
+      await safeCloudOp(async () => {
           const CHUNK = 300;
           for (let i = 0; i < affected.length; i += CHUNK) {
                const chunk = affected.slice(i, i + CHUNK);
                const batch = writeBatch(db);
-               chunk.forEach(o => batch.update(doc(db, "orders", o.id), { batchId: newName }));
+               chunk.forEach(o => batch.update(doc(db, "orders", o.id), { batchId: newName, updatedAt: Date.now() }));
                await batch.commit();
           }
-      }
+      });
   },
 
   saveOrdersList: async (orders: Order[]) => {
       _memoryOrders = orders;
       localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
       window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-      if (isOnline()) {
+      await safeCloudOp(async () => {
           const batch = writeBatch(db);
           orders.forEach(o => { batch.set(doc(db, "orders", o.id), sanitize(o)); });
           await batch.commit();
-      }
+      });
   },
   
   incrementReminderCount: async (ids: string[]) => {
@@ -1506,13 +1513,14 @@ export const storageService = {
           const idx = list.findIndex(o => o.id === id);
           if (idx >= 0) {
               list[idx].reminderCount = (list[idx].reminderCount || 0) + 1;
-              if (isOnline()) batch.update(doc(db, "orders", id), { reminderCount: increment(1) });
+              list[idx].updatedAt = Date.now();
+              batch.update(doc(db, "orders", id), { reminderCount: increment(1), updatedAt: Date.now() });
           }
       });
       _memoryOrders = list;
       localStorage.setItem(ORDER_KEY, JSON.stringify(list));
       window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-      if (isOnline()) await batch.commit();
+      await safeCloudOp(() => batch.commit());
   },
   
   autoSortOrders: async (filteredOrders: Order[]) => { return filteredOrders.length; },
@@ -1528,7 +1536,8 @@ export const storageService = {
                   const newScore = idx + 1;
                   if (cust.priorityScore !== newScore) {
                       cust.priorityScore = newScore;
-                      if (isOnline()) batch.update(doc(db, "customers", cust.id), { priorityScore: newScore });
+                      cust.updatedAt = Date.now();
+                      batch.update(doc(db, "customers", cust.id), { priorityScore: newScore, updatedAt: Date.now() });
                       updates++;
                   }
               }
@@ -1537,7 +1546,7 @@ export const storageService = {
       if (updates > 0) {
           _memoryCustomers = list;
           localStorage.setItem(CUSTOMER_KEY, JSON.stringify(list));
-          if (isOnline()) await batch.commit();
+          await safeCloudOp(() => batch.commit());
       }
   },
 
@@ -1571,30 +1580,30 @@ export const storageService = {
 
   markNotificationRead: async (id: string) => {
       window.dispatchEvent(new CustomEvent('local_notif_read', { detail: id }));
-      if (isOnline()) { await safeCloudOp(() => updateDoc(doc(db, "notifications", id), { isRead: true })); }
+      await safeCloudOp(() => updateDoc(doc(db, "notifications", id), { isRead: true }));
   },
 
   markAllNotificationsRead: async () => {
       window.dispatchEvent(new Event('local_notif_read_all'));
-      if (isOnline()) {
+      await safeCloudOp(async () => {
           const q = query(collection(db, "notifications"), where("isRead", "==", false));
           const snapshot = await getDocs(q);
           const batch = writeBatch(db);
           snapshot.forEach(d => batch.update(d.ref, { isRead: true }));
           await batch.commit();
-      }
+      });
   },
 
   clearAllNotifications: async () => {
       window.dispatchEvent(new Event('local_notif_clear_all'));
       localStorage.removeItem(NOTIF_KEY);
-      if (isOnline()) {
+      await safeCloudOp(async () => {
           const q = query(collection(db, "notifications"));
           const snapshot = await getDocs(q);
           const batch = writeBatch(db);
           snapshot.forEach(d => batch.delete(d.ref));
           await batch.commit();
-      }
+      });
   },
   
   fetchLongTermStats: async () => {
@@ -1643,14 +1652,14 @@ export const storageService = {
                   o.customerId = newId;
                   const idx = orders.findIndex(x => x.id === o.id);
                   if (idx >= 0) orders[idx] = o;
-                  if (isOnline()) batch.update(doc(db, "orders", o.id), { customerId: newId });
+                  batch.update(doc(db, "orders", o.id), { customerId: newId });
               });
               fixedCount++;
           }
       }
       localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
       window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-      if (isOnline()) await batch.commit();
+      await safeCloudOp(() => batch.commit());
       return fixedCount;
   },
 
@@ -1680,15 +1689,15 @@ export const storageService = {
               orders.forEach(o => {
                   if (o.customerId === dup.id) {
                       o.customerId = primary.id;
-                      if (isOnline()) batch.update(doc(db, "orders", o.id), { customerId: primary.id });
+                      batch.update(doc(db, "orders", o.id), { customerId: primary.id });
                   }
               });
               primary.totalOrders = (primary.totalOrders || 0) + (dup.totalOrders || 0);
               const idx = customers.findIndex(c => c.id === dup.id);
               if (idx >= 0) customers.splice(idx, 1);
-              if (isOnline()) batch.delete(doc(db, "customers", dup.id));
+              batch.delete(doc(db, "customers", dup.id));
           }
-          if (isOnline()) batch.update(doc(db, "customers", primary.id), { totalOrders: primary.totalOrders });
+          batch.update(doc(db, "customers", primary.id), { totalOrders: primary.totalOrders });
           mergedGroupsCount++;
       }
 
@@ -1698,6 +1707,7 @@ export const storageService = {
       _memoryOrders = orders;
       localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
       window.dispatchEvent(new Event('storage_' + ORDER_KEY));
+      await safeCloudOp(() => batch.commit());
       return mergedGroupsCount;
   }
 };
