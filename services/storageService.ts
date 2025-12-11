@@ -296,7 +296,7 @@ const sanitize = <T>(obj: T): T => {
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 const safeCloudOp = async (operation: () => Promise<any>) => {
-    // UPDATED: Less aggressive blocking. 
+    // FIX: Less aggressive blocking. 
     // Allow writes to queue if DB exists, even if network is technically offline (handled by Firestore SDK persistence)
     if (_quotaExhausted) return;
     if (!db) return; // If SDK failed to init completely
@@ -307,7 +307,8 @@ const safeCloudOp = async (operation: () => Promise<any>) => {
         if (isQuotaError(error)) {
             markQuotaExhausted();
         } else {
-            console.error("Cloud Op Failed (Queued or Error):", error);
+            console.warn("Cloud Op Queued (Offline) or Error:", error.message);
+            // We do NOT throw here for offline errors, allowing the app to continue "optimistically"
         }
     }
 };
@@ -1142,9 +1143,10 @@ export const storageService = {
   },
 
   saveOrder: async (order: Order) => {
+    const now = Date.now();
     // 1. UPDATE CUSTOMER STATS FIRST
     const currentUser = storageService.getCurrentUser() || 'Unknown';
-    const orderWithMeta = { ...order, lastUpdatedBy: currentUser, updatedAt: Date.now() };
+    const orderWithMeta = { ...order, lastUpdatedBy: currentUser, updatedAt: now };
 
     let customerId = order.customerId;
     let customerName = order.customerName;
@@ -1164,7 +1166,7 @@ export const storageService = {
                  customerId = newId;
                  const newCust: Customer = {
                      id: newId, name: customerName, phone: customerPhone, address: address,
-                     lastOrderDate: Date.now(), totalOrders: 0, priorityScore: 999
+                     lastOrderDate: now, totalOrders: 0, priorityScore: 999
                  };
                  await storageService.upsertCustomer(newCust);
              } else {
@@ -1181,14 +1183,14 @@ export const storageService = {
     if (existingCust) {
         const newTotal = (existingCust.totalOrders || 0) + 1;
         const updatedCust = { 
-            ...existingCust, lastOrderDate: Date.now(), totalOrders: newTotal,
+            ...existingCust, lastOrderDate: now, totalOrders: newTotal,
             name: customerName, address: address, phone: customerPhone
         };
         await storageService.upsertCustomer(updatedCust);
     } else {
         const newCust: Customer = {
             id: customerId!, name: customerName, phone: customerPhone, address: address,
-            lastOrderDate: Date.now(), totalOrders: 1, priorityScore: 999
+            lastOrderDate: now, totalOrders: 1, priorityScore: 999
         };
         await storageService.upsertCustomer(newCust);
     }
@@ -1210,6 +1212,7 @@ export const storageService = {
             const p = products.find(p => p.id === item.productId);
             if (p) {
                 p.stockQuantity = (p.stockQuantity || 0) - (item.quantity || 0);
+                p.updatedAt = now; // CRITICAL: Update local timestamp for delta sync
             }
         }
     });
@@ -1227,6 +1230,7 @@ export const storageService = {
                     }
                 }
                 
+                // Read products
                 const uniqueProductRefs = new Map();
                 productReads.forEach(p => uniqueProductRefs.set(p.ref.path, p.ref));
                 const refList = Array.from(uniqueProductRefs.values());
@@ -1236,10 +1240,14 @@ export const storageService = {
                 }
                 const docMap = new Map(productDocs.map(d => [d.ref.path, d]));
 
+                // Update products
                 productReads.forEach((p) => {
                     const snap = docMap.get(p.ref.path);
                     if (snap && snap.exists()) {
-                        transaction.update(p.ref, { stockQuantity: increment(-(p.item.quantity || 0)) });
+                        transaction.update(p.ref, { 
+                            stockQuantity: increment(-(p.item.quantity || 0)),
+                            updatedAt: now // CRITICAL: Update cloud timestamp for delta sync listeners
+                        });
                     }
                 });
 
@@ -1253,6 +1261,7 @@ export const storageService = {
   },
 
   updateStatus: async (id: string, status: OrderStatus, deliveryProof?: string, customer?: { name: string, address: string }) => {
+    const now = Date.now();
     let list = _memoryOrders || [];
     if (list.length === 0) {
         const local = localStorage.getItem(ORDER_KEY);
@@ -1261,7 +1270,7 @@ export const storageService = {
     const index = list.findIndex(o => o.id === id);
     if (index >= 0) {
         const currentUser = storageService.getCurrentUser() || 'Unknown';
-        const updated = { ...list[index], status, lastUpdatedBy: currentUser, updatedAt: Date.now() };
+        const updated = { ...list[index], status, lastUpdatedBy: currentUser, updatedAt: now };
         if (deliveryProof !== undefined) updated.deliveryProof = deliveryProof;
 
         list[index] = updated;
@@ -1269,7 +1278,7 @@ export const storageService = {
         localStorage.setItem(ORDER_KEY, JSON.stringify(list));
         window.dispatchEvent(new Event('storage_' + ORDER_KEY));
 
-        const payload: any = { status, lastUpdatedBy: currentUser, updatedAt: Date.now() };
+        const payload: any = { status, lastUpdatedBy: currentUser, updatedAt: now };
         if (deliveryProof !== undefined) payload.deliveryProof = deliveryProof;
 
         await safeCloudOp(() => updateDoc(doc(db, "orders", id), payload));
@@ -1303,14 +1312,28 @@ export const storageService = {
   },
 
   updateOrderDetails: async (order: Order) => {
+    const now = Date.now();
     let list = _memoryOrders || [];
     if (list.length === 0) { const local = localStorage.getItem(ORDER_KEY); if(local) list = JSON.parse(local); }
     const idx = list.findIndex(o => o.id === order.id);
     if (idx >= 0) {
         const oldOrder = list[idx];
         const productDeltas = new Map<string, number>();
-        oldOrder.items.forEach(item => { if (item.productId) { const current = productDeltas.get(item.productId) || 0; productDeltas.set(item.productId, current + (Number(item.quantity) || 0)); } });
-        order.items.forEach(item => { if (item.productId) { const current = productDeltas.get(item.productId) || 0; productDeltas.set(item.productId, current - (Number(item.quantity) || 0)); } });
+        
+        // Revert old items
+        oldOrder.items.forEach(item => { 
+            if (item.productId) { 
+                const current = productDeltas.get(item.productId) || 0; 
+                productDeltas.set(item.productId, current + (Number(item.quantity) || 0)); 
+            } 
+        });
+        // Deduct new items
+        order.items.forEach(item => { 
+            if (item.productId) { 
+                const current = productDeltas.get(item.productId) || 0; 
+                productDeltas.set(item.productId, current - (Number(item.quantity) || 0)); 
+            } 
+        });
 
         const allProducts = ensureProductsLoaded();
         const batch = writeBatch(db); 
@@ -1322,9 +1345,15 @@ export const storageService = {
             if (product) {
                 const currentStock = Number(product.stockQuantity) || 0;
                 product.stockQuantity = currentStock + delta;
+                product.updatedAt = now; // Local sync update
+                
                 if (isOnline()) {
                     const ref = doc(db, "products", prodId);
-                    batch.update(ref, { stockQuantity: increment(delta) });
+                    // CRITICAL: Update updatedAt timestamp on cloud so delta listeners pick it up
+                    batch.update(ref, { 
+                        stockQuantity: increment(delta),
+                        updatedAt: now 
+                    });
                 }
                 hasStockUpdates = true;
             }
@@ -1335,8 +1364,7 @@ export const storageService = {
             window.dispatchEvent(new Event('storage_' + PRODUCT_KEY));
         }
 
-        // CRITICAL FIX: Update timestamp so sync knows this is newer
-        const orderToSave = { ...order, updatedAt: Date.now() };
+        const orderToSave = { ...order, updatedAt: now };
 
         list[idx] = orderToSave;
         _memoryOrders = list;
