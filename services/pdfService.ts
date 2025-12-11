@@ -381,13 +381,13 @@ export const pdfService = {
                        || products.find(p => normalizeString(p.name).includes(normName));
                 
                 if (p) {
-                    // MODIFIED: Only show Ordered and Stock as requested (No more 'Imported' or 'Balance')
-                    return `${name}: ${qtyOrdered} (Tồn ${p.stockQuantity || 0})`;
+                    // UPDATED: Show ONLY Ordered and Stock (No Imported/Balance)
+                    return `${name}: ${qtyOrdered} [Tồn: ${p.stockQuantity || 0}]`;
                 }
                 return `${name}: ${qtyOrdered}`;
             });
 
-        const summaryText = "TỔNG HÀNG (Đặt / Tồn kho):  " + summaryParts.join('  |  ');
+        const summaryText = "TỔNG HÀNG (Đặt | Tồn):  " + summaryParts.join('   ');
             
         const sumLines = doc.splitTextToSize(summaryText, tableW);
         doc.text(sumLines, margin, currentY);
