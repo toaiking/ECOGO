@@ -172,6 +172,26 @@ export const storageService = {
     return orders.length + prods.length;
   },
 
+  // --- NOTIFICATION ENGINE ---
+  addNotification: async (notif: Omit<Notification, 'id' | 'isRead' | 'createdAt'>) => {
+      const newNotif: Notification = {
+          ...notif,
+          id: uuidv4(),
+          isRead: false,
+          createdAt: Date.now()
+      };
+      // Lưu local trước để phản hồi nhanh
+      try {
+          const local = localStorage.getItem(NOTIF_KEY);
+          const list = local ? JSON.parse(local) : [];
+          list.unshift(newNotif);
+          localStorage.setItem(NOTIF_KEY, JSON.stringify(list.slice(0, 50))); // Giữ tối đa 50 thông báo
+      } catch {}
+      
+      // Đồng bộ Cloud
+      await safeCloudOp(() => setDoc(doc(db, "notifications", newNotif.id), sanitize(newNotif)));
+  },
+
   // --- CUSTOMER INTELLIGENCE (LEARNING) ---
   learnCustomerInfo: async (order: Order) => {
       const customers = ensureCustomersLoaded();
@@ -184,10 +204,9 @@ export const storageService = {
 
       const now = Date.now();
       if (existing) {
-          // Update learned info
           const updated: Customer = {
               ...existing,
-              address: order.address || existing.address, // Luôn ưu tiên địa chỉ mới nhất
+              address: order.address || existing.address,
               phone: order.customerPhone || existing.phone,
               lastOrderDate: now,
               totalOrders: (existing.totalOrders || 0) + 1,
@@ -195,7 +214,6 @@ export const storageService = {
           };
           await storageService.upsertCustomer(updated);
       } else if (order.customerName) {
-          // Create new from learned info
           const newCust: Customer = {
               id: order.customerId || uuidv4(),
               name: order.customerName,
@@ -246,8 +264,19 @@ export const storageService = {
       const list = ensureProductsLoaded();
       const p = list.find(x => x.id === productId);
       if (p) {
-          p.stockQuantity = (p.stockQuantity || 0) + delta;
+          const oldStock = p.stockQuantity || 0;
+          p.stockQuantity = oldStock + delta;
           p.updatedAt = now;
+          
+          // Cảnh báo hết hàng tự động
+          if (p.stockQuantity < 5 && oldStock >= 5) {
+              storageService.addNotification({
+                  title: 'Sắp hết hàng!',
+                  message: `Sản phẩm "${p.name}" chỉ còn ${p.stockQuantity} món trong kho.`,
+                  type: 'warning'
+              });
+          }
+
           if (delta > 0) {
               p.totalImported = (p.totalImported || 0) + delta;
               if (!p.importHistory) p.importHistory = [];
@@ -381,6 +410,14 @@ export const storageService = {
     localStorage.setItem(ORDER_KEY, JSON.stringify(list));
     window.dispatchEvent(new Event('storage_' + ORDER_KEY));
 
+    // THÔNG BÁO: Đơn mới
+    storageService.addNotification({
+        title: 'Đơn hàng mới',
+        message: `Khách "${order.customerName}" vừa đặt ${order.items.length} món. Tổng: ${new Intl.NumberFormat('vi-VN').format(order.totalPrice)}đ.`,
+        type: 'success',
+        relatedOrderId: order.id
+    });
+
     // Learn from customer info automatically
     storageService.learnCustomerInfo(order);
 
@@ -388,7 +425,20 @@ export const storageService = {
     order.items.forEach(item => {
         if (item.productId) {
             const p = prods.find(x => x.id === item.productId);
-            if (p) { p.stockQuantity -= item.quantity; p.updatedAt = now; }
+            if (p) { 
+                const oldStock = p.stockQuantity;
+                p.stockQuantity -= item.quantity; 
+                p.updatedAt = now; 
+                
+                // Cảnh báo hết hàng ngay khi trừ kho
+                if (p.stockQuantity < 5 && oldStock >= 5) {
+                    storageService.addNotification({
+                        title: 'Kho sắp cạn!',
+                        message: `Hàng "${p.name}" chỉ còn ${p.stockQuantity} món sau đơn #${order.id}.`,
+                        type: 'warning'
+                    });
+                }
+            }
         }
     });
     localStorage.setItem(PRODUCT_KEY, JSON.stringify(prods));
@@ -509,6 +559,17 @@ export const storageService = {
       if (idx >= 0) {
           list[idx].paymentVerified = verified;
           localStorage.setItem(ORDER_KEY, JSON.stringify(list));
+          
+          // THÔNG BÁO: Tiền về
+          if (verified) {
+              storageService.addNotification({
+                  title: 'Xác nhận tiền về',
+                  message: `Đơn #${id} của khách "${list[idx].customerName}" đã được thanh toán ${new Intl.NumberFormat('vi-VN').format(list[idx].totalPrice)}đ.`,
+                  type: 'info',
+                  relatedOrderId: id
+              });
+          }
+
           await safeCloudOp(() => updateDoc(doc(db, "orders", id), { paymentVerified: verified, updatedAt: Date.now() }));
       }
   },
