@@ -4,7 +4,6 @@ import { NavLink, useLocation } from 'react-router-dom';
 import { storageService } from '../services/storageService';
 import toast from 'react-hot-toast';
 import { db } from '../firebaseConfig';
-import ConfirmModal from './ConfirmModal';
 import SettingsModal from './SettingsModal';
 import NotificationMenu from './NotificationMenu';
 import { Order, OrderStatus, PaymentMethod } from '../types';
@@ -16,8 +15,6 @@ interface Props {
 }
 
 const Navbar: React.FC<Props> = ({ onLogout }) => {
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [showConfirmSync, setShowConfirmSync] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showNotif, setShowNotif] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -31,8 +28,6 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
   const location = useLocation();
   const isOnline = !!db;
   
-  const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.2.2';
-
   useEffect(() => {
     const unsubOrders = storageService.subscribeOrders((orders) => {
         const count = orders.filter(o => 
@@ -76,7 +71,7 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
   }, [location]);
 
   const desktopLinkClass = (isActive: boolean) =>
-    `flex items-center px-3 py-2 rounded-xl transition-all duration-300 relative ${
+    `flex items-center px-2 lg:px-3 py-2 rounded-xl transition-all duration-300 relative text-xs lg:text-sm ${
       isActive
         ? 'bg-white text-eco-800 font-bold shadow-lg transform scale-105'
         : 'text-eco-100 hover:bg-eco-700/50 hover:text-white font-medium'
@@ -94,35 +89,36 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
   return (
     <>
       <nav className="bg-gradient-to-r from-eco-800 to-eco-900 shadow-xl sticky top-0 z-50 border-b border-eco-700 select-none">
-        <div className="container mx-auto px-4">
+        <div className="container mx-auto px-2 lg:px-4">
           <div className="flex justify-between items-center h-16">
             
             {/* Logo Area */}
-            <div className="flex items-center space-x-3">
-              <NavLink to="/dashboard" className="w-9 h-9 bg-white rounded-xl shadow-md flex items-center justify-center text-eco-700 overflow-hidden">
+            <div className="flex items-center space-x-2 lg:space-x-3 shrink-0">
+              <NavLink to="/dashboard" className="w-8 h-8 lg:w-9 lg:h-9 bg-white rounded-xl shadow-md flex items-center justify-center text-eco-700 overflow-hidden">
                 {logo ? <img src={logo} alt="Logo" className="w-full h-full object-cover" /> : <i className="fas fa-shipping-fast"></i>}
               </NavLink>
               <div className="flex flex-col">
-                 <span className="text-white text-lg font-black leading-tight tracking-tighter">EcoGo</span>
-                 <div className="flex items-center gap-1.5 opacity-90">
-                     <span className={`w-1.5 h-1.5 rounded-full ${isOnline ? 'bg-green-400' : 'bg-gray-400'}`}></span>
-                     <span className="text-eco-200 text-[9px] font-bold uppercase tracking-widest">{isOnline ? 'Cloud' : 'Local'}</span>
+                 <span className="text-white text-base lg:text-lg font-black leading-tight tracking-tighter">EcoGo</span>
+                 <div className="flex items-center gap-1 opacity-90">
+                     <span className={`w-1 h-1 rounded-full ${isOnline ? 'bg-green-400' : 'bg-gray-400'}`}></span>
+                     <span className="text-eco-200 text-[8px] font-bold uppercase tracking-widest">{isOnline ? 'Cloud' : 'Local'}</span>
                  </div>
               </div>
             </div>
             
-            {/* DESKTOP MENU */}
-            <div className="hidden md:flex items-center space-x-1">
-                <NavLink to="/dashboard" className={({ isActive }) => desktopLinkClass(isActive)}><i className="fas fa-th-large mr-2"></i> Tổng Quan</NavLink>
-                <NavLink to="/order" className={({ isActive }) => desktopLinkClass(isActive)}><i className="fas fa-plus-circle mr-2"></i> Tạo Đơn</NavLink>
-                <NavLink to="/tracking" className={({ isActive }) => desktopLinkClass(isActive)}><i className="fas fa-tasks mr-2"></i> Theo Dõi</NavLink>
+            {/* DESKTOP & TABLET MENU */}
+            <div className="hidden md:flex items-center space-x-0.5 lg:space-x-1">
+                <NavLink to="/dashboard" className={({ isActive }) => desktopLinkClass(isActive)}><i className="fas fa-th-large mr-1 lg:mr-2"></i> Tổng Quan</NavLink>
+                <NavLink to="/order" className={({ isActive }) => desktopLinkClass(isActive)}><i className="fas fa-plus-circle mr-1 lg:mr-2"></i> Tạo Đơn</NavLink>
+                <NavLink to="/tracking" className={({ isActive }) => desktopLinkClass(isActive)}><i className="fas fa-tasks mr-1 lg:mr-2"></i> Theo Dõi</NavLink>
                 <NavLink to="/audit" className={({ isActive }) => desktopLinkClass(isActive)}>
-                    <i className="fas fa-file-invoice-dollar mr-2"></i> Đối Soát
+                    <i className="fas fa-file-invoice-dollar mr-1 lg:mr-2"></i> Đối Soát
                     {unverifiedCount > 0 && <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[8px] font-black w-4 h-4 rounded-full flex items-center justify-center border-2 border-eco-800">{unverifiedCount}</span>}
                 </NavLink>
-                <NavLink to="/inventory" className={({ isActive }) => desktopLinkClass(isActive)}><i className="fas fa-warehouse mr-2"></i> Kho</NavLink>
+                <NavLink to="/inventory" className={({ isActive }) => desktopLinkClass(isActive)}><i className="fas fa-warehouse mr-1 lg:mr-2"></i> Kho</NavLink>
+                <NavLink to="/customers" className={({ isActive }) => desktopLinkClass(isActive)}><i className="fas fa-users mr-1 lg:mr-2"></i> Khách Hàng</NavLink>
 
-                <div className="w-px h-6 bg-eco-700 mx-2"></div>
+                <div className="w-px h-6 bg-eco-700 mx-1 lg:mx-2"></div>
 
                 <div className="relative">
                     <button ref={notifBtnRef} onClick={(e) => {e.stopPropagation(); setShowNotif(!showNotif)}} className={`p-2 rounded-lg relative ${showNotif ? 'bg-eco-900 text-white' : 'text-eco-200 hover:text-white'}`}>
@@ -131,23 +127,19 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
                     </button>
                     <NotificationMenu isOpen={showNotif} onClose={() => setShowNotif(false)} ignoreRef={notifBtnRef} />
                 </div>
-                <button onClick={() => setShowSettings(true)} className="p-2 text-eco-200 hover:text-white"><i className="fas fa-cog"></i></button>
-                <button onClick={onLogout} className="p-2 text-eco-200 hover:text-red-300"><i className="fas fa-sign-out-alt"></i></button>
+                <button onClick={() => setShowSettings(true)} className="p-2 text-eco-200 hover:text-white" title="Cài đặt"><i className="fas fa-cog"></i></button>
+                <button onClick={onLogout} className="p-2 text-eco-200 hover:text-red-300" title="Đăng xuất"><i className="fas fa-sign-out-alt"></i></button>
             </div>
 
             {/* MOBILE ACTION BAR */}
             <div className="md:hidden flex items-center gap-1 sm:gap-2">
                 <NavLink to="/order" className={({ isActive }) => mobileLinkClass(isActive)} title="Tạo đơn"><i className="fas fa-plus-circle text-xl"></i></NavLink>
-                
-                {/* ICON THEO DÕI ĐƠN CHO MOBILE - CHẠM LÀ QUA TRANG LUÔN */}
                 <NavLink to="/tracking" className={({ isActive }) => mobileLinkClass(isActive)} title="Theo dõi"><i className="fas fa-tasks text-xl"></i></NavLink>
-                
                 <NavLink to="/audit" className={({ isActive }) => mobileLinkClass(isActive)} title="Đối soát">
                     <i className="fas fa-file-invoice-dollar text-xl"></i>
                     {unverifiedCount > 0 && <span className="absolute top-1.5 right-1.5 bg-red-500 text-white text-[8px] font-black w-4 h-4 rounded-full flex items-center justify-center border-2 border-eco-800 shadow-sm">{unverifiedCount}</span>}
                 </NavLink>
 
-                {/* NÚT THÔNG BÁO CHO MOBILE */}
                 <button 
                     ref={mobileNotifBtnRef}
                     onClick={(e) => { e.stopPropagation(); setShowNotif(!showNotif); setIsMobileMenuOpen(false); }}
