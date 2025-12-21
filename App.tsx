@@ -9,7 +9,6 @@ import InventoryManager from './components/InventoryManager';
 import CustomerManager from './components/CustomerManager';
 import PaymentAudit from './components/PaymentAudit';
 import Login from './components/Login';
-import QuickActionWidget from './components/QuickActionWidget';
 import toast, { Toaster } from 'react-hot-toast';
 import { storageService } from './services/storageService';
 
@@ -49,7 +48,6 @@ const App: React.FC = () => {
     <HashRouter>
       <div className="min-h-screen bg-gray-50 flex flex-col font-sans">
         <Navbar onLogout={handleLogout} />
-        {/* Responsive Container Adjusted: px-3 for mobile, max-w-4xl for tablet focus, max-w-7xl for desktop */}
         <main className="flex-grow container mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6 max-w-4xl lg:max-w-7xl transition-all">
           <Routes>
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
@@ -61,9 +59,6 @@ const App: React.FC = () => {
             <Route path="/customers" element={<CustomerManager />} />
           </Routes>
         </main>
-        
-        {/* Widget Nổi Thông Minh */}
-        <QuickActionWidget />
         
         <Toaster position="bottom-right" />
       </div>

@@ -1,3 +1,4 @@
+
 {
   "short_name": "EcoGo",
   "name": "EcoGo Logistics Manager",
@@ -13,6 +14,29 @@
       "type": "image/png",
       "sizes": "512x512",
       "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Tạo đơn mới",
+      "short_name": "Tạo đơn",
+      "description": "Mở nhanh màn hình tạo đơn hàng",
+      "url": "/#/order",
+      "icons": [{ "src": "https://i.postimg.cc/KjRNTKF7/shop.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Theo dõi đơn",
+      "short_name": "Theo dõi",
+      "description": "Xem trạng thái giao hàng",
+      "url": "/#/tracking",
+      "icons": [{ "src": "https://i.postimg.cc/KjRNTKF7/shop.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Đối soát tiền",
+      "short_name": "Đối soát",
+      "description": "Kiểm tra tiền chuyển khoản",
+      "url": "/#/audit",
+      "icons": [{ "src": "https://i.postimg.cc/KjRNTKF7/shop.png", "sizes": "192x192" }]
     }
   ],
   "start_url": "/",

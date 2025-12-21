@@ -34,7 +34,6 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
   const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.2.2';
 
   useEffect(() => {
-    // Theo dõi đơn chưa xác nhận tiền
     const unsubOrders = storageService.subscribeOrders((orders) => {
         const count = orders.filter(o => 
             o.paymentMethod === PaymentMethod.TRANSFER && 
@@ -42,6 +41,10 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
             o.status !== OrderStatus.CANCELLED
         ).length;
         setUnverifiedCount(count);
+        
+        if ('setAppBadge' in navigator && count > 0) {
+            (navigator as any).setAppBadge(count).catch(() => {});
+        }
     });
 
     const handleClickOutside = (event: MouseEvent) => {
@@ -71,20 +74,6 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
       setIsMobileMenuOpen(false);
       setShowNotif(false);
   }, [location]);
-
-  const handleSyncClick = () => {
-    if (!isOnline) { toast.error("Chưa kết nối mạng"); return; }
-    setShowConfirmSync(true);
-  };
-
-  const confirmSync = async () => {
-    setShowConfirmSync(false);
-    setIsSyncing(true);
-    try {
-        const count = await storageService.syncLocalToCloud();
-        toast.success(`Đã đồng bộ ${count} dữ liệu!`);
-    } catch (e) { toast.error("Lỗi đồng bộ."); } finally { setIsSyncing(false); }
-  };
 
   const desktopLinkClass = (isActive: boolean) =>
     `flex items-center px-3 py-2 rounded-xl transition-all duration-300 relative ${
@@ -117,7 +106,7 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
                  <span className="text-white text-lg font-black leading-tight tracking-tighter">EcoGo</span>
                  <div className="flex items-center gap-1.5 opacity-90">
                      <span className={`w-1.5 h-1.5 rounded-full ${isOnline ? 'bg-green-400' : 'bg-gray-400'}`}></span>
-                     <span className="text-eco-200 text-[9px] font-bold uppercase tracking-widest">{isOnline ? 'Cloud' : 'Local'} v{appVersion}</span>
+                     <span className="text-eco-200 text-[9px] font-bold uppercase tracking-widest">{isOnline ? 'Cloud' : 'Local'}</span>
                  </div>
               </div>
             </div>
@@ -148,9 +137,12 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
 
             {/* MOBILE ACTION BAR */}
             <div className="md:hidden flex items-center gap-1 sm:gap-2">
-                <NavLink to="/order" className={({ isActive }) => mobileLinkClass(isActive)}><i className="fas fa-plus-circle text-xl"></i></NavLink>
+                <NavLink to="/order" className={({ isActive }) => mobileLinkClass(isActive)} title="Tạo đơn"><i className="fas fa-plus-circle text-xl"></i></NavLink>
                 
-                <NavLink to="/audit" className={({ isActive }) => mobileLinkClass(isActive)}>
+                {/* ICON THEO DÕI ĐƠN CHO MOBILE - CHẠM LÀ QUA TRANG LUÔN */}
+                <NavLink to="/tracking" className={({ isActive }) => mobileLinkClass(isActive)} title="Theo dõi"><i className="fas fa-tasks text-xl"></i></NavLink>
+                
+                <NavLink to="/audit" className={({ isActive }) => mobileLinkClass(isActive)} title="Đối soát">
                     <i className="fas fa-file-invoice-dollar text-xl"></i>
                     {unverifiedCount > 0 && <span className="absolute top-1.5 right-1.5 bg-red-500 text-white text-[8px] font-black w-4 h-4 rounded-full flex items-center justify-center border-2 border-eco-800 shadow-sm">{unverifiedCount}</span>}
                 </NavLink>
@@ -170,23 +162,14 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
           </div>
         </div>
 
-        {/* NOTIFICATION MENU MODAL-LIKE FOR MOBILE */}
-        <NotificationMenu 
-            isOpen={showNotif} 
-            onClose={() => setShowNotif(false)} 
-            ignoreRef={mobileNotifBtnRef} 
-        />
+        {/* NOTIFICATION MENU */}
+        <NotificationMenu isOpen={showNotif} onClose={() => setShowNotif(false)} ignoreRef={mobileNotifBtnRef} />
 
         {/* MOBILE DROPDOWN */}
         {isMobileMenuOpen && (
             <div ref={mobileMenuRef} className="absolute top-16 right-2 w-64 bg-white rounded-2xl shadow-2xl z-[100] border border-gray-100 overflow-hidden animate-fade-in-down origin-top-right md:hidden">
                 <div className="p-2 space-y-1">
                     <NavLink to="/dashboard" className={({isActive}) => `${menuItemClass} ${isActive ? 'bg-eco-50 text-eco-700 font-bold' : ''}`}><i className="fas fa-th-large w-6"></i> Tổng Quan</NavLink>
-                    <NavLink to="/tracking" className={({isActive}) => `${menuItemClass} ${isActive ? 'bg-eco-50 text-eco-700 font-bold' : ''}`}><i className="fas fa-tasks w-6"></i> Theo Dõi Đơn</NavLink>
-                    <NavLink to="/audit" className={({isActive}) => `${menuItemClass} ${isActive ? 'bg-eco-50 text-eco-700 font-bold' : ''}`}>
-                        <i className="fas fa-file-invoice-dollar w-6"></i> Đối Soát CK
-                        {unverifiedCount > 0 && <span className="absolute right-4 bg-red-500 text-white text-[10px] font-black px-2 rounded-full">{unverifiedCount} đơn</span>}
-                    </NavLink>
                     <NavLink to="/inventory" className={({isActive}) => `${menuItemClass} ${isActive ? 'bg-eco-50 text-eco-700 font-bold' : ''}`}><i className="fas fa-warehouse w-6"></i> Kho Hàng</NavLink>
                     <NavLink to="/customers" className={({isActive}) => `${menuItemClass} ${isActive ? 'bg-eco-50 text-eco-700 font-bold' : ''}`}><i className="fas fa-users w-6"></i> Khách Hàng</NavLink>
                     <hr className="my-2 border-gray-100" />
@@ -197,10 +180,6 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
         )}
       </nav>
 
-      <ConfirmModal 
-        isOpen={showConfirmSync} title="Đồng bộ dữ liệu" message="Dữ liệu sẽ được đẩy lên Cloud."
-        onConfirm={confirmSync} onCancel={() => setShowConfirmSync(false)}
-      />
       <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} />
     </>
   );
