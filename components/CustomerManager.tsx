@@ -1,64 +1,47 @@
 
-import React, { useState, useEffect, useRef, useDeferredValue } from 'react';
+import React, { useState, useEffect, useDeferredValue } from 'react';
 import toast from 'react-hot-toast';
 import { Customer } from '../types';
-import { storageService } from '../services/storageService';
+import { storageService, normalizePhone, normalizeString } from '../services/storageService';
 import { verifyAddress } from '../services/geminiService';
 import ConfirmModal from './ConfirmModal';
 import { v4 as uuidv4 } from 'uuid';
 
+const CustomerBadge: React.FC<{ count: number, isLegacy?: boolean }> = ({ count, isLegacy }) => {
+    if (isLegacy || count === 0) return <span className="bg-blue-50 text-blue-600 text-[9px] font-black px-2 py-0.5 rounded-full border border-blue-100 uppercase tracking-tighter">Mới</span>;
+    if (count >= 10) return <span className="bg-red-50 text-red-600 text-[9px] font-black px-2 py-0.5 rounded-full border border-red-100 uppercase tracking-tighter animate-pulse">💎 VIP</span>;
+    if (count >= 5) return <span className="bg-eco-50 text-eco-600 text-[9px] font-black px-2 py-0.5 rounded-full border border-eco-100 uppercase tracking-tighter">🌟 Thân thiết</span>;
+    return <span className="bg-gray-50 text-gray-500 text-[9px] font-black px-2 py-0.5 rounded-full border border-gray-100 uppercase tracking-tighter">Quen</span>;
+};
+
 const CustomerManager: React.FC = () => {
   const [customers, setCustomers] = useState<Customer[]>([]);
-  const [filteredCustomers, setFilteredCustomers] = useState<Customer[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const deferredSearchTerm = useDeferredValue(searchTerm);
 
-  const [formData, setFormData] = useState<Partial<Customer>>({ name: '', phone: '', address: '', priorityScore: 999, socialLink: '' });
+  const [isAdding, setIsAdding] = useState(false);
+  const [formData, setFormData] = useState<Partial<Customer>>({ name: '', phone: '', address: '', priorityScore: 999 });
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   
-  const [showImportModal, setShowImportModal] = useState(false);
-  const [importText, setImportText] = useState('');
-  const [isImporting, setIsImporting] = useState(false);
-  const [importProgress, setImportProgress] = useState(0); 
-  const [importMode, setImportMode] = useState<'TEXT' | 'JSON'>('TEXT');
-  const [isLocalMode, setIsLocalMode] = useState(false); 
-
   const [isListeningSearch, setIsListeningSearch] = useState(false);
   const [isVerifyingAddr, setIsVerifyingAddr] = useState(false);
-
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const [scrollTop, setScrollTop] = useState(0);
-  
-  const ROW_HEIGHT = 100; 
-  const CONTAINER_HEIGHT = 600; 
-  const BUFFER = 5; 
 
   useEffect(() => { 
       const unsubscribe = storageService.subscribeCustomers(setCustomers); 
       return () => { if (unsubscribe) unsubscribe(); }; 
   }, []);
   
-  useEffect(() => { 
-      let result = customers;
-      if (deferredSearchTerm) { 
-          const lower = deferredSearchTerm.toLowerCase(); 
-          result = customers.filter(c => c.name.toLowerCase().includes(lower) || (c.phone && c.phone.includes(lower)) || c.address.toLowerCase().includes(lower)); 
-      }
-      result.sort((a, b) => {
-          const pA = a.priorityScore || 999;
-          const pB = b.priorityScore || 999;
-          if (pA !== pB) return pA - pB;
-          return a.name.localeCompare(b.name);
-      });
-      setFilteredCustomers(result); 
-  }, [customers, deferredSearchTerm]);
+  const filteredCustomers = customers.filter(c => {
+      if (!deferredSearchTerm) return true;
+      const lower = deferredSearchTerm.toLowerCase();
+      return normalizeString(c.name).includes(normalizeString(lower)) || 
+             c.phone.includes(lower) || 
+             normalizeString(c.address).includes(normalizeString(lower));
+  }).sort((a, b) => (b.totalOrders || 0) - (a.totalOrders || 0));
 
-  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => { setScrollTop(e.currentTarget.scrollTop); };
-
-  /* FIX: Add missing handleDeleteClick and confirmDelete handlers */
-  const handleDeleteClick = (id: string) => {
+  const handleDeleteClick = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
     setDeleteId(id);
     setShowDeleteConfirm(true);
   };
@@ -72,12 +55,6 @@ const CustomerManager: React.FC = () => {
     }
   };
 
-  const totalContentHeight = filteredCustomers.length * ROW_HEIGHT;
-  const startIndex = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - BUFFER);
-  const endIndex = Math.min(filteredCustomers.length, Math.ceil((scrollTop + CONTAINER_HEIGHT) / ROW_HEIGHT) + BUFFER);
-  const visibleCustomers = filteredCustomers.slice(startIndex, endIndex);
-  const topPadding = startIndex * ROW_HEIGHT;
-
   const handleVoiceSearch = () => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) { toast.error("Trình duyệt không hỗ trợ"); return; }
@@ -90,155 +67,239 @@ const CustomerManager: React.FC = () => {
   };
 
   const handleVerifyAddress = async () => {
-      const currentAddr = formData.address;
-      if (!currentAddr || currentAddr.trim().length < 5) { toast.error("Nhập địa chỉ sơ bộ trước"); return; }
+      if (!formData.address || formData.address.length < 5) { toast.error("Nhập địa chỉ trước"); return; }
       setIsVerifyingAddr(true);
-      const toastId = toast.loading("Đang ghim bản đồ...");
       try {
-          const result = await verifyAddress(currentAddr);
+          const result = await verifyAddress(formData.address);
           setFormData(prev => ({ ...prev, address: result.address }));
-          toast.success("Đã chuẩn hóa địa chỉ!");
-      } catch (e: any) { toast.error("Không tìm thấy"); } finally { setIsVerifyingAddr(false); toast.dismiss(toastId); }
+          toast.success("Đã ghim vị trí!");
+      } catch (e: any) { toast.error("Không tìm thấy"); } finally { setIsVerifyingAddr(false); }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.name) { toast.error('Cần nhập Tên khách hàng'); return; }
-    const cleanPhone = formData.phone ? formData.phone.trim() : '';
-    const newId = cleanPhone.length > 5 ? cleanPhone : uuidv4();
-    const newCustomer: Customer = { id: newId, name: formData.name, phone: cleanPhone, address: formData.address || '', lastOrderDate: Date.now(), priorityScore: formData.priorityScore || 999, socialLink: formData.socialLink || '' };
-    await storageService.upsertCustomer(newCustomer);
-    setFormData({ name: '', phone: '', address: '', priorityScore: 999, socialLink: '' });
-    toast.success('Đã lưu khách hàng');
-  };
-
-  const handleImport = async () => {
-      if (!importText.trim()) return;
-      setIsImporting(true);
-      setTimeout(async () => {
-        try {
-            let parsedCustomers: Customer[] = [];
-            if (importMode === 'JSON') {
-                const jsonData = JSON.parse(importText);
-                parsedCustomers = jsonData.map((c: any) => ({
-                    id: c.phone ? c.phone.replace(/[^0-9]/g, '') : uuidv4(),
-                    name: c.name || '',
-                    phone: c.phone || '',
-                    address: c.address || '',
-                    lastOrderDate: Date.now(),
-                    priorityScore: Number(c.priorityScore || 999),
-                    socialLink: c.socialLink || ''
-                })).filter((c: any) => c.name);
-            } else {
-                const lines = importText.split('\n');
-                lines.forEach(line => {
-                    const parts = line.split(line.includes('\t') ? '\t' : ',');
-                    if (parts[0]) parsedCustomers.push({ id: uuidv4(), name: parts[0].trim(), phone: parts[1]?.trim() || '', address: parts[2]?.trim() || '', lastOrderDate: Date.now(), priorityScore: 999 });
-                });
-            }
-            await storageService.importCustomersBatch(parsedCustomers, isLocalMode);
-            toast.success(`Đã nhập ${parsedCustomers.length} khách!`); 
-            setImportText(''); setShowImportModal(false); 
-        } catch (e) { toast.error("Lỗi dữ liệu"); } finally { setIsImporting(false); }
-      }, 100);
+    if (!formData.name) { toast.error('Nhập tên khách'); return; }
+    const cleanPhone = normalizePhone(formData.phone || '');
+    const newId = cleanPhone.length > 8 ? cleanPhone : uuidv4();
+    await storageService.upsertCustomer({
+        id: newId,
+        name: formData.name,
+        phone: cleanPhone,
+        address: formData.address || '',
+        lastOrderDate: Date.now(),
+        priorityScore: formData.priorityScore || 999,
+        totalOrders: 0,
+        updatedAt: Date.now()
+    });
+    setFormData({ name: '', phone: '', address: '', priorityScore: 999 });
+    setIsAdding(false);
+    toast.success('Đã thêm khách hàng mới');
   };
 
   const handleInlineUpdate = async (customer: Customer, field: keyof Customer, value: any) => { 
       if (customer[field] === value) return; 
-      const updated = { ...customer, [field]: value }; 
-      await storageService.upsertCustomer(updated); 
+      await storageService.upsertCustomer({ ...customer, [field]: value, updatedAt: Date.now() }); 
+      toast.success("Đã cập nhật", { duration: 1000 });
   };
 
-  const vInputClass = "w-full p-2.5 bg-white border-2 border-gray-800 rounded-xl outline-none focus:ring-4 focus:ring-eco-50 font-black text-black text-sm transition-all";
+  const contactActions = {
+      call: (phone: string) => window.open(`tel:${phone}`, '_self'),
+      zalo: (phone: string) => window.open(`https://zalo.me/${normalizePhone(phone).replace(/^0/, '84')}`, '_blank'),
+      sms: (phone: string) => window.open(`sms:${phone}`, '_self'),
+      maps: (addr: string) => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr)}`, '_blank')
+  };
 
   return (
-    <div className="max-w-6xl mx-auto pb-20 animate-fade-in">
-      <div className="flex justify-between items-center mb-6 px-2">
-          <h1 className="text-2xl font-black text-gray-800 tracking-tight">Quản Lý Khách Hàng</h1>
-          <div className="flex gap-2">
-              <button onClick={() => setShowImportModal(true)} className="bg-white text-gray-800 hover:bg-gray-100 px-4 py-2 rounded-xl font-black text-[10px] border-2 border-gray-800 shadow-sm uppercase">Import</button>
-              <button onClick={() => setShowDeleteAllConfirm(true)} className="bg-red-50 text-red-600 hover:bg-red-600 hover:text-white px-4 py-2 rounded-xl font-black text-[10px] border border-red-200 uppercase">Xóa hết</button>
+    <div className="max-w-6xl mx-auto pb-32 animate-fade-in px-3">
+      
+      {/* HEADER SECTION */}
+      <div className="flex flex-col gap-4 mb-6 sticky top-16 z-30 bg-gray-50/95 py-3 backdrop-blur-sm">
+          <div className="flex items-center justify-between">
+              <div>
+                  <h1 className="text-2xl font-black text-gray-900 tracking-tighter uppercase italic">Danh bạ <span className="text-eco-600">Thông minh</span></h1>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-1">Quản lý {customers.length} khách hàng</p>
+              </div>
+              <button 
+                  onClick={() => setIsAdding(!isAdding)} 
+                  className={`w-12 h-12 rounded-2xl shadow-lg flex items-center justify-center transition-all active:scale-95 ${isAdding ? 'bg-red-500 text-white' : 'bg-black text-white'}`}
+              >
+                  <i className={`fas ${isAdding ? 'fa-times' : 'fa-user-plus'}`}></i>
+              </button>
+          </div>
+
+          <div className="relative group">
+              <i className="fas fa-search absolute left-4 top-3.5 text-gray-400 group-focus-within:text-eco-600 transition-colors"></i>
+              <input 
+                  value={searchTerm} 
+                  onChange={e => setSearchTerm(e.target.value)}
+                  placeholder="Tìm tên, sđt hoặc địa chỉ..." 
+                  className="w-full pl-12 pr-12 py-4 bg-white border-2 border-gray-100 rounded-2xl shadow-sm outline-none focus:border-eco-500 focus:ring-4 focus:ring-eco-50 font-bold text-gray-800 transition-all"
+              />
+              <button 
+                  onClick={handleVoiceSearch}
+                  className={`absolute right-3 top-2.5 w-9 h-9 rounded-xl flex items-center justify-center transition-all ${isListeningSearch ? 'bg-red-500 text-white animate-pulse' : 'text-gray-400 hover:bg-gray-100'}`}
+              >
+                  <i className={`fas ${isListeningSearch ? 'fa-microphone-slash' : 'fa-microphone'}`}></i>
+              </button>
           </div>
       </div>
-      
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-        <div className="lg:col-span-4 space-y-6">
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-              <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest">Thêm Khách Mới</h3>
-              <form onSubmit={handleSubmit} className="space-y-4">
-                  <div>
-                      <label className="text-[10px] font-black text-gray-400 uppercase mb-1 block ml-1">Tên khách hàng *</label>
-                      <input value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} className={vInputClass} placeholder="VD: Chị Lan" />
+
+      {/* ADD FORM (CONDITIONAL) */}
+      {isAdding && (
+          <div className="mb-8 bg-white p-6 rounded-[2.5rem] border-4 border-gray-900 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] animate-scale-in">
+              <h3 className="text-xs font-black text-gray-400 uppercase mb-4 tracking-widest flex items-center gap-2">
+                  <i className="fas fa-magic text-eco-600"></i> Thêm khách hàng nhanh
+              </h3>
+              <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="md:col-span-1">
+                      <input 
+                          value={formData.name} 
+                          onChange={e => setFormData({ ...formData, name: e.target.value })}
+                          className="w-full p-3 bg-gray-50 border-2 border-gray-200 rounded-xl font-bold outline-none focus:border-black"
+                          placeholder="Họ và Tên khách *"
+                      />
                   </div>
-                  <div>
-                      <label className="text-[10px] font-black text-gray-400 uppercase mb-1 block ml-1">Số điện thoại</label>
-                      <input value={formData.phone} onChange={e => setFormData({ ...formData, phone: e.target.value })} className={vInputClass} placeholder="09xxxx" />
+                  <div className="md:col-span-1">
+                      <input 
+                          value={formData.phone} 
+                          onChange={e => setFormData({ ...formData, phone: e.target.value })}
+                          className="w-full p-3 bg-gray-50 border-2 border-gray-200 rounded-xl font-bold outline-none focus:border-black"
+                          placeholder="Số điện thoại"
+                      />
                   </div>
-                  <div>
-                      <label className="text-[10px] font-black text-gray-400 uppercase mb-1 block ml-1">Địa chỉ giao hàng</label>
-                      <div className="relative">
-                          <textarea value={formData.address} onChange={e => setFormData({ ...formData, address: e.target.value })} className={`${vInputClass} resize-none min-h-[80px]`} placeholder="Số nhà, đường..." />
-                          <button type="button" onClick={handleVerifyAddress} className="absolute right-3 top-3 text-red-500 hover:scale-110 transition-transform"><i className="fas fa-map-marker-alt"></i></button>
-                      </div>
+                  <div className="md:col-span-2 relative">
+                      <input 
+                          value={formData.address} 
+                          onChange={e => setFormData({ ...formData, address: e.target.value })}
+                          className="w-full p-3 bg-gray-50 border-2 border-gray-200 rounded-xl font-bold outline-none focus:border-black pr-12"
+                          placeholder="Địa chỉ giao hàng"
+                      />
+                      <button type="button" onClick={handleVerifyAddress} className="absolute right-3 top-2.5 w-8 h-8 text-red-500 hover:scale-110 transition-all">
+                          <i className={`fas ${isVerifyingAddr ? 'fa-circle-notch fa-spin' : 'fa-map-marker-alt'}`}></i>
+                      </button>
                   </div>
-                  <div>
-                      <label className="text-[10px] font-black text-gray-400 uppercase mb-1 block ml-1">Ưu tiên (1=Đầu tiên)</label>
-                      <input type="number" value={formData.priorityScore} onChange={e => setFormData({ ...formData, priorityScore: parseInt(e.target.value) })} className={`${vInputClass} text-eco-700`} />
-                  </div>
-                  <button type="submit" className="w-full bg-black text-white py-4 rounded-2xl font-black text-sm shadow-xl hover:bg-gray-800 transition-all uppercase tracking-widest mt-2">Lưu thông tin <i className="fas fa-user-plus ml-2"></i></button>
+                  <button type="submit" className="md:col-span-2 py-4 bg-eco-600 text-white rounded-2xl font-black uppercase tracking-widest shadow-xl shadow-eco-100 active:scale-95 transition-all">
+                      Lưu thông tin <i className="fas fa-check-circle ml-2"></i>
+                  </button>
               </form>
           </div>
-        </div>
-        
-        <div className="lg:col-span-8">
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden h-[700px] flex flex-col">
-                <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
-                    <div className="flex items-center gap-2">
-                        <h3 className="font-black text-gray-800 uppercase text-xs">Danh sách khách hàng</h3>
-                        <span className="bg-black text-white text-[10px] font-black px-2 py-0.5 rounded-full">{filteredCustomers.length}</span>
-                    </div>
-                    <div className="relative w-64">
-                        <input placeholder="Tìm nhanh..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full pl-8 pr-10 py-2.5 bg-white border-2 border-gray-800 rounded-xl text-xs font-black outline-none" />
-                        <i className="fas fa-search absolute left-3 top-3.5 text-gray-400 text-xs"></i>
-                        <button onClick={handleVoiceSearch} className="absolute right-2 top-2 w-7 h-7 flex items-center justify-center text-gray-400 hover:text-eco-600"><i className="fas fa-microphone"></i></button>
-                    </div>
-                </div>
-                
-                <div className="hidden sm:grid bg-gray-100 border-b border-gray-200 grid-cols-[60px_1fr_120px_1fr_40px] gap-4 px-4 py-3 text-[10px] font-black text-gray-500 uppercase tracking-widest">
-                    <div className="text-center">Tuyến</div>
-                    <div>Khách hàng</div>
-                    <div>Số điện thoại</div>
-                    <div>Địa chỉ</div>
-                    <div></div>
-                </div>
+      )}
 
-                <div className="flex-grow overflow-y-auto relative bg-gray-50/20" onScroll={handleScroll} ref={scrollContainerRef}>
-                    <div className="relative w-full" style={{ height: totalContentHeight }}>
-                        {visibleCustomers.map((c, index) => (
-                            <div key={c.id} className="absolute left-0 right-0 px-4 border-b border-gray-100 hover:bg-white transition-colors flex flex-col justify-center sm:grid sm:grid-cols-[60px_1fr_120px_1fr_40px] sm:gap-4 sm:items-center bg-white" style={{ top: topPadding + index * ROW_HEIGHT, height: ROW_HEIGHT }}>
-                                <div className="order-2 sm:order-1 sm:text-center">
-                                    <input type="number" className="w-12 text-center bg-gray-100 border-2 border-transparent hover:border-gray-800 focus:border-gray-800 rounded px-1 py-1 font-black text-eco-700 outline-none text-xs transition-all" defaultValue={c.priorityScore || 999} onBlur={(e) => handleInlineUpdate(c, 'priorityScore', parseInt(e.target.value))} />
-                                </div>
-                                <div className="order-1 sm:order-2 flex-grow">
-                                    <input className="w-full bg-transparent border-none p-0 font-black text-gray-800 outline-none text-sm focus:ring-0 uppercase" defaultValue={c.name} onBlur={(e) => handleInlineUpdate(c, 'name', e.target.value)} />
-                                </div>
-                                <div className="sm:order-3 sm:col-start-3">
-                                    <input className="w-full bg-transparent border-none p-0 text-xs font-black text-gray-500 outline-none focus:ring-0" defaultValue={c.phone} onBlur={(e) => handleInlineUpdate(c, 'phone', e.target.value)} />
-                                </div>
-                                <div className="mb-2 sm:mb-0 sm:order-4 sm:col-start-4">
-                                    <input className="w-full bg-transparent border-none p-0 text-[11px] font-bold text-gray-400 outline-none focus:ring-0" defaultValue={c.address} placeholder="Chưa có địa chỉ" onBlur={(e) => handleInlineUpdate(c, 'address', e.target.value)} />
-                                </div>
-                                <div className="absolute top-4 right-4 sm:static sm:order-5">
-                                    <button onClick={() => handleDeleteClick(c.id)} className="w-8 h-8 rounded-full flex items-center justify-center text-gray-300 hover:text-red-500 transition-all"><i className="fas fa-trash-alt text-xs"></i></button>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            </div>
-        </div>
+      {/* CUSTOMER GRID */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {filteredCustomers.length === 0 ? (
+              <div className="col-span-full py-20 text-center text-gray-300">
+                  <i className="fas fa-user-slash text-6xl mb-4 opacity-20"></i>
+                  <p className="font-bold uppercase tracking-widest text-xs">Không tìm thấy khách hàng</p>
+              </div>
+          ) : (
+              filteredCustomers.map(customer => (
+                  <div 
+                    key={customer.id} 
+                    className="bg-white rounded-[2rem] border border-gray-100 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300 overflow-hidden group"
+                  >
+                      <div className="p-5">
+                          <div className="flex justify-between items-start mb-3">
+                              <div className="flex gap-3 items-center">
+                                  <div className="w-12 h-12 bg-gradient-to-br from-gray-100 to-gray-200 rounded-2xl flex items-center justify-center text-gray-500 font-black text-lg border-2 border-white shadow-inner group-hover:from-eco-500 group-hover:to-eco-600 group-hover:text-white transition-all">
+                                      {customer.name.charAt(0).toUpperCase()}
+                                  </div>
+                                  <div>
+                                      <input 
+                                          className="font-black text-gray-800 text-sm uppercase bg-transparent border-none p-0 outline-none w-full focus:text-eco-600"
+                                          defaultValue={customer.name}
+                                          onBlur={(e) => handleInlineUpdate(customer, 'name', e.target.value)}
+                                      />
+                                      <div className="flex items-center gap-2 mt-1">
+                                          <CustomerBadge count={customer.totalOrders || 0} isLegacy={customer.isLegacy} />
+                                          <span className="text-[10px] font-bold text-gray-400">{customer.totalOrders || 0} đơn</span>
+                                      </div>
+                                  </div>
+                              </div>
+                              <button 
+                                onClick={(e) => handleDeleteClick(customer.id, e)}
+                                className="w-8 h-8 rounded-full bg-gray-50 text-gray-300 hover:bg-red-50 hover:text-red-500 flex items-center justify-center transition-all opacity-0 group-hover:opacity-100"
+                              >
+                                  <i className="fas fa-trash-alt text-xs"></i>
+                              </button>
+                          </div>
+
+                          <div className="space-y-2 mb-4">
+                              <div className="flex items-center gap-3 p-2 bg-gray-50 rounded-xl border border-transparent hover:border-eco-100 transition-colors">
+                                  <i className="fas fa-phone-alt text-eco-600 text-xs w-4 text-center"></i>
+                                  <input 
+                                      className="text-xs font-black text-gray-700 bg-transparent border-none p-0 outline-none flex-grow"
+                                      defaultValue={customer.phone}
+                                      placeholder="Chưa có SĐT"
+                                      onBlur={(e) => handleInlineUpdate(customer, 'phone', e.target.value)}
+                                  />
+                              </div>
+                              <div className="flex items-start gap-3 p-2 bg-gray-50 rounded-xl border border-transparent hover:border-eco-100 transition-colors">
+                                  <i className="fas fa-map-marker-alt text-red-500 text-xs w-4 text-center mt-1"></i>
+                                  <textarea 
+                                      className="text-[11px] font-bold text-gray-500 bg-transparent border-none p-0 outline-none flex-grow resize-none leading-snug"
+                                      rows={2}
+                                      defaultValue={customer.address}
+                                      placeholder="Chưa có địa chỉ"
+                                      onBlur={(e) => handleInlineUpdate(customer, 'address', e.target.value)}
+                                  />
+                              </div>
+                          </div>
+
+                          <div className="grid grid-cols-4 gap-2">
+                              <button 
+                                onClick={() => contactActions.call(customer.phone)}
+                                className="h-10 rounded-xl bg-green-50 text-green-600 hover:bg-green-600 hover:text-white transition-all flex items-center justify-center border border-green-100"
+                                title="Gọi điện"
+                              >
+                                  <i className="fas fa-phone-alt"></i>
+                              </button>
+                              <button 
+                                onClick={() => contactActions.zalo(customer.phone)}
+                                className="h-10 rounded-xl bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white transition-all flex items-center justify-center border border-blue-100 font-black text-xs"
+                                title="Zalo"
+                              >
+                                  Z
+                              </button>
+                              <button 
+                                onClick={() => contactActions.sms(customer.phone)}
+                                className="h-10 rounded-xl bg-orange-50 text-orange-600 hover:bg-orange-600 hover:text-white transition-all flex items-center justify-center border border-orange-100"
+                                title="Gửi SMS"
+                              >
+                                  <i className="fas fa-comment-dots"></i>
+                              </button>
+                              <button 
+                                onClick={() => contactActions.maps(customer.address)}
+                                className="h-10 rounded-xl bg-red-50 text-red-500 hover:bg-red-600 hover:text-white transition-all flex items-center justify-center border border-red-100"
+                                title="Chỉ đường"
+                              >
+                                  <i className="fas fa-directions"></i>
+                              </button>
+                          </div>
+                      </div>
+                      <div className="bg-gray-50 px-5 py-2 border-t border-gray-50 flex justify-between items-center group-hover:bg-eco-50 transition-colors">
+                          <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Đã học dữ liệu</span>
+                          <div className="flex gap-1">
+                              {customer.priorityScore && customer.priorityScore < 100 && (
+                                  <span className="w-2 h-2 bg-yellow-400 rounded-full"></span>
+                              )}
+                              <span className="w-2 h-2 bg-eco-400 rounded-full"></span>
+                          </div>
+                      </div>
+                  </div>
+              ))
+          )}
       </div>
-      <ConfirmModal isOpen={showDeleteConfirm} title="Xóa khách hàng?" message="Hành động này sẽ xóa khách hàng khỏi danh bạ." onConfirm={confirmDelete} onCancel={() => setShowDeleteConfirm(false)} confirmLabel="Xóa" isDanger={true} />
+
+      <ConfirmModal 
+        isOpen={showDeleteConfirm} 
+        title="Xóa khách hàng?" 
+        message="Dữ liệu về khách hàng này sẽ bị gỡ bỏ khỏi danh bạ. Các đơn hàng cũ vẫn sẽ được giữ lại." 
+        onConfirm={confirmDelete} 
+        onCancel={() => setShowDeleteConfirm(false)} 
+        confirmLabel="Xóa vĩnh viễn" 
+        isDanger={true} 
+      />
     </div>
   );
 };
