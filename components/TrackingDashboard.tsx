@@ -2,7 +2,7 @@
 import React, { useEffect, useState, useMemo, useRef, useDeferredValue, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import { v4 as uuidv4 } from 'uuid';
-import { Order, OrderStatus, PaymentMethod, OrderItem, Product, Customer } from '../types';
+import { Order, OrderStatus, PaymentMethod, OrderItem, Product, Customer, ShopConfig, BankConfig } from '../types';
 import { storageService, normalizePhone, normalizeString } from '../services/storageService';
 import { pdfService } from '../services/pdfService';
 import { reconciliationService, ReconciliationResult } from '../services/reconciliationService';
@@ -13,6 +13,18 @@ import { generateDeliveryMessage } from '../services/geminiService';
 import { ProductDetailModal, ProductEditModal } from './InventoryManager';
 
 type SortOption = 'NEWEST' | 'ROUTE' | 'STATUS';
+
+const dataURLtoFile = (dataurl: string, filename: string) => {
+    const arr = dataurl.split(',');
+    const mime = arr[0].match(/:(.*?);/)?.[1];
+    const bstr = atob(arr[1]);
+    let n = bstr.length;
+    const u8arr = new Uint8Array(n);
+    while (n--) {
+        u8arr[n] = bstr.charCodeAt(n);
+    }
+    return new File([u8arr], filename, { type: mime });
+};
 
 const TrackingDashboard: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -82,6 +94,10 @@ const TrackingDashboard: React.FC = () => {
   const [detailOrder, setDetailOrder] = useState<Order | null>(null);
   const [visibleCount, setVisibleCount] = useState(20);
 
+  const qrImgRef = useRef<HTMLImageElement | null>(null);
+  const shopConfigRef = useRef<ShopConfig | null>(null);
+  const bankConfigRef = useRef<BankConfig | null>(null);
+
   const statusLabels: Record<OrderStatus, string> = { [OrderStatus.PENDING]: 'Chờ xử lý', [OrderStatus.PICKED_UP]: 'Đã lấy hàng', [OrderStatus.IN_TRANSIT]: 'Đang giao', [OrderStatus.DELIVERED]: 'Đã giao', [OrderStatus.CANCELLED]: 'Đã hủy' };
 
   useEffect(() => {
@@ -111,6 +127,21 @@ const TrackingDashboard: React.FC = () => {
   }, []);
 
   useEffect(() => {
+      if (qrState.isOpen && qrState.url) {
+          storageService.getShopConfig().then(c => shopConfigRef.current = c);
+          storageService.getBankConfig().then(c => bankConfigRef.current = c);
+          const img = new Image();
+          img.crossOrigin = "Anonymous";
+          img.src = qrState.url;
+          img.onload = () => {
+              qrImgRef.current = img;
+          };
+      } else {
+          qrImgRef.current = null;
+      }
+  }, [qrState.isOpen, qrState.url]);
+
+  useEffect(() => {
       const handleClickOutside = (event: MouseEvent) => {
           if (activeEditProductRow !== null && !(event.target as Element).closest('.product-dropdown-container')) setActiveEditProductRow(null);
           if (activeDropdown) {
@@ -124,21 +155,228 @@ const TrackingDashboard: React.FC = () => {
       return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [activeEditProductRow, activeDropdown]);
 
+  const handleViewDetail = (order: Order) => {
+      setDetailOrder(order);
+  };
+
+  const handleDeleteClick = useCallback((id: string) => { setDeleteId(id); setShowDeleteConfirm(true); }, []);
+  const handleEdit = useCallback((order: Order) => { setEditingOrder(JSON.parse(JSON.stringify(order))); setActiveEditProductRow(null); setDetailOrder(null); }, []);
+  const handleSplitBatch = useCallback(async (order: Order) => { await storageService.splitOrderToNextBatch(order.id, order.batchId); toast.success('Đã chuyển đơn sang lô sau!'); if(detailOrder?.id === order.id) setDetailOrder(null); }, [detailOrder]);
+
+  const handleShowQR = useCallback(async (order: Order) => { 
+      const bankConfig = await storageService.getBankConfig(); 
+      if (!bankConfig || !bankConfig.accountNo) { 
+          toast.error("Vui lòng cài đặt thông tin Ngân hàng trước."); 
+          return; 
+      } 
+      const desc = `DH ${order.id}`; 
+      const url = `https://img.vietqr.io/image/${bankConfig.bankId}-${bankConfig.accountNo}-${bankConfig.template || 'compact2'}.png?amount=${order.totalPrice}&addInfo=${encodeURIComponent(desc)}&accountName=${encodeURIComponent(String(bankConfig.accountName))}`; 
+      setQrState({ isOpen: true, url, order }); 
+  }, []);
+
+  const handleShareQR = async () => {
+        if (!qrState.url || !qrState.order) return;
+        const qrImg = qrImgRef.current;
+        if (!qrImg) {
+            toast.error("Đang tải ảnh QR, vui lòng đợi giây lát và thử lại.");
+            return;
+        }
+        const toastId = toast.loading("Đang tạo ảnh chi tiết...", { position: 'bottom-center' });
+        try {
+            const shopConfig = shopConfigRef.current;
+            const bankConfig = bankConfigRef.current;
+            const order = qrState.order;
+            const W = 800;
+            const qrSize = 500;
+            const qrRatio = qrImg.naturalWidth / qrImg.naturalHeight;
+            const drawHeight = qrSize / qrRatio; 
+            let H = 0;
+            H += 140; H += 40; H += 100; H += 40; H += drawHeight; H += 40; H += 120; H += 40; H += 60; H += (order.items.length * 50); H += 40; H += 120; H += 50;
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            if (!ctx) throw new Error("Canvas error");
+            canvas.width = W;
+            canvas.height = H;
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, W, H);
+            let cursorY = 0;
+            ctx.fillStyle = '#15803d'; 
+            ctx.fillRect(0, cursorY, W, 140);
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 40px Arial, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('QUÉT MÃ THANH TOÁN', W / 2, cursorY + 70);
+            ctx.fillStyle = '#374151';
+            ctx.font = 'bold 32px Arial, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
+            ctx.fillText((shopConfig?.shopName || 'ECOGO LOGISTICS').toUpperCase(), W / 2, cursorY + 140 + 20); 
+            cursorY += 140; cursorY += 40; 
+            ctx.fillStyle = '#f0fdf4'; 
+            if ((ctx as any).roundRect) {
+                ctx.beginPath();
+                (ctx as any).roundRect(100, cursorY, 600, 100, 20);
+                ctx.fill();
+            } else {
+                ctx.fillRect(100, cursorY, 600, 100);
+            }
+            ctx.strokeStyle = '#bbf7d0';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            ctx.fillStyle = '#15803d';
+            ctx.font = 'bold 60px Arial, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(`${new Intl.NumberFormat('vi-VN').format(order.totalPrice)}đ`, W / 2, cursorY + 50);
+            cursorY += 100; cursorY += 40;
+            ctx.drawImage(qrImg, (W - qrSize) / 2, cursorY, qrSize, drawHeight);
+            cursorY += drawHeight; cursorY += 40;
+            ctx.strokeStyle = '#e5e7eb';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([10, 10]);
+            ctx.beginPath();
+            ctx.moveTo(50, cursorY);
+            ctx.lineTo(W - 50, cursorY);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            cursorY += 40;
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+            ctx.font = 'normal 28px Arial, sans-serif';
+            ctx.fillStyle = '#6b7280';
+            ctx.fillText('Mã đơn hàng:', 80, cursorY);
+            ctx.font = 'bold 28px Arial, sans-serif';
+            ctx.fillStyle = '#111827';
+            ctx.fillText(`#${order.id}`, 300, cursorY);
+            cursorY += 50;
+            ctx.font = 'normal 28px Arial, sans-serif';
+            ctx.fillStyle = '#6b7280';
+            ctx.fillText('Khách hàng:', 80, cursorY);
+            ctx.font = 'bold 28px Arial, sans-serif';
+            ctx.fillStyle = '#111827';
+            ctx.fillText(order.customerName, 300, cursorY);
+            cursorY += 70;
+            ctx.fillStyle = '#f3f4f6';
+            ctx.fillRect(50, cursorY, 700, 40);
+            ctx.fillStyle = '#374151';
+            ctx.font = 'bold 24px Arial, sans-serif';
+            ctx.textAlign = 'left'; 
+            ctx.fillText('Chi tiết hàng hóa', 70, cursorY + 8);
+            cursorY += 50;
+            ctx.font = 'normal 26px Arial, sans-serif';
+            ctx.textBaseline = 'middle'; 
+            order.items.forEach((item, index) => {
+                const rowCenterY = cursorY + 20; 
+                let name = item.name;
+                if (name.length > 35) name = name.substring(0, 32) + "...";
+                ctx.fillStyle = '#1f2937';
+                ctx.textAlign = 'left';
+                ctx.fillText(`${index + 1}. ${name}`, 70, rowCenterY);
+                ctx.textAlign = 'right';
+                ctx.font = 'bold 26px Arial, sans-serif';
+                ctx.fillText(`x${item.quantity}`, 730, rowCenterY);
+                ctx.font = 'normal 26px Arial, sans-serif'; 
+                ctx.beginPath();
+                ctx.strokeStyle = '#f3f4f6';
+                ctx.lineWidth = 1;
+                ctx.setLineDash([]);
+                ctx.moveTo(70, cursorY + 45);
+                ctx.lineTo(730, cursorY + 45);
+                ctx.stroke();
+                cursorY += 50;
+            });
+            cursorY += 40;
+            if (bankConfig) {
+                const footerY = cursorY;
+                ctx.fillStyle = '#f9fafb';
+                ctx.fillRect(0, footerY, W, 120);
+                ctx.fillStyle = '#4b5563';
+                ctx.font = 'italic 24px Arial, sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'top';
+                ctx.fillText(`Ngân hàng: ${bankConfig.bankId} - STK: ${bankConfig.accountNo}`, W / 2, footerY + 30);
+                ctx.fillText(`Chủ TK: ${bankConfig.accountName}`, W / 2, footerY + 70);
+            }
+            const dataUrl = canvas.toDataURL('image/png');
+            const file = dataURLtoFile(dataUrl, `pay-${order.id}.png`);
+            if (navigator.share) {
+                await navigator.share({
+                    files: [file],
+                    title: `Thanh toán #${order.id}`,
+                    text: `Chi tiết thanh toán đơn hàng ${order.customerName}`
+                });
+                toast.success("Đã mở chia sẻ!");
+            } else {
+                const a = document.createElement('a');
+                a.href = dataUrl;
+                a.download = `pay-${order.id}.png`;
+                a.click();
+                toast.success("Đã tải ảnh xuống");
+            }
+            toast.dismiss(toastId);
+        } catch (e: any) {
+            console.error(e);
+            toast.dismiss(toastId);
+            toast.error("Không thể tạo ảnh chia sẻ: " + e.message);
+        }
+    };
+
+  const handleDetailAction = {
+      call: () => window.open(`tel:${detailOrder?.customerPhone}`, '_self'),
+      sms: async () => { if(detailOrder) { const msg = await generateDeliveryMessage(detailOrder); const ua = navigator.userAgent.toLowerCase(); const isIOS = ua.indexOf('iphone') > -1 || ua.indexOf('ipad') > -1; const separator = isIOS ? '&' : '?'; window.open(`sms:${detailOrder.customerPhone}${separator}body=${encodeURIComponent(msg)}`, '_self'); } },
+      zalo: () => { if(detailOrder) window.open(`https://zalo.me/${detailOrder.customerPhone.replace(/^0/,'84')}`, '_blank'); },
+      print: () => { if(detailOrder) { const printWindow = window.open('', '_blank'); if (!printWindow) return; const itemsStr = detailOrder.items.map(i => `<tr><td style="padding:8px;border:1px solid #000;font-weight:bold;">${i.name}</td><td style="padding:8px;border:1px solid #000;text-align:center;">${i.quantity}</td><td style="padding:8px;border:1px solid #000;text-align:right;">${new Intl.NumberFormat('vi-VN').format(i.price)}</td><td style="padding:8px;border:1px solid #000;text-align:right;font-weight:bold;">${new Intl.NumberFormat('vi-VN').format(i.price * i.quantity)}</td></tr>`).join(''); const htmlContent = `<html><head><title>Phiếu #${detailOrder.id}</title><style>body { font-family: 'Helvetica', sans-serif; padding: 20px; font-size: 14px; color: #000; }h2 { text-align:center; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 20px; }table { width: 100%; border-collapse: collapse; margin-top: 20px; }th { border: 1px solid #000; padding: 10px; background: #fff; text-align: left; font-weight: bold; text-transform: uppercase; }.info { margin-bottom: 5px; font-size: 15px; }.label { display:inline-block; width: 80px; font-weight: bold; }.total-row td { border-top: 2px solid #000; font-size: 16px; font-weight: bold; padding: 15px 5px; }</style></head><body><h2>PHIẾU GIAO HÀNG #${detailOrder.id}</h2><div class="info"><span class="label">Khách:</span> <b>${detailOrder.customerName}</b></div><div class="info"><span class="label">SĐT:</span> ${detailOrder.customerPhone}</div><div class="info"><span class="label">Địa chỉ:</span> ${detailOrder.address}</div>${detailOrder.notes ? `<div class="info" style="margin-top:10px;font-style:italic;">Ghi chú: ${detailOrder.notes}</div>` : ''}<table><thead><tr><th>Sản phẩm</th><th style="width:50px;text-align:center;">SL</th><th style="text-align:right;">Đơn giá</th><th style="text-align:right;">Thành tiền</th></tr></thead><tbody>${itemsStr}<tr class="total-row"><td colspan="3" style="text-align:right;">TỔNG CỘNG:</td><td style="text-align:right;">${new Intl.NumberFormat('vi-VN').format(detailOrder.totalPrice)}đ</td></tr></tbody></table><div style="margin-top: 40px; border-top: 1px dashed #000; padding-top: 10px; text-align: center; font-size: 12px; font-style: italic;">Cảm ơn quý khách!</div></body></html>`; printWindow.document.write(htmlContent); printWindow.document.close(); printWindow.print(); } },
+      delete: () => { if(detailOrder) { handleDeleteClick(detailOrder.id); setDetailOrder(null); } },
+      edit: () => { if(detailOrder) { setEditingOrder(JSON.parse(JSON.stringify(detailOrder))); setDetailOrder(null); } },
+      setStatus: async (status: OrderStatus) => { if(detailOrder) { await storageService.updateStatus(detailOrder.id, status, undefined, {name: detailOrder.customerName, address: detailOrder.address}); setDetailOrder({...detailOrder, status}); } },
+      confirmPayment: async ( ) => { if(detailOrder) { await storageService.updatePaymentVerification(detailOrder.id, true, { name: detailOrder.customerName }); setDetailOrder({...detailOrder, paymentVerified: true}); toast.success("Đã xác nhận thanh toán"); } },
+      splitBatch: () => { if(detailOrder) { handleSplitBatch(detailOrder); } },
+      showQR: () => { if(detailOrder) handleShowQR(detailOrder); }
+  };
+
+  const toggleFilter = (type: 'STATUS' | 'BATCH', value: any) => { 
+      if (type === 'STATUS') { 
+          const statusValue = value as OrderStatus; 
+          setFilterStatus(prev => { 
+              if (prev.includes(statusValue)) { 
+                  return prev.filter(s => s !== statusValue); 
+              } 
+              return [...prev, statusValue]; 
+          }); 
+      } 
+      if (type === 'BATCH') { 
+          const batchValue = String(value); 
+          setFilterBatch(prev => { 
+              if (prev.includes(batchValue)) { 
+                  return prev.filter(b => b !== batchValue); 
+              } 
+              return [...prev, batchValue]; 
+          }); 
+      } 
+  };
+
+  const getLabel = (type: 'STATUS' | 'BATCH') => { 
+      if (type === 'STATUS') return filterStatus.length === 0 ? 'Trạng thái' : (filterStatus.length === 1 ? statusLabels[filterStatus[0]] : `Đã chọn (${filterStatus.length})`); 
+      if (type === 'BATCH') return filterBatch.length === 0 ? 'Lô: Tất cả' : (filterBatch.length === 1 ? filterBatch[0] : `Lô (${filterBatch.length})`); 
+      return ''; 
+  };
+
+  const openDropdown = (type: 'STATUS' | 'BATCH') => { 
+      const ref = type === 'STATUS' ? statusDropdownBtnRef : batchDropdownBtnRef; 
+      if (ref.current) { 
+          const rect = ref.current.getBoundingClientRect(); 
+          setDropdownPos({ top: rect.bottom + 4, left: rect.left, width: Math.max(rect.width, 160) }); 
+          setActiveDropdown(activeDropdown === type ? null : type); 
+      } 
+  };
+
   const batches = useMemo(() => {
     const batchActivity = new Map<string, number>();
     orders.forEach(o => { if (o.batchId) batchActivity.set(o.batchId, Math.max(batchActivity.get(o.batchId) || 0, o.createdAt)); });
     return Array.from(batchActivity.entries()).sort((a, b) => b[1] - a[1]).map(entry => entry[0]).slice(0, 50);
   }, [orders]);
 
-  const newCustomerMap = useMemo(() => {
-      const map: Record<string, boolean> = {};
-      orders.forEach(o => {
-          const key = o.id; 
-          map[key] = storageService.isNewCustomer(o.customerPhone, o.address, o.customerId);
-      });
-      return map;
-  }, [orders, customers]);
-  
   const customerMap = useMemo(() => {
       const map = new Map<string, Customer>();
       customers.forEach(c => map.set(c.id, c));
@@ -156,11 +394,8 @@ const TrackingDashboard: React.FC = () => {
     let result = orders.filter(o => {
       const statusMatch = filterStatus.length === 0 || filterStatus.includes(o.status);
       const batchMatch = filterBatch.length === 0 || (o.batchId && filterBatch.includes(o.batchId));
-      
       if (!statusMatch || !batchMatch) return false;
-
       if (!deferredSearchTerm) return true;
-
       const term = normalizeString(deferredSearchTerm);
       return normalizeString(o.customerName).includes(term) || 
              normalizePhone(o.customerPhone).includes(term) || 
@@ -226,8 +461,7 @@ const TrackingDashboard: React.FC = () => {
   const confirmMoveBatch = async () => { if (!moveBatchData.targetBatch.trim()) { toast.error("Vui lòng nhập tên lô hàng"); return; } const ids = Array.from(selectedOrderIds) as string[]; await storageService.moveOrdersBatch(ids, moveBatchData.targetBatch); toast.success(`Đã chuyển ${ids.length} đơn sang lô: ${moveBatchData.targetBatch}`); setMoveBatchData({ isOpen: false, targetBatch: '' }); clearSelection(); };
 
   const doVoiceSearch = () => {
-      // @ts-ignore
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       if (!SpeechRecognition) { toast.error("Trình duyệt không hỗ trợ"); return; }
       const recognition = new SpeechRecognition();
       recognition.lang = 'vi-VN';
@@ -239,11 +473,8 @@ const TrackingDashboard: React.FC = () => {
 
   const handleRenameBatch = async () => { if (filterBatch.length !== 1) return; const oldName = String(filterBatch[0]); const newName = prompt(`Nhập tên mới cho lô: ${oldName}`, oldName); if (newName && newName !== oldName) { await storageService.renameBatch(oldName, newName); toast.success(`Đã đổi tên lô thành: ${newName}`); setFilterBatch([newName]); } };
 
-  const handleUpdate = useCallback((updatedOrder: Order) => {}, []);
-  const handleDeleteClick = useCallback((id: string) => { setDeleteId(id); setShowDeleteConfirm(true); }, []);
   const confirmDelete = async () => { if (deleteId) { const id = deleteId as string; const orderToDelete = orders.find(o => o.id === id); if (orderToDelete) { for (const item of orderToDelete.items) { if (item.productId) { const product = products.find(p => p.id === item.productId); if (product) { const currentStock = Number(product.stockQuantity) || 0; const restoreQty = Number(item.quantity) || 0; await storageService.saveProduct({ ...product, stockQuantity: currentStock + restoreQty }); } } } await storageService.deleteOrder(id, { name: orderToDelete.customerName, address: orderToDelete.address }); } toast.success('Đã xóa đơn & Hoàn kho'); setShowDeleteConfirm(false); setDeleteId(null); if(detailOrder?.id === id) setDetailOrder(null); } };
   
-  const handleEdit = useCallback((order: Order) => { setEditingOrder(JSON.parse(JSON.stringify(order))); setActiveEditProductRow(null); setDetailOrder(null); }, []);
   const saveEdit = async (e: React.FormEvent) => { e.preventDefault(); if (editingOrder) { await storageService.updateOrderDetails(editingOrder); setEditingOrder(null); toast.success('Đã lưu thay đổi'); } };
   const updateEditItem = (index: number, field: keyof OrderItem, value: any) => { if (!editingOrder) return; const newItems = [...editingOrder.items]; newItems[index] = { ...newItems[index], [field]: value }; if (field === 'name') newItems[index].productId = undefined; const newTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0); setEditingOrder({ ...editingOrder, items: newItems, totalPrice: newTotal }); };
   
@@ -265,12 +496,9 @@ const TrackingDashboard: React.FC = () => {
   const addEditItem = () => { if (!editingOrder) return; const newItems = [...editingOrder.items, { id: uuidv4(), name: '', quantity: 1, price: 0 }]; setEditingOrder({ ...editingOrder, items: newItems }); };
   const removeEditItem = (index: number) => { if (!editingOrder) return; const newItems = [...editingOrder.items]; newItems.splice(index, 1); const newTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0); setEditingOrder({ ...editingOrder, items: newItems, totalPrice: newTotal }); };
   
-  const handleSplitBatch = useCallback(async (order: Order) => { await storageService.splitOrderToNextBatch(order.id, order.batchId); toast.success('Đã chuyển đơn sang lô sau!'); if(detailOrder?.id === order.id) setDetailOrder(null); }, [detailOrder]);
-  
   const handleSmartRouteSort = async (sortedOrders: Order[]) => { const reindexed = sortedOrders.map((o, idx) => ({ ...o, orderIndex: idx })); await storageService.saveOrdersList(reindexed); setOrders(prev => { const orderMap = new Map(prev.map(o => [o.id, o])); reindexed.forEach(ro => { if(orderMap.has(ro.id)) { orderMap.set(ro.id, ro); } }); return Array.from(orderMap.values()); }); setSortBy('ROUTE'); };
   const saveReorderedList = async (newSortedList: Order[]) => { const reindexedList = newSortedList.map((o, idx) => ({ ...o, orderIndex: idx })); const newMainOrders = orders.map(o => { const found = reindexedList.find(ro => ro.id === o.id); return found ? found : o; }); setOrders(newMainOrders); await storageService.saveOrdersList(reindexedList); await storageService.learnRoutePriority(reindexedList); toast.success("Đã học lộ trình mới!", { icon: '🧠', duration: 2000 }); };
   
-  // Drag handlers
   const handleTouchStart = useCallback((e: React.TouchEvent<HTMLDivElement>, position: number) => { if (sortBy !== 'ROUTE') return; dragItem.current = position; e.currentTarget.closest('.order-row')?.classList.add('opacity-50', 'bg-yellow-50'); }, [sortBy]);
   const handleTouchMove = useCallback((e: React.TouchEvent<HTMLDivElement>) => { if (sortBy !== 'ROUTE') return; if (dragItem.current === null) return; const touch = e.touches[0]; const element = document.elementFromPoint(touch.clientX, touch.clientY); const row = element?.closest('[data-index]'); if (row) { const newIndex = parseInt(row.getAttribute('data-index') || '-1'); if (newIndex !== -1 && newIndex !== dragItem.current) { const _orders = [...visibleOrders]; const draggedItemContent = _orders[dragItem.current]; _orders.splice(dragItem.current, 1); _orders.splice(newIndex, 0, draggedItemContent); dragItem.current = newIndex; saveReorderedList(_orders); } } }, [sortBy, visibleOrders]);
   const handleTouchEnd = useCallback((e: React.TouchEvent<HTMLDivElement>,) => { dragItem.current = null; document.querySelectorAll('.order-row').forEach(r => r.classList.remove('opacity-50', 'bg-yellow-50')); }, []);
@@ -280,7 +508,6 @@ const TrackingDashboard: React.FC = () => {
       e.currentTarget.closest('.order-row')?.classList.add('opacity-40', 'scale-95'); 
       if (e.dataTransfer) e.dataTransfer.effectAllowed = "move"; 
   };
-  
   const handleDragEnter = (e: React.DragEvent<HTMLDivElement>, index: number) => { 
       dragOverItem.current = index; 
       e.preventDefault(); 
@@ -321,179 +548,8 @@ const TrackingDashboard: React.FC = () => {
   };
   const confirmReconciliation = async () => { if (!reconcileResult || reconcileResult.matchedOrders.length === 0) return; const promises = reconcileResult.matchedOrders.map(order => storageService.updatePaymentVerification(order.id, true, { name: order.customerName })); await Promise.all(promises); toast.success(`Đã xác nhận thanh toán cho ${reconcileResult.matchedOrders.length} đơn!`); setShowReconcileModal(false); setReconcileResult(null); };
 
-  const handleShowQR = useCallback(async (order: Order) => { 
-      const bankConfig = await storageService.getBankConfig(); 
-      if (!bankConfig || !bankConfig.accountNo) { 
-          toast.error("Vui lòng cài đặt thông tin Ngân hàng trước."); 
-          return; 
-      } 
-      
-      const desc = `DH ${order.id}`; 
-      
-      const url = `https://img.vietqr.io/image/${bankConfig.bankId}-${bankConfig.accountNo}-${bankConfig.template || 'compact2'}.png?amount=${order.totalPrice}&addInfo=${encodeURIComponent(desc)}&accountName=${encodeURIComponent(bankConfig.accountName)}`; 
-      setQrState({ isOpen: true, url, order }); 
-  }, []);
-
   const handleConfirmQrPayment = async () => { if (qrState.order) { await storageService.updatePaymentVerification(qrState.order.id, true, { name: qrState.order.customerName }); toast.success("Đã xác nhận thanh toán!"); setQrState(prev => ({ ...prev, isOpen: false })); if(detailOrder?.id === qrState.order.id) { setDetailOrder({...detailOrder, paymentVerified: true}); } } };
   
-  const handleShareQR = async () => {
-        if (!qrState.url || !qrState.order) return;
-        const toastId = toast.loading("Đang tạo ảnh chi tiết...", { position: 'bottom-center' });
-        try {
-            const shopConfig = await storageService.getShopConfig();
-            const bankConfig = await storageService.getBankConfig();
-            const order = qrState.order;
-            
-            const qrImg = new Image();
-            qrImg.crossOrigin = "Anonymous";
-            qrImg.src = qrState.url;
-            await new Promise((resolve, reject) => {
-                qrImg.onload = resolve;
-                qrImg.onerror = reject;
-            });
-
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
-            if (!ctx) throw new Error("Canvas error");
-
-            const W = 800;
-            const H = 1200;
-            canvas.width = W;
-            canvas.height = H;
-
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(0, 0, W, H);
-            
-            const headerHeight = 140;
-            ctx.fillStyle = '#15803d'; 
-            ctx.fillRect(0, 0, W, headerHeight);
-            
-            ctx.fillStyle = '#ffffff';
-            ctx.font = 'bold 40px Arial, sans-serif';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText('QUÉT MÃ THANH TOÁN', W / 2, headerHeight / 2);
-
-            ctx.fillStyle = '#374151';
-            ctx.font = 'bold 32px Arial, sans-serif';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'top';
-            ctx.fillText((shopConfig?.shopName || 'ECOGO LOGISTICS').toUpperCase(), W / 2, headerHeight + 40);
-
-            const amountBoxY = headerHeight + 100;
-            ctx.fillStyle = '#f0fdf4'; 
-            if ((ctx as any).roundRect) {
-                ctx.beginPath();
-                (ctx as any).roundRect(100, amountBoxY, 600, 100, 20);
-                ctx.fill();
-            } else {
-                ctx.fillRect(100, amountBoxY, 600, 100);
-            }
-            
-            ctx.strokeStyle = '#bbf7d0';
-            ctx.lineWidth = 2;
-            ctx.stroke();
-
-            ctx.fillStyle = '#15803d';
-            ctx.font = 'bold 60px Arial, sans-serif';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(`${new Intl.NumberFormat('vi-VN').format(order.totalPrice)}đ`, W / 2, amountBoxY + 50);
-
-            const qrY = amountBoxY + 140;
-            const qrSize = 500;
-            ctx.drawImage(qrImg, (W - qrSize) / 2, qrY, qrSize, qrSize);
-
-            const dividerY = qrY + qrSize + 40;
-            ctx.strokeStyle = '#e5e7eb';
-            ctx.lineWidth = 2;
-            ctx.setLineDash([10, 10]);
-            ctx.beginPath();
-            ctx.moveTo(50, dividerY);
-            ctx.lineTo(W - 50, dividerY);
-            ctx.stroke();
-            ctx.setLineDash([]);
-
-            const infoY = dividerY + 50;
-            ctx.fillStyle = '#1f2937';
-            ctx.textAlign = 'left';
-            ctx.textBaseline = 'top';
-            
-            ctx.font = 'normal 28px Arial, sans-serif';
-            ctx.fillStyle = '#6b7280';
-            ctx.fillText('Mã đơn hàng:', 80, infoY);
-            ctx.font = 'bold 28px Arial, sans-serif';
-            ctx.fillStyle = '#111827';
-            ctx.fillText(`#${order.id}`, 300, infoY);
-
-            const row2Y = infoY + 50;
-            ctx.font = 'normal 28px Arial, sans-serif';
-            ctx.fillStyle = '#6b7280';
-            ctx.fillText('Khách hàng:', 80, row2Y);
-            ctx.font = 'bold 28px Arial, sans-serif';
-            ctx.fillStyle = '#111827';
-            ctx.fillText(order.customerName, 300, row2Y);
-
-            if (bankConfig) {
-                const footerY = H - 120;
-                ctx.fillStyle = '#f9fafb';
-                ctx.fillRect(0, footerY, W, 120);
-                ctx.fillStyle = '#4b5563';
-                ctx.font = 'italic 24px Arial, sans-serif';
-                ctx.textAlign = 'center';
-                ctx.fillText(`Ngân hàng: ${bankConfig.bankId} - STK: ${bankConfig.accountNo}`, W / 2, footerY + 40);
-                ctx.fillText(`Chủ TK: ${bankConfig.accountName}`, W / 2, footerY + 80);
-            }
-
-            canvas.toBlob(async (blob) => {
-                if (blob) {
-                    const file = new File([blob], `pay-${order.id}.png`, { type: 'image/png' });
-                    if (navigator.share) {
-                        await navigator.share({
-                            files: [file],
-                            title: `Thanh toán #${order.id}`,
-                            text: `Chi tiết thanh toán đơn hàng ${order.customerName}`
-                        });
-                        toast.success("Đã mở chia sẻ!");
-                    } else {
-                        const a = document.createElement('a');
-                        a.href = URL.createObjectURL(blob);
-                        a.download = `pay-${order.id}.png`;
-                        a.click();
-                        toast.success("Đã tải ảnh xuống");
-                    }
-                }
-                toast.dismiss(toastId);
-            });
-
-        } catch (e: any) {
-            console.error(e);
-            toast.dismiss(toastId);
-            toast.error("Không thể tạo ảnh chia sẻ: " + e.message);
-        }
-    };
-
-  const toggleFilter = (type: 'STATUS' | 'BATCH', value: any) => { if (type === 'STATUS') { const statusValue = value as OrderStatus; setFilterStatus(prev => { if (prev.includes(statusValue)) { return prev.filter(s => s !== statusValue); } return [...prev, statusValue]; }); } if (type === 'BATCH') { const batchValue = String(value); setFilterBatch(prev => { if (prev.includes(batchValue)) { return prev.filter(b => b !== batchValue); } return [...prev, batchValue]; }); } };
-  const getLabel = (type: 'STATUS' | 'BATCH') => { if (type === 'STATUS') return filterStatus.length === 0 ? 'Trạng thái' : (filterStatus.length === 1 ? statusLabels[filterStatus[0]] : `Đã chọn (${filterStatus.length})`); if (type === 'BATCH') return filterBatch.length === 0 ? 'Lô: Tất cả' : (filterBatch.length === 1 ? filterBatch[0] : `Lô (${filterBatch.length})`); return ''; };
-  const openDropdown = (type: 'STATUS' | 'BATCH') => { const ref = type === 'STATUS' ? statusDropdownBtnRef : batchDropdownBtnRef; if (ref.current) { const rect = ref.current.getBoundingClientRect(); setDropdownPos({ top: rect.bottom + 4, left: rect.left, width: Math.max(rect.width, 160) }); setActiveDropdown(activeDropdown === type ? null : type); } };
-
-  const handleViewDetail = (order: Order) => {
-      setDetailOrder(order);
-  };
-
-  const handleDetailAction = {
-      call: () => window.open(`tel:${detailOrder?.customerPhone}`, '_self'),
-      sms: async () => { if(detailOrder) { const msg = await generateDeliveryMessage(detailOrder); const ua = navigator.userAgent.toLowerCase(); const isIOS = ua.indexOf('iphone') > -1 || ua.indexOf('ipad') > -1; const separator = isIOS ? '&' : '?'; window.open(`sms:${detailOrder.customerPhone}${separator}body=${encodeURIComponent(msg)}`, '_self'); } },
-      zalo: () => { if(detailOrder) window.open(`https://zalo.me/${detailOrder.customerPhone.replace(/^0/,'84')}`, '_blank'); },
-      print: () => { if(detailOrder) { const printWindow = window.open('', '_blank'); if (!printWindow) return; const itemsStr = detailOrder.items.map(i => `<tr><td style="padding:8px;border:1px solid #000;font-weight:bold;">${i.name}</td><td style="padding:8px;border:1px solid #000;text-align:center;">${i.quantity}</td><td style="padding:8px;border:1px solid #000;text-align:right;">${new Intl.NumberFormat('vi-VN').format(i.price)}</td><td style="padding:8px;border:1px solid #000;text-align:right;font-weight:bold;">${new Intl.NumberFormat('vi-VN').format(i.price * i.quantity)}</td></tr>`).join(''); const htmlContent = `<html><head><title>Phiếu #${detailOrder.id}</title><style>body { font-family: 'Helvetica', sans-serif; padding: 20px; font-size: 14px; color: #000; }h2 { text-align:center; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 20px; }table { width: 100%; border-collapse: collapse; margin-top: 20px; }th { border: 1px solid #000; padding: 10px; background: #fff; text-align: left; font-weight: bold; text-transform: uppercase; }.info { margin-bottom: 5px; font-size: 15px; }.label { display:inline-block; width: 80px; font-weight: bold; }.total-row td { border-top: 2px solid #000; font-size: 16px; font-weight: bold; padding: 15px 5px; }</style></head><body><h2>PHIẾU GIAO HÀNG #${detailOrder.id}</h2><div class="info"><span class="label">Khách:</span> <b>${detailOrder.customerName}</b></div><div class="info"><span class="label">SĐT:</span> ${detailOrder.customerPhone}</div><div class="info"><span class="label">Địa chỉ:</span> ${detailOrder.address}</div>${detailOrder.notes ? `<div class="info" style="margin-top:10px;font-style:italic;">Ghi chú: ${detailOrder.notes}</div>` : ''}<table><thead><tr><th>Sản phẩm</th><th style="width:50px;text-align:center;">SL</th><th style="text-align:right;">Đơn giá</th><th style="text-align:right;">Thành tiền</th></tr></thead><tbody>${itemsStr}<tr class="total-row"><td colspan="3" style="text-align:right;">TỔNG CỘNG:</td><td style="text-align:right;">${new Intl.NumberFormat('vi-VN').format(detailOrder.totalPrice)}đ</td></tr></tbody></table><div style="margin-top: 40px; border-top: 1px dashed #000; padding-top: 10px; text-align: center; font-size: 12px; font-style: italic;">Cảm ơn quý khách!</div></body></html>`; printWindow.document.write(htmlContent); printWindow.document.close(); printWindow.print(); } },
-      delete: () => { if(detailOrder) { handleDeleteClick(detailOrder.id); setDetailOrder(null); } },
-      edit: () => { if(detailOrder) { setEditingOrder(JSON.parse(JSON.stringify(detailOrder))); setDetailOrder(null); } },
-      setStatus: async (status: OrderStatus) => { if(detailOrder) { await storageService.updateStatus(detailOrder.id, status, undefined, {name: detailOrder.customerName, address: detailOrder.address}); setDetailOrder({...detailOrder, status}); } },
-      confirmPayment: async () => { if(detailOrder) { await storageService.updatePaymentVerification(detailOrder.id, true, { name: detailOrder.customerName }); setDetailOrder({...detailOrder, paymentVerified: true}); toast.success("Đã xác nhận thanh toán"); } },
-      splitBatch: () => { if(detailOrder) { handleSplitBatch(detailOrder); } },
-      showQR: () => { if(detailOrder) handleShowQR(detailOrder); }
-  };
-
   return (
     <div className="animate-fade-in pb-32">
       <div className="sticky top-16 z-30 bg-gray-50/95 backdrop-blur-sm transition-shadow shadow-sm">
@@ -562,14 +618,13 @@ const TrackingDashboard: React.FC = () => {
       </div>
       
       {isCompactMode && (
-          <div className="sticky top-[148px] z-20 bg-gray-100 border-b border-gray-200 hidden sm:grid grid-cols-[40px_1.5fr_2fr_2fr_100px_110px_50px] gap-2 px-3 py-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider select-none shadow-sm">
+          <div className={`sticky ${isHeaderVisible ? 'top-[148px]' : 'top-[112px]'} z-20 bg-gray-100 border-b border-gray-200 hidden sm:grid grid-cols-[40px_1.5fr_2fr_3.5fr_100px_110px] gap-2 px-3 py-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider select-none shadow-sm transition-all duration-300`}>
               <div className="flex items-center justify-center">#</div>
               <div>Khách hàng / SĐT</div>
               <div>Địa chỉ</div>
               <div>Hàng hóa</div>
               <div className="text-right">Tổng tiền</div>
               <div className="text-center">Trạng thái</div>
-              <div className="text-center">Thao tác</div>
           </div>
       )}
 
@@ -891,7 +946,6 @@ const TrackingDashboard: React.FC = () => {
                     <h3 className="font-bold text-lg text-gray-800">Đối soát Ngân hàng (Beta)</h3>
                     <button onClick={() => { setShowReconcileModal(false); setReconcileResult(null); }} className="text-gray-400 hover:text-gray-600"><i className="fas fa-times"></i></button>
                 </div>
-                
                 <div className="p-6 flex-grow overflow-y-auto">
                     {!reconcileResult ? (
                         <div className="flex flex-col items-center justify-center h-48 space-y-4">
@@ -918,7 +972,6 @@ const TrackingDashboard: React.FC = () => {
                                     <div className="text-xl font-black text-green-800">{new Intl.NumberFormat('vi-VN').format(reconcileResult.totalMatchedAmount)}đ</div>
                                 </div>
                             </div>
-                            
                             <div className="max-h-60 overflow-y-auto border border-gray-100 rounded-xl">
                                 {reconcileResult.matchedOrders.map(o => (
                                     <div key={o.id} className="p-3 border-b border-gray-100 last:border-0 flex justify-between items-center text-sm">
@@ -932,7 +985,6 @@ const TrackingDashboard: React.FC = () => {
                                     </div>
                                 ))}
                             </div>
-                            
                             {reconcileResult.matchedOrders.length > 0 && (
                                 <button 
                                     onClick={confirmReconciliation}
@@ -941,7 +993,6 @@ const TrackingDashboard: React.FC = () => {
                                     Xác nhận Đã Thanh Toán ({reconcileResult.matchedOrders.length})
                                 </button>
                             )}
-                            
                             <button 
                                 onClick={() => setReconcileResult(null)}
                                 className="w-full py-3 bg-gray-100 text-gray-600 font-bold rounded-xl hover:bg-gray-200 transition-colors"
@@ -1027,13 +1078,12 @@ const TrackingDashboard: React.FC = () => {
                         {new Intl.NumberFormat('vi-VN').format(qrState.order.totalPrice)}<span className="text-sm text-gray-500 font-medium align-top">đ</span>
                     </div>
                     <div className="text-sm text-gray-500 font-medium mb-6">{qrState.order.customerName}</div>
-                    
                     <div className="grid grid-cols-2 gap-3 w-full">
                         <button onClick={handleShareQR} className="py-3 bg-white border border-gray-200 text-gray-700 font-bold rounded-xl hover:bg-gray-50 transition-colors flex items-center justify-center gap-2">
                             <i className="fas fa-share-alt"></i> Chia sẻ Ảnh
                         </button>
                         <button onClick={handleConfirmQrPayment} className="py-3 bg-eco-600 text-white font-bold rounded-xl hover:bg-eco-700 transition-colors shadow-lg shadow-eco-200 flex items-center justify-center gap-2">
-                            <i className="fas fa-check"></i> Đã nhận tiền
+                            <i className="fas fa-check"></i> Xác nhận tiền về
                         </button>
                     </div>
                 </div>
@@ -1064,7 +1114,7 @@ const TrackingDashboard: React.FC = () => {
                 <div key={order.id} data-index={index} className={`relative transition-all duration-200 order-row ${isCompactMode ? '' : 'flex-grow h-full'}`}>
                     <OrderCard 
                         order={order} 
-                        onUpdate={handleUpdate} 
+                        onUpdate={() => {}} 
                         onDelete={handleDeleteClick} 
                         onEdit={handleEdit} 
                         isSortMode={sortBy === 'ROUTE'} 
@@ -1076,7 +1126,7 @@ const TrackingDashboard: React.FC = () => {
                         onRowDragStart={handleDragStart}
                         onRowDragEnter={handleDragEnter}
                         onDragEnd={handleDragEnd}
-                        isNewCustomer={newCustomerMap[order.id]} 
+                        isNewCustomer={false} 
                         onSplitBatch={handleSplitBatch}
                         priorityScore={score} 
                         customerData={cust} 
@@ -1101,7 +1151,6 @@ const TrackingDashboard: React.FC = () => {
 
       {editingOrder && (<div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4 animate-fade-in"><div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl flex flex-col" ref={editModalRef}><div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50"><div><h3 className="text-xl font-bold text-gray-800">Chỉnh sửa</h3><p className="text-xs text-gray-500">ID: {editingOrder.id}</p></div><button onClick={() => setEditingOrder(null)} className="w-8 h-8 rounded-full bg-white text-gray-400 hover:text-red-500 hover:text-shadow-md flex items-center justify-center"><i className="fas fa-times"></i></button></div><form onSubmit={saveEdit} className="p-6 space-y-6 flex-grow overflow-y-auto"><div className="space-y-4"><h4 className="text-sm font-bold text-eco-600 uppercase tracking-wider border-b border-eco-100 pb-1">Khách hàng</h4><div className="grid grid-cols-1 md:grid-cols-2 gap-4"><div><label className="text-xs font-bold text-gray-500 mb-1 block">Tên khách</label><input value={editingOrder.customerName} onChange={e => setEditingOrder({...editingOrder, customerName: e.target.value})} className="w-full p-2.5 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all text-sm font-medium" /></div><div><label className="text-xs font-bold text-gray-500 mb-1 block">Số điện thoại</label><input value={editingOrder.customerPhone} onChange={e => setEditingOrder({...editingOrder, customerPhone: e.target.value})} className="w-full p-2.5 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all text-sm" /></div></div><div><label className="text-xs font-bold text-gray-500 mb-1 block">Địa chỉ</label><textarea value={editingOrder.address} onChange={e => setEditingOrder({...editingOrder, address: e.target.value})} className="w-full p-2.5 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all text-sm resize-none" rows={2} /></div></div><div className="space-y-3"><div className="flex justify-between items-center border-b border-eco-100 pb-1"><h4 className="text-sm font-bold text-eco-600 uppercase tracking-wider">Hàng hóa</h4><button type="button" onClick={addEditItem} className="text-xs font-bold text-eco-600 hover:text-eco-700 bg-eco-50 hover:bg-eco-100 px-2 py-1 rounded transition-colors">+ Thêm</button></div><div className="bg-gray-50 rounded-xl p-3 space-y-3">{editingOrder.items.map((item, idx) => { const selectedIds = editingOrder.items.filter((i, iIdx) => iIdx !== idx && i.productId).map(i => i.productId); const availableProducts = products.filter(p => !selectedIds.includes(p.id) && (!item.name || p.name.toLowerCase().includes(item.name.toLowerCase()))); return (<div key={idx} className="flex gap-2 items-start group/editItem relative product-dropdown-container"><div className="flex-grow relative"><input value={item.name} onChange={(e) => updateEditItem(idx, 'name', e.target.value)} onFocus={() => setActiveEditProductRow(idx)} className="w-full p-2 bg-white border border-gray-200 rounded-lg text-sm focus:border-eco-500 outline-none" placeholder="Tên hàng" />{activeEditProductRow === idx && (<div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-100 rounded-lg shadow-xl z-[70] max-h-40 overflow-y-auto">{availableProducts.length === 0 ? (<div className="p-2 text-xs text-gray-400 text-center">{products.length === 0 ? "Kho trống" : "Không tìm thấy"}</div>) : (availableProducts.map(p => (<div key={p.id} onClick={() => selectProductForEditItem(idx, p)} className="px-3 py-2 hover:bg-eco-50 cursor-pointer flex justify-between items-center border-b border-gray-50 last:border-0"><div className="text-sm font-medium text-gray-800">{p.name}</div><div className="text-xs font-bold text-eco-600">{new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}</div></div>)))}</div>)}</div><div className="w-16"><input type="number" step="any" value={item.quantity === 0 ? '' : item.quantity} onChange={(e) => updateEditItem(idx, 'quantity', e.target.value === '' ? 0 : Number(e.target.value))} className="w-full p-2 text-center bg-white border border-gray-200 rounded-lg text-sm font-bold focus:border-eco-500 outline-none" placeholder="SL" /></div><div className="w-24"><input type="number" step="any" value={item.price === 0 ? '' : item.price} onChange={(e) => updateEditItem(idx, 'price', e.target.value === '' ? 0 : Number(e.target.value))} className="w-full p-2 text-right bg-white border border-gray-200 rounded-lg text-sm font-bold text-gray-700 focus:border-eco-500 outline-none" placeholder="Giá" /></div>{editingOrder.items.length > 1 && (<button type="button" onClick={() => removeEditItem(idx)} className="w-9 h-9 flex items-center justify-center text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"><i className="fas fa-trash-alt"></i></button>)}</div>); })}</div></div><div className="space-y-4"><h4 className="text-sm font-bold text-eco-600 uppercase tracking-wider border-b border-eco-100 pb-1">Thanh toán & Ghi chú</h4><div className="grid grid-cols-2 gap-4"><div><label className="text-xs font-bold text-gray-500 mb-1 block">Tổng tiền</label><input type="number" value={editingOrder.totalPrice} onChange={e => setEditingOrder({...editingOrder, totalPrice: Number(e.target.value)})} className="w-full p-3 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all font-bold text-gray-800" /></div><div><label className="text-xs font-bold text-gray-500 mb-1 block">Hình thức</label><div className="relative"><select value={editingOrder.paymentMethod} onChange={e => setEditingOrder({...editingOrder, paymentMethod: e.target.value as PaymentMethod})} className="w-full p-3 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all appearance-none font-medium"><option value={PaymentMethod.CASH}>Tiền mặt (COD)</option><option value={PaymentMethod.TRANSFER}>Chuyển khoản</option><option value={PaymentMethod.PAID}>Đã thanh toán</option></select><i className="fas fa-chevron-down absolute right-3 top-3.5 text-gray-400 text-xs pointer-events-none"></i></div></div></div><div><label className="text-xs font-bold text-gray-500 mb-1 block">Ghi chú</label><input value={editingOrder.notes} onChange={e => setEditingOrder({...editingOrder, notes: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 focus:bg-white focus:border-eco-500 rounded-lg outline-none transition-all text-sm" /></div><div className="pt-2"><label className="flex items-center gap-2 cursor-pointer p-3 bg-blue-50 rounded-lg border border-blue-100 hover:bg-blue-100 transition-colors"><input type="checkbox" checked={editingOrder.paymentVerified || false} onChange={e => setEditingOrder({...editingOrder, paymentVerified: e.target.checked})} className="w-5 h-5 text-eco-600 rounded focus:ring-eco-500" /><span className="text-sm font-bold text-blue-800">Đã xác nhận thanh toán (Tiền về)</span></label></div></div><div className="p-5 border-t border-gray-100 flex gap-3"><button type="button" onClick={() => setEditingOrder(null)} className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold rounded-xl transition-colors">Hủy</button><button type="submit" className="flex-1 py-3 bg-black hover:bg-gray-800 text-white font-bold rounded-xl shadow-lg transition-transform active:scale-95">Lưu Thay Đổi</button></div></form></div></div>)}
 
-      {/* Confirm Modals */}
       <ConfirmModal isOpen={showDeleteConfirm} title="Xóa đơn hàng?" message="Đơn hàng sẽ bị xóa vĩnh viễn và hàng hóa sẽ được hoàn lại kho." onConfirm={confirmDelete} onCancel={() => setShowDeleteConfirm(false)} confirmLabel="Xóa" isDanger={true} />
       <ConfirmModal isOpen={showBulkDeleteConfirm} title={`Xóa ${selectedOrderIds.size} đơn hàng?`} message="Các đơn hàng này sẽ bị xóa vĩnh viễn và hàng hóa sẽ được hoàn lại kho. Hành động này không thể hoàn tác." onConfirm={executeBulkDelete} onCancel={() => setShowBulkDeleteConfirm(false)} confirmLabel="Xóa Vĩnh Viễn" isDanger={true} />
     </div>

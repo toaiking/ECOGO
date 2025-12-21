@@ -33,19 +33,15 @@ const SettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
   });
   const [shopConfig, setShopConfig] = useState<ShopConfig>({
       shopName: 'ECOGO LOGISTICS',
-      hotline: ''
+      hotline: '',
+      address: ''
   });
   const [testResult, setTestResult] = useState<string>('');
   const [isRunningTest, setIsRunningTest] = useState(false);
   
-  // Tag State
   const [quickTags, setQuickTags] = useState<string[]>([]);
   const [newTag, setNewTag] = useState('');
-
-  // Logo State
   const [logo, setLogo] = useState<string | null>(null);
-  
-  // Import State
   const [showPdfImport, setShowPdfImport] = useState(false);
   const [pdfJsonData, setPdfJsonData] = useState('');
   const [importBatchName, setImportBatchName] = useState('');
@@ -57,20 +53,16 @@ const SettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
               if (saved) setConfig(saved);
               
               const savedShop = await storageService.getShopConfig();
-              if (savedShop) setShopConfig(savedShop);
+              if (savedShop) setShopConfig({ ...savedShop, address: savedShop.address || '' });
               
-              // Load tags
               const tags = storageService.getQuickTags();
               setQuickTags(tags);
               
-              // Load Logo
               const savedLogo = storageService.getLogo();
               setLogo(savedLogo);
 
-              // Try fetching from cloud to update local if newer
               storageService.fetchQuickTagsFromCloud().then(t => setQuickTags(t));
               
-              // Default batch name
               const today = new Date().toISOString().slice(0, 10);
               setImportBatchName(`PDF-${today}`);
           };
@@ -105,10 +97,7 @@ const SettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (file) {
-          if (file.size > 1024 * 1024) { // 1MB limit
-              toast.error("Ảnh quá lớn! Vui lòng chọn ảnh < 1MB");
-              return;
-          }
+          if (file.size > 1024 * 1024) { toast.error("Ảnh quá lớn! Vui lòng chọn ảnh < 1MB"); return; }
           const reader = new FileReader();
           reader.onloadend = () => {
               const base64 = reader.result as string;
@@ -129,340 +118,169 @@ const SettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
   const runStressTest = async () => {
       setIsRunningTest(true);
       setTestResult('Đang tạo 10,000 khách hàng...');
-      
-      // Allow UI to update before blocking with heavy task
       setTimeout(async () => {
           try {
               const result = await storageService.generatePerformanceData(10000);
               setTestResult(`Hoàn tất! Tạo ${result.count} khách trong ${result.duration}ms.`);
               toast.success(`Stress test OK: ${result.duration}ms`);
-          } catch (e: any) {
-              setTestResult('Lỗi: ' + (e?.message || e));
-          } finally {
-              setIsRunningTest(false);
-          }
+          } catch (e: any) { setTestResult('Lỗi: ' + (e?.message || e)); } finally { setIsRunningTest(false); }
       }, 100);
   };
 
   const handleMarkOld = async () => {
-      if (window.confirm("Bạn có chắc chắn muốn đánh dấu TẤT CẢ khách hàng hiện tại là KHÁCH CŨ không?\n\nHọ sẽ không hiện nhãn 'NEW' nữa.")) {
+      if (window.confirm("Đánh dấu tất cả là Khách Cũ?")) {
           setIsRunningTest(true);
-          setTestResult('Đang cập nhật...');
           try {
               const count = await storageService.markAllCustomersAsOld();
               setTestResult(`Đã cập nhật xong ${count} khách hàng.`);
               toast.success(`Xong! ${count} khách hàng đã thành Khách Cũ.`);
-          } catch (e: any) {
-              setTestResult('Lỗi: ' + (e?.message || e));
-          } finally {
-              setIsRunningTest(false);
-          }
+          } catch (e: any) { setTestResult('Lỗi: ' + (e?.message || e)); } finally { setIsRunningTest(false); }
       }
   };
 
-  const handleFixDuplicates = async () => {
-      setIsRunningTest(true);
-      setTestResult('Đang phân tích...');
-      try {
-          const count = await storageService.fixDuplicateCustomerIds();
-          setTestResult(`Đã tách ${count} khách trùng ID.`);
-          toast.success(`Xong! Đã sửa ${count} lỗi.`);
-      } catch (e: any) {
-          setTestResult('Lỗi: ' + (e?.message || e));
-          toast.error("Lỗi khi sửa dữ liệu");
-      } finally {
-          setIsRunningTest(false);
-      }
-  };
-
-  const handleMergeDuplicates = async () => {
-      if (!window.confirm("Hành động này sẽ gộp các khách hàng có CÙNG SỐ ĐIỆN THOẠI thành 1 người duy nhất (giữ lại người có nhiều đơn nhất). Bạn có chắc không?")) return;
-      
-      setIsRunningTest(true);
-      setTestResult('Đang gộp khách hàng trùng lặp...');
-      try {
-          const count = await storageService.mergeCustomersByPhone();
-          setTestResult(`Đã gộp thành công ${count} nhóm khách hàng trùng lặp.`);
-          toast.success(`Xong! Đã gộp ${count} nhóm khách.`);
-      } catch (e: any) {
-          setTestResult('Lỗi: ' + (e?.message || e));
-          toast.error("Lỗi gộp dữ liệu");
-      } finally {
-          setIsRunningTest(false);
-      }
-  };
-  
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (!file) return;
-      if (file.type !== 'application/pdf') {
-          toast.error("Vui lòng chọn file PDF");
-          return;
-      }
-      
       setIsRunningTest(true);
       const loading = toast.loading("AI đang đọc PDF...");
-      setTestResult("Đang phân tích file PDF bằng AI...");
-
       try {
           const parsedData = await dataImportService.parsePdfFile(file);
           setPdfJsonData(JSON.stringify(parsedData, null, 2));
-          toast.success(`Đã đọc được ${parsedData.length} dòng từ PDF!`);
-          setTestResult(`Đã trích xuất ${parsedData.length} đơn hàng. Vui lòng kiểm tra JSON bên dưới và bấm Import.`);
-      } catch (error: any) {
-          console.error(error);
-          toast.error("Lỗi đọc PDF: " + error.message);
-          setTestResult("Lỗi: " + error.message);
-      } finally {
-          toast.dismiss(loading);
-          setIsRunningTest(false);
-          // Clear input so same file can be selected again
-          e.target.value = '';
-      }
+          toast.success(`Đã đọc được ${parsedData.length} dòng!`);
+      } catch (error: any) { toast.error("Lỗi đọc PDF"); } finally { toast.dismiss(loading); setIsRunningTest(false); e.target.value = ''; }
   };
 
   const handlePdfImport = async () => {
-      if (!pdfJsonData.trim()) {
-          toast.error("Vui lòng dán dữ liệu JSON hoặc chọn file PDF");
-          return;
-      }
-      if (!importBatchName.trim()) {
-          toast.error("Vui lòng nhập tên Lô");
-          return;
-      }
-      
+      if (!pdfJsonData.trim() || !importBatchName.trim()) { toast.error("Thiếu thông tin"); return; }
       setIsRunningTest(true);
-      setTestResult("Đang xử lý import...");
-      
       try {
           const rawData = JSON.parse(pdfJsonData);
-          if (!Array.isArray(rawData)) {
-              throw new Error("Dữ liệu JSON phải là một mảng []");
-          }
-          
           const msg = await dataImportService.processImportData(rawData, importBatchName);
           setTestResult(msg);
           toast.success("Import thành công!");
           setPdfJsonData('');
-      } catch (e: any) {
-          console.error(e);
-          setTestResult("Lỗi Import: " + e.message);
-          toast.error("Lỗi Import (Xem chi tiết bên dưới)");
-      } finally {
-          setIsRunningTest(false);
-      }
+      } catch (e: any) { toast.error("Lỗi Import"); } finally { setIsRunningTest(false); }
   };
 
   if (!isOpen) return null;
 
+  const vInputClass = "w-full p-2.5 bg-white border-2 border-gray-800 rounded-xl outline-none focus:ring-4 focus:ring-eco-50 font-black text-black placeholder-gray-300 transition-all";
+
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm animate-fade-in">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden flex flex-col max-h-[90vh]">
         <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-            <h3 className="text-lg font-bold text-gray-800">Cài đặt</h3>
-            <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><i className="fas fa-times"></i></button>
+            <h3 className="text-lg font-black text-gray-800 uppercase tracking-tighter">Cài đặt hệ thống</h3>
+            <button onClick={onClose} className="w-8 h-8 rounded-full bg-white text-gray-400 hover:text-gray-600 flex items-center justify-center border border-gray-100"><i className="fas fa-times"></i></button>
         </div>
         
-        <div className="overflow-y-auto p-6 space-y-6">
-            <form onSubmit={handleSave} className="space-y-4">
+        <div className="overflow-y-auto p-6 space-y-8">
+            <form onSubmit={handleSave} className="space-y-6">
                 
-                {/* Branding Section */}
-                <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider">Thông tin Cửa hàng</h4>
-                <div className="space-y-3 bg-gray-50 p-3 rounded-xl border border-gray-100">
-                    <div>
-                        <label className="block text-xs font-bold text-gray-500 mb-1">Tên Shop / Header Hóa đơn</label>
-                        <input 
-                            value={shopConfig.shopName}
-                            onChange={e => setShopConfig({...shopConfig, shopName: e.target.value})}
-                            className="w-full p-2.5 bg-white border border-gray-200 rounded-lg outline-none focus:border-eco-500 font-bold text-gray-800 uppercase"
-                            placeholder="ECOGO LOGISTICS"
-                        />
-                    </div>
-                    <div>
-                        <label className="block text-xs font-bold text-gray-500 mb-1">Hotline (In trên hóa đơn)</label>
-                        <input 
-                            value={shopConfig.hotline}
-                            onChange={e => setShopConfig({...shopConfig, hotline: e.target.value})}
-                            className="w-full p-2.5 bg-white border border-gray-200 rounded-lg outline-none focus:border-eco-500 font-medium"
-                            placeholder="0912..."
-                        />
-                    </div>
-                    
-                    <div className="flex items-center gap-4 pt-2 border-t border-gray-200 mt-2">
-                        <div className="w-12 h-12 bg-white rounded-lg flex items-center justify-center border border-gray-200 overflow-hidden relative flex-shrink-0">
-                            {logo ? (
-                                <img src={logo} alt="Logo" className="w-full h-full object-contain" />
-                            ) : (
-                                <i className="fas fa-image text-gray-300"></i>
-                            )}
+                <div className="space-y-4">
+                    <h4 className="text-[10px] font-black text-eco-600 uppercase tracking-widest flex items-center gap-2">
+                        <i className="fas fa-store"></i> Thông tin Shop
+                    </h4>
+                    <div className="space-y-3">
+                        <div>
+                            <label className="block text-[10px] font-black text-gray-400 uppercase mb-1 ml-1">Tên Cửa hàng / Đầu phiếu</label>
+                            <input value={shopConfig.shopName} onChange={e => setShopConfig({...shopConfig, shopName: e.target.value})} className={vInputClass} placeholder="ECOGO LOGISTICS" />
                         </div>
-                        <div className="flex-grow">
-                            <label className="block text-xs font-bold text-blue-600 mb-1 cursor-pointer hover:underline">
-                                <input type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
-                                <i className="fas fa-upload mr-1"></i> Đổi Logo
-                            </label>
-                            {logo && (
-                                <button type="button" onClick={handleRemoveLogo} className="text-xs font-bold text-red-500 hover:text-red-600">
-                                    <i className="fas fa-trash mr-1"></i> Xóa
-                                </button>
-                            )}
+                        <div>
+                            <label className="block text-[10px] font-black text-gray-400 uppercase mb-1 ml-1">Hotline lấy hàng</label>
+                            <input value={shopConfig.hotline} onChange={e => setShopConfig({...shopConfig, hotline: e.target.value})} className={vInputClass} placeholder="09xxxxxx" />
+                        </div>
+                        <div>
+                            <label className="block text-[10px] font-black text-gray-400 uppercase mb-1 ml-1">Địa chỉ lấy hàng (Quan trọng cho Ahamove)</label>
+                            <textarea value={shopConfig.address} onChange={e => setShopConfig({...shopConfig, address: e.target.value})} className={`${vInputClass} text-xs font-bold h-20 resize-none`} placeholder="Nhập địa chỉ chính xác để tài xế qua lấy..." />
+                        </div>
+                        <div className="flex items-center gap-4 p-3 bg-gray-50 rounded-xl border border-dashed border-gray-300">
+                            <div className="w-12 h-12 bg-white rounded-lg flex items-center justify-center border-2 border-gray-800 overflow-hidden shrink-0">
+                                {logo ? <img src={logo} alt="Logo" className="w-full h-full object-contain" /> : <i className="fas fa-image text-gray-300"></i>}
+                            </div>
+                            <div className="flex-grow">
+                                <label className="block text-[10px] font-black text-blue-600 cursor-pointer hover:underline uppercase">
+                                    <input type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
+                                    <i className="fas fa-upload mr-1"></i> Tải ảnh Logo
+                                </label>
+                                {logo && <button type="button" onClick={handleRemoveLogo} className="text-[10px] font-black text-red-500 hover:text-red-600 uppercase mt-1"><i className="fas fa-trash mr-1"></i> Xóa Logo</button>}
+                            </div>
                         </div>
                     </div>
                 </div>
 
-                {/* Bank Section */}
-                <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider pt-2">Ngân hàng & Thanh toán</h4>
+                <div className="space-y-4">
+                    <h4 className="text-[10px] font-black text-blue-600 uppercase tracking-widest flex items-center gap-2">
+                        <i className="fas fa-university"></i> Tài khoản nhận tiền
+                    </h4>
+                    <div className="space-y-3">
+                        <div>
+                            <label className="block text-[10px] font-black text-gray-400 uppercase mb-1 ml-1">Chọn Ngân hàng</label>
+                            <select value={config.bankId} onChange={e => setConfig({...config, bankId: e.target.value})} className={`${vInputClass} appearance-none`}>
+                                {BANKS.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                            </select>
+                        </div>
+                        <div>
+                            <label className="block text-[10px] font-black text-gray-400 uppercase mb-1 ml-1">Số tài khoản (STK)</label>
+                            <input type="text" value={config.accountNo} onChange={e => setConfig({...config, accountNo: e.target.value})} className={`${vInputClass} text-lg tracking-widest`} placeholder="Số tài khoản..." />
+                        </div>
+                        <div>
+                            <label className="block text-[10px] font-black text-gray-400 uppercase mb-1 ml-1">Chủ tài khoản (Viết hoa)</label>
+                            <input type="text" value={config.accountName} onChange={e => setConfig({...config, accountName: e.target.value.toUpperCase()})} className={`${vInputClass} uppercase`} placeholder="NGUYEN VAN A" />
+                        </div>
+                    </div>
+                </div>
+
                 <div className="space-y-3">
-                    <div>
-                        <label className="block text-xs font-bold text-gray-500 mb-1">Ngân hàng</label>
-                        <select 
-                            value={config.bankId}
-                            onChange={e => setConfig({...config, bankId: e.target.value})}
-                            className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:border-eco-500 font-medium"
-                        >
-                            {BANKS.map(b => (
-                                <option key={b.id} value={b.id}>{b.name} ({b.id})</option>
-                            ))}
-                        </select>
-                    </div>
-                    
-                    <div>
-                        <label className="block text-xs font-bold text-gray-500 mb-1">Số tài khoản</label>
-                        <input 
-                            type="text"
-                            value={config.accountNo}
-                            onChange={e => setConfig({...config, accountNo: e.target.value})}
-                            placeholder="VD: 0912345678"
-                            required
-                            className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:border-eco-500 font-bold tracking-wide"
-                        />
-                    </div>
-
-                    <div>
-                        <label className="block text-xs font-bold text-gray-500 mb-1">Tên chủ tài khoản (Viết hoa)</label>
-                        <input 
-                            type="text"
-                            value={config.accountName}
-                            onChange={e => setConfig({...config, accountName: e.target.value.toUpperCase()})}
-                            placeholder="NGUYEN VAN A"
-                            className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:border-eco-500 font-bold uppercase"
-                        />
-                    </div>
-                </div>
-
-                {/* Quick Tags Section */}
-                <div className="border-t border-gray-100 pt-4 mt-4">
-                    <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-2">Thẻ nhập nhanh (Ghi chú)</h4>
-                    <div className="flex gap-2 mb-3">
-                        <input 
-                            value={newTag}
-                            onChange={e => setNewTag(e.target.value)}
-                            placeholder="Thêm thẻ (VD: Dễ vỡ)"
-                            className="flex-grow p-2 text-sm bg-gray-50 border border-gray-200 rounded-lg outline-none focus:border-eco-500"
-                        />
-                        <button type="button" onClick={addTag} className="px-3 bg-eco-100 text-eco-700 rounded-lg font-bold text-sm hover:bg-eco-200">+</button>
+                    <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2">
+                        <i className="fas fa-tags"></i> Thẻ Ghi Chú Nhanh
+                    </h4>
+                    <div className="flex gap-2">
+                        <input value={newTag} onChange={e => setNewTag(e.target.value)} placeholder="VD: Giao hẻm..." className={vInputClass} />
+                        <button type="button" onClick={addTag} className="px-4 bg-black text-white rounded-xl font-black shadow-lg hover:bg-gray-800 transition-all">+</button>
                     </div>
                     <div className="flex flex-wrap gap-2">
                         {quickTags.map(tag => (
-                            <div key={tag} className="flex items-center gap-1 bg-gray-100 px-2 py-1 rounded text-xs font-medium text-gray-700">
+                            <div key={tag} className="flex items-center gap-2 bg-white border-2 border-gray-800 px-3 py-1.5 rounded-lg text-[10px] font-black text-black">
                                 {tag}
-                                <button type="button" onClick={() => removeTag(tag)} className="text-gray-400 hover:text-red-500 w-4 h-4 flex items-center justify-center rounded-full"><i className="fas fa-times text-[10px]"></i></button>
+                                <button type="button" onClick={() => removeTag(tag)} className="text-gray-400 hover:text-red-600"><i className="fas fa-times"></i></button>
                             </div>
                         ))}
                     </div>
                 </div>
 
-                <div className="pt-4 border-t border-gray-100">
-                    <button type="submit" className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-all shadow-lg shadow-blue-100">
-                        Lưu Cài Đặt
-                    </button>
-                </div>
+                <button type="submit" className="w-full py-4 bg-black text-white rounded-2xl font-black text-sm shadow-xl hover:bg-gray-800 transition-all active:scale-95 uppercase tracking-widest">
+                    Lưu toàn bộ cài đặt <i className="fas fa-save ml-2"></i>
+                </button>
             </form>
 
-            <div className="border-t border-gray-100 pt-4">
-                <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-3">Developer Zone</h4>
-                <div className="bg-yellow-50 rounded-xl p-4 border border-yellow-100 space-y-3">
-                    <button 
-                        onClick={() => setShowPdfImport(!showPdfImport)}
-                        className="w-full py-2 bg-purple-100 hover:bg-purple-200 text-purple-800 rounded-lg font-bold text-xs transition-colors flex items-center justify-center gap-2"
-                    >
-                        <i className="fas fa-file-import"></i> Import PDF Data (AI)
+            <div className="border-t-2 border-gray-100 pt-8">
+                <h4 className="text-[10px] font-black text-red-500 uppercase tracking-widest mb-4">Công cụ quản trị (Dành cho Dev)</h4>
+                <div className="bg-gray-50 rounded-2xl p-4 border-2 border-gray-200 space-y-4">
+                    <button onClick={() => setShowPdfImport(!showPdfImport)} className="w-full py-2.5 bg-white border-2 border-gray-800 rounded-xl font-black text-[10px] uppercase shadow-sm hover:bg-gray-100 transition-all">
+                        <i className="fas fa-file-import mr-2"></i> Nhập dữ liệu từ PDF (AI)
                     </button>
                     
                     {showPdfImport && (
-                        <div className="space-y-2 animate-fade-in bg-white p-3 rounded-lg border border-yellow-200">
-                            <label className="text-[10px] font-bold text-gray-500 uppercase">Tên lô hàng</label>
-                            <input 
-                                value={importBatchName}
-                                onChange={e => setImportBatchName(e.target.value)}
-                                className="w-full p-2 bg-gray-50 border border-gray-200 rounded text-xs font-bold"
-                            />
-                            
-                            {/* File Upload Button */}
-                            <div className="relative group cursor-pointer">
-                                <label className="block w-full py-2 bg-eco-50 text-eco-700 border border-eco-200 rounded-lg text-center font-bold text-xs cursor-pointer hover:bg-eco-100 transition-colors">
-                                    <i className="fas fa-cloud-upload-alt mr-2"></i> Chọn File PDF để đọc
-                                    <input type="file" accept="application/pdf" className="hidden" onChange={handleFileSelect} disabled={isRunningTest} />
-                                </label>
+                        <div className="space-y-3 animate-fade-in bg-white p-4 rounded-xl border-2 border-gray-800">
+                            <div>
+                                <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Tên lô hàng</label>
+                                <input value={importBatchName} onChange={e => setImportBatchName(e.target.value)} className={vInputClass} />
                             </div>
-
-                            <div className="text-center text-[10px] text-gray-400">HOẶC Dán JSON</div>
-                            
-                            <textarea 
-                                value={pdfJsonData}
-                                onChange={e => setPdfJsonData(e.target.value)}
-                                placeholder='[{"unit_price":120, "customer_name":"A", ...}]'
-                                className="w-full h-32 p-2 bg-gray-50 border border-gray-200 rounded text-[10px] font-mono"
-                            />
-                            
-                            <button 
-                                onClick={handlePdfImport}
-                                disabled={isRunningTest}
-                                className="w-full py-2 bg-purple-600 text-white rounded font-bold text-xs hover:bg-purple-700 shadow-md"
-                            >
-                                {isRunningTest ? 'Đang xử lý...' : 'Bắt đầu Import'}
-                            </button>
+                            <label className="block w-full py-3 bg-blue-50 text-blue-700 border-2 border-blue-200 border-dashed rounded-xl text-center font-black text-[10px] cursor-pointer hover:bg-blue-100 uppercase">
+                                <i className="fas fa-cloud-upload-alt mr-2"></i> Chọn File PDF
+                                <input type="file" accept="application/pdf" className="hidden" onChange={handleFileSelect} disabled={isRunningTest} />
+                            </label>
+                            <textarea value={pdfJsonData} onChange={e => setPdfJsonData(e.target.value)} placeholder="Dữ liệu JSON..." className={`${vInputClass} h-32 text-[10px] font-mono`} />
+                            <button onClick={handlePdfImport} disabled={isRunningTest} className="w-full py-3 bg-eco-600 text-white rounded-xl font-black text-[10px] uppercase shadow-md">{isRunningTest ? 'Đang xử lý...' : 'Xác nhận Import'}</button>
                         </div>
                     )}
 
-                    <div className="h-px bg-yellow-200 my-2"></div>
-
-                    <button 
-                        onClick={handleMarkOld} 
-                        disabled={isRunningTest}
-                        className="w-full py-2 bg-blue-100 hover:bg-blue-200 text-blue-800 rounded-lg font-bold text-xs transition-colors"
-                    >
-                        Đánh dấu tất cả là Khách cũ
-                    </button>
-                    
-                    <button 
-                        onClick={handleMergeDuplicates} 
-                        disabled={isRunningTest}
-                        className="w-full py-2 bg-green-100 hover:bg-green-200 text-green-800 rounded-lg font-bold text-xs transition-colors"
-                    >
-                        Gộp Khách Hàng Trùng Lặp
-                    </button>
-
-                    <button 
-                        onClick={handleFixDuplicates} 
-                        disabled={isRunningTest}
-                        className="w-full py-2 bg-orange-100 hover:bg-orange-200 text-orange-800 rounded-lg font-bold text-xs transition-colors"
-                    >
-                        Phân tách Khách trùng ID
-                    </button>
-
-                    <button 
-                        onClick={runStressTest} 
-                        disabled={isRunningTest}
-                        className={`w-full py-2 rounded-lg font-bold text-xs transition-colors ${isRunningTest ? 'bg-gray-200 text-gray-500' : 'bg-yellow-400 hover:bg-yellow-500 text-yellow-900'}`}
-                    >
-                        {isRunningTest ? 'Đang chạy...' : 'Tạo 10.000 Khách hàng ảo'}
-                    </button>
-                    {testResult && (
-                        <div className="mt-2 text-xs font-mono bg-white p-2 rounded border border-gray-200 text-gray-600 max-h-20 overflow-y-auto">
-                            {testResult}
-                        </div>
-                    )}
+                    <div className="grid grid-cols-1 gap-2">
+                        <button onClick={handleMarkOld} disabled={isRunningTest} className="w-full py-2 bg-gray-200 hover:bg-gray-300 rounded-lg font-black text-[9px] uppercase">Gỡ nhãn NEW toàn bộ khách</button>
+                        <button onClick={runStressTest} disabled={isRunningTest} className="w-full py-2 bg-yellow-400 hover:bg-yellow-500 rounded-lg font-black text-[9px] uppercase">Stress Test (10k Khách)</button>
+                    </div>
+                    {testResult && <div className="mt-2 text-[9px] font-mono bg-black text-green-400 p-3 rounded-xl max-h-24 overflow-y-auto leading-tight">{testResult}</div>}
                 </div>
             </div>
         </div>

@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
 import { SmartParseResult, Order, OrderStatus, PaymentMethod, Product, Customer, RawPDFImportData } from "../types";
 
@@ -12,6 +13,66 @@ const getClient = () => {
   return new GoogleGenAI({ apiKey });
 };
 
+// NEW: Verify Address using Google Maps Grounding
+// Note: Maps grounding is currently only supported in Gemini 2.5 series models.
+export const verifyAddress = async (addressQuery: string): Promise<{ address: string, mapLink?: string }> => {
+  const ai = getClient();
+  
+  const prompt = `
+    Verify and standardize this address location: "${addressQuery}".
+    If it is a valid location, return ONLY the official, fully formatted address string in Vietnamese.
+    If the input is vague, find the most likely specific location.
+    Do not add introductory text like "Địa chỉ là...". Just return the address string.
+  `;
+
+  try {
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: prompt,
+        config: {
+          tools: [{ googleMaps: {} }],
+        },
+      });
+
+      let text = response.text ? response.text.trim() : addressQuery;
+      // Cleanup any potential model conversational filler
+      text = text.replace(/^Địa chỉ: /i, '').replace(/\.$/, '');
+      
+      // Extract Google Maps Link from Grounding Metadata
+      let mapLink = undefined;
+      const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
+      
+      if (chunks) {
+          for (const chunk of chunks) {
+              // Priority 1: Check for Maps tool specific URI
+              if (chunk.maps) {
+                  const mapsData = chunk.maps as any;
+                  if (mapsData.googleMapsUri) {
+                      mapLink = mapsData.googleMapsUri;
+                      break;
+                  }
+                  if (mapsData.uri) {
+                      mapLink = mapsData.uri;
+                      break;
+                  }
+              }
+              
+              // Priority 2: Fallback to Web chunk if it points to Google Maps
+              if (chunk.web && chunk.web.uri && chunk.web.uri.includes('google.com/maps')) {
+                  mapLink = chunk.web.uri;
+                  break;
+              }
+          }
+      }
+
+      return { address: text, mapLink };
+  } catch (error) {
+      console.error("Maps Grounding Error:", error);
+      throw new Error("Không thể xác minh địa điểm này.");
+  }
+};
+
+// Update: Use gemini-3-flash-preview for text parsing tasks
 export const parseOrderText = async (
   text: string, 
   products: Product[] = [], 
@@ -54,7 +115,7 @@ export const parseOrderText = async (
   `;
 
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: "gemini-3-flash-preview",
     contents: prompt,
     config: {
       responseMimeType: "application/json",
@@ -115,7 +176,7 @@ export const generateDeliveryMessage = async (order: Order): Promise<string> => 
   return `Chào ${order.customerName}, đơn ${itemsList} ${statusText}. ${paymentText}. Cảm ơn!`;
 };
 
-// NEW: Extract structured data from raw PDF text content
+// Update: Use gemini-3-flash-preview for data extraction from raw text tasks
 export const structureImportData = async (rawText: string): Promise<RawPDFImportData[]> => {
   const ai = getClient();
   
@@ -144,7 +205,7 @@ export const structureImportData = async (rawText: string): Promise<RawPDFImport
   `;
 
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: "gemini-3-flash-preview",
     contents: prompt,
     config: {
       responseMimeType: "application/json",

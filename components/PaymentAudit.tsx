@@ -1,7 +1,6 @@
-
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import toast from 'react-hot-toast';
-import { Order, OrderStatus, PaymentMethod } from '../types';
+import { Order, OrderStatus, PaymentMethod, ShopConfig } from '../types';
 import { storageService, normalizePhone, normalizeString } from '../services/storageService';
 import ConfirmModal from './ConfirmModal';
 
@@ -15,9 +14,23 @@ interface CustomerDebtGroup {
     maxReminders: number;
 }
 
+// Helper to fix "User Gesture" issue with navigator.share
+const dataURLtoFile = (dataurl: string, filename: string) => {
+    const arr = dataurl.split(',');
+    const mime = arr[0].match(/:(.*?);/)?.[1];
+    const bstr = atob(arr[1]);
+    let n = bstr.length;
+    const u8arr = new Uint8Array(n);
+    while (n--) {
+        u8arr[n] = bstr.charCodeAt(n);
+    }
+    return new File([u8arr], filename, { type: mime });
+};
+
 const PaymentAudit: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [bankConfig, setBankConfig] = useState<any>(null);
+  const [shopConfig, setShopConfig] = useState<ShopConfig | null>(null);
   
   // Filters
   const [searchTerm, setSearchTerm] = useState('');
@@ -33,6 +46,9 @@ const PaymentAudit: React.FC = () => {
 
   // Sharing State
   const [isSharing, setIsSharing] = useState(false);
+
+  // NEW: Preload Ref
+  const groupQrImgRef = useRef<HTMLImageElement | null>(null);
 
   useEffect(() => {
     const unsub = storageService.subscribeOrders((allOrders) => {
@@ -60,9 +76,28 @@ const PaymentAudit: React.FC = () => {
     });
 
     storageService.getBankConfig().then(setBankConfig);
+    storageService.getShopConfig().then(setShopConfig);
 
     return () => { if (unsub) unsub(); };
   }, []);
+
+  // NEW: Preload Effect
+  useEffect(() => {
+      if (selectedGroup && bankConfig && bankConfig.accountNo) {
+          const idsStr = selectedGroup.orders.map(o => o.id).join(' ');
+          const desc = `DH ${idsStr}`;
+          const qrUrl = `https://img.vietqr.io/image/${bankConfig.bankId}-${bankConfig.accountNo}-${bankConfig.template || 'compact2'}.png?amount=${selectedGroup.totalAmount}&addInfo=${encodeURIComponent(desc)}&accountName=${encodeURIComponent(bankConfig.accountName)}`;
+          
+          const img = new Image();
+          img.crossOrigin = "Anonymous";
+          img.src = qrUrl;
+          img.onload = () => {
+              groupQrImgRef.current = img;
+          };
+      } else {
+          groupQrImgRef.current = null;
+      }
+  }, [selectedGroup, bankConfig]);
 
   const batches = useMemo(() => {
     const batchSet = new Set<string>();
@@ -156,8 +191,17 @@ const PaymentAudit: React.FC = () => {
       await storageService.incrementReminderCount(ids);
   };
 
-  // UPDATED: Generate Image with Canvas
-  const generateAndShareQR = async (amount: number, content: string, title: string, relatedIds: string[], customerName: string, orderCount: number) => {
+  // UPDATED: Generate Image with Canvas (Cursor Based Logic)
+  const generateAndShareQR = async (
+        amount: number, 
+        content: string, 
+        title: string, 
+        relatedIds: string[], 
+        customerName: string, 
+        orderCount: number,
+        itemsSummary: Record<string, number>, // NEW
+        preloadedImg?: HTMLImageElement // NEW Param for loaded image
+    ) => {
     if (!bankConfig || !bankConfig.accountNo) {
         toast.error("Thiếu thông tin Ngân hàng");
         return;
@@ -165,17 +209,21 @@ const PaymentAudit: React.FC = () => {
     setIsSharing(true);
     const toastId = toast.loading("Đang tạo Phiếu thanh toán...");
     try {
-        // 1. Get raw QR
-        const qrUrl = `https://img.vietqr.io/image/${bankConfig.bankId}-${bankConfig.accountNo}-${bankConfig.template || 'compact2'}.png?amount=${amount}&addInfo=${encodeURIComponent(content)}&accountName=${encodeURIComponent(bankConfig.accountName)}`;
+        let qrImg = preloadedImg;
         
-        // 2. Load QR Image
-        const qrImg = new Image();
-        qrImg.crossOrigin = "Anonymous";
-        qrImg.src = qrUrl;
-        await new Promise((resolve, reject) => {
-            qrImg.onload = resolve;
-            qrImg.onerror = reject;
-        });
+        // Fallback if not preloaded (rare but safe)
+        if (!qrImg) {
+            const qrUrl = `https://img.vietqr.io/image/${bankConfig.bankId}-${bankConfig.accountNo}-${bankConfig.template || 'compact2'}.png?amount=${amount}&addInfo=${encodeURIComponent(content)}&accountName=${encodeURIComponent(bankConfig.accountName)}`;
+            qrImg = new Image();
+            qrImg.crossOrigin = "Anonymous";
+            qrImg.src = qrUrl;
+            await new Promise((resolve, reject) => {
+                if(qrImg) {
+                    qrImg.onload = resolve;
+                    qrImg.onerror = reject;
+                }
+            });
+        }
 
         // 3. Setup Canvas
         const canvas = document.createElement('canvas');
@@ -183,7 +231,28 @@ const PaymentAudit: React.FC = () => {
         if (!ctx) throw new Error("Canvas error");
 
         const W = 800;
-        const H = 1200;
+        const qrSize = 500;
+        const qrRatio = qrImg ? (qrImg.naturalWidth / qrImg.naturalHeight) : 1;
+        const drawHeight = qrSize / qrRatio;
+
+        const itemsList = Object.entries(itemsSummary);
+        
+        // DYNAMIC HEIGHT CALCULATION
+        let H = 0;
+        H += 140; // Header
+        H += 40; // Spacing
+        H += 100; // Amount Box
+        H += 40; // Spacing
+        H += drawHeight; // QR
+        H += 40; // Spacing
+        H += 150; // Info
+        H += 40; // Spacing
+        H += 60; // Items Header
+        H += (itemsList.length * 50); // Items list
+        H += 40; // Spacing
+        H += 120; // Footer
+        H += 50; // Padding
+
         canvas.width = W;
         canvas.height = H;
 
@@ -192,36 +261,39 @@ const PaymentAudit: React.FC = () => {
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(0, 0, W, H);
         
+        let cursorY = 0;
+
         // Header
-        const headerHeight = 140;
         ctx.fillStyle = '#1e3a8a'; // Blue for Debt
-        ctx.fillRect(0, 0, W, headerHeight);
+        ctx.fillRect(0, cursorY, W, 140);
         
         ctx.fillStyle = '#ffffff';
         ctx.font = 'bold 40px Arial, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('THANH TOÁN CÔNG NỢ', W / 2, headerHeight / 2);
+        ctx.fillText('QUÉT MÃ THANH TOÁN', W / 2, cursorY + 70);
 
         // Shop Name
-        const shopConfig = await storageService.getShopConfig();
+        const sName = shopConfig?.shopName || 'ECOGO LOGISTICS';
+        
         ctx.fillStyle = '#374151';
         ctx.font = 'bold 32px Arial, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
-        ctx.fillText((shopConfig?.shopName || 'ECOGO LOGISTICS').toUpperCase(), W / 2, headerHeight + 40);
+        ctx.fillText(sName.toUpperCase(), W / 2, cursorY + 140 + 20);
+
+        cursorY += 140; // Header
+        cursorY += 40; // Spacing
 
         // Amount
-        const amountBoxY = headerHeight + 100;
         ctx.fillStyle = '#eff6ff'; // Light blue
         
-        // Fallback for roundRect
         if ((ctx as any).roundRect) {
             ctx.beginPath();
-            (ctx as any).roundRect(100, amountBoxY, 600, 100, 20);
+            (ctx as any).roundRect(100, cursorY, 600, 100, 20);
             ctx.fill();
         } else {
-            ctx.fillRect(100, amountBoxY, 600, 100);
+            ctx.fillRect(100, cursorY, 600, 100);
         }
 
         ctx.strokeStyle = '#bfdbfe';
@@ -232,83 +304,133 @@ const PaymentAudit: React.FC = () => {
         ctx.font = 'bold 60px Arial, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(`${new Intl.NumberFormat('vi-VN').format(amount)}đ`, W / 2, amountBoxY + 50);
+        ctx.fillText(`${new Intl.NumberFormat('vi-VN').format(amount)}đ`, W / 2, cursorY + 50);
 
-        // QR
-        const qrY = amountBoxY + 140;
-        const qrSize = 500;
-        ctx.drawImage(qrImg, (W - qrSize) / 2, qrY, qrSize, qrSize);
+        cursorY += 100; // Amount Box
+        cursorY += 40; // Spacing
+
+        // QR (Aspect Ratio Corrected)
+        if (qrImg) {
+            ctx.drawImage(qrImg, (W - qrSize) / 2, cursorY, qrSize, drawHeight);
+        }
+        
+        cursorY += drawHeight; // QR
+        cursorY += 40; // Spacing
 
         // Divider
-        const dividerY = qrY + qrSize + 40;
         ctx.strokeStyle = '#e5e7eb';
         ctx.lineWidth = 2;
         ctx.setLineDash([10, 10]);
         ctx.beginPath();
-        ctx.moveTo(50, dividerY);
-        ctx.lineTo(W - 50, dividerY);
+        ctx.moveTo(50, cursorY);
+        ctx.lineTo(W - 50, cursorY);
         ctx.stroke();
         ctx.setLineDash([]);
 
+        cursorY += 40; // Divider Spacing
+
         // Details
-        const infoY = dividerY + 50;
         ctx.fillStyle = '#1f2937';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'top';
         
         ctx.font = 'normal 28px Arial, sans-serif';
         ctx.fillStyle = '#6b7280';
-        ctx.fillText('Khách hàng:', 80, infoY);
+        ctx.fillText('Khách hàng:', 80, cursorY);
         ctx.font = 'bold 28px Arial, sans-serif';
         ctx.fillStyle = '#111827';
-        ctx.fillText(customerName, 300, infoY);
+        ctx.fillText(customerName, 300, cursorY);
 
-        const row2Y = infoY + 50;
+        cursorY += 50; // Row 1
+
         ctx.font = 'normal 28px Arial, sans-serif';
         ctx.fillStyle = '#6b7280';
-        ctx.fillText('Số lượng đơn:', 80, row2Y);
+        ctx.fillText('Số lượng đơn:', 80, cursorY);
         ctx.font = 'bold 28px Arial, sans-serif';
         ctx.fillStyle = '#111827';
-        ctx.fillText(`${orderCount} đơn hàng`, 300, row2Y);
+        ctx.fillText(`${orderCount} đơn hàng`, 300, cursorY);
+
+        cursorY += 70; // Row 2 + Spacing
+
+        // ITEMS LIST HEADER
+        ctx.fillStyle = '#f3f4f6';
+        ctx.fillRect(50, cursorY, 700, 40);
+        ctx.fillStyle = '#374151';
+        ctx.font = 'bold 24px Arial, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText('Chi tiết hàng hóa tổng hợp', 70, cursorY + 8);
+
+        cursorY += 50; // Header + Spacing
+
+        // ITEMS LIST
+        ctx.font = 'normal 26px Arial, sans-serif';
+        ctx.textBaseline = 'middle';
+        
+        itemsList.forEach(([name, qty], index) => {
+            const rowCenterY = cursorY + 20;
+
+            let displayName = name;
+            if (displayName.length > 35) displayName = displayName.substring(0, 32) + "...";
+            
+            ctx.fillStyle = '#1f2937';
+            ctx.textAlign = 'left';
+            ctx.fillText(`${index + 1}. ${displayName}`, 70, rowCenterY);
+            
+            ctx.textAlign = 'right';
+            ctx.font = 'bold 26px Arial, sans-serif';
+            ctx.fillText(`x${qty}`, 730, rowCenterY);
+            ctx.font = 'normal 26px Arial, sans-serif';
+            
+            ctx.beginPath();
+            ctx.strokeStyle = '#f3f4f6';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([]);
+            ctx.moveTo(70, cursorY + 45);
+            ctx.lineTo(730, cursorY + 45);
+            ctx.stroke();
+
+            cursorY += 50; // Row height
+        });
+
+        cursorY += 40; // Spacing
 
         // Footer
         if (bankConfig) {
-            const footerY = H - 120;
+            const footerY = cursorY;
             ctx.fillStyle = '#f9fafb';
             ctx.fillRect(0, footerY, W, 120);
             ctx.fillStyle = '#4b5563';
             ctx.font = 'italic 24px Arial, sans-serif';
             ctx.textAlign = 'center';
-            ctx.fillText(`Ngân hàng: ${bankConfig.bankId} - STK: ${bankConfig.accountNo}`, W / 2, footerY + 40);
-            ctx.fillText(`Chủ TK: ${bankConfig.accountName}`, W / 2, footerY + 80);
+            ctx.textBaseline = 'top';
+            ctx.fillText(`Ngân hàng: ${bankConfig.bankId} - STK: ${bankConfig.accountNo}`, W / 2, footerY + 30);
+            ctx.fillText(`Chủ TK: ${bankConfig.accountName}`, W / 2, footerY + 70);
         }
 
-        // 5. Share
-        canvas.toBlob(async (blob) => {
-            if (blob) {
-                const file = new File([blob], `debt-${Date.now()}.png`, { type: 'image/png' });
-                
-                await incrementReminder(relatedIds);
+        // 5. Share with User Gesture Fix (dataURLtoFile + synchronous navigator.share call)
+        const dataUrl = canvas.toDataURL('image/png');
+        const file = dataURLtoFile(dataUrl, `debt-${Date.now()}.png`);
+        
+        // Fire-and-forget logic for reminder increment to NOT block user gesture
+        incrementReminder(relatedIds);
 
-                if (navigator.share) {
-                    await navigator.share({ 
-                        title: title, 
-                        text: `Thanh toán công nợ ${customerName}`, 
-                        files: [file] 
-                    });
-                    toast.dismiss(toastId);
-                    toast.success("Đã mở chia sẻ!");
-                } else {
-                    // Fallback
-                    const a = document.createElement('a');
-                    a.href = URL.createObjectURL(blob);
-                    a.download = `debt-${Date.now()}.png`;
-                    a.click();
-                    toast.success("Đã tải ảnh xuống");
-                    toast.dismiss(toastId);
-                }
-            }
-        });
+        if (navigator.share) {
+            await navigator.share({ 
+                title: title, 
+                text: `Thanh toán công nợ ${customerName}`, 
+                files: [file] 
+            });
+            toast.dismiss(toastId);
+            toast.success("Đã mở chia sẻ!");
+        } else {
+            // Fallback
+            const a = document.createElement('a');
+            a.href = dataUrl;
+            a.download = `debt-${Date.now()}.png`;
+            a.click();
+            toast.success("Đã tải ảnh xuống");
+            toast.dismiss(toastId);
+        }
 
     } catch (e: any) {
         console.error(e);
@@ -320,16 +442,34 @@ const PaymentAudit: React.FC = () => {
   };
 
   const handleShareGroupQR = (group: CustomerDebtGroup) => {
-      // Use list of Order IDs instead of Customer Name for better reconciliation
-      // Format: "DH ID1 ID2 ID3..."
       const idsStr = group.orders.map(o => o.id).join(' ');
       const desc = `DH ${idsStr}`;
-      
       const ids = group.orders.map(o => o.id);
       
-      generateAndShareQR(group.totalAmount, desc, `Thanh toán tổng ${group.orders.length} đơn`, ids, group.customerName, group.orders.length);
+      // Calculate Item Summary
+      const itemsSummary: Record<string, number> = {};
+      group.orders.forEach(o => {
+          o.items.forEach(item => {
+              const name = item.name.trim();
+              if (name) {
+                  itemsSummary[name] = (itemsSummary[name] || 0) + item.quantity;
+              }
+          });
+      });
+      
+      generateAndShareQR(
+          group.totalAmount, 
+          desc, 
+          `Thanh toán tổng ${group.orders.length} đơn`, 
+          ids, 
+          group.customerName, 
+          group.orders.length,
+          itemsSummary, // Pass summary
+          groupQrImgRef.current || undefined // Pass preloaded image ref
+      );
   };
 
+  // ... (rest of the component)
   const handleSMS = async (group: CustomerDebtGroup) => {
      const phone = group.customerPhone;
      if (!phone) { toast.error("Khách không có SĐT"); return; }

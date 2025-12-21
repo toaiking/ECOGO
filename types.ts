@@ -1,4 +1,3 @@
-
 export enum OrderStatus {
   PENDING = 'PENDING',       // Chờ xử lý
   PICKED_UP = 'PICKED_UP',   // Đã lấy hàng
@@ -22,6 +21,17 @@ export interface OrderItem {
   importPrice?: number; // NEW: Cost price at the moment of sale
 }
 
+// Fix: Added CarrierData interface to support integrated shipping carrier data
+export interface CarrierData {
+  carrierId: string;
+  carrierName: string;
+  trackingCode: string;
+  fee: number;
+  weight: number;
+  cod: number;
+  createdAt: number;
+}
+
 export interface Order {
   id: string;
   customerId?: string; // NEW: Link directly to customer ID for 100% accuracy
@@ -41,6 +51,8 @@ export interface Order {
   deliveryProof?: string;
   lastUpdatedBy?: string; // Tên người xử lý trạng thái cuối cùng
   reminderCount?: number; // NEW: Number of times payment reminder sent
+  // Fix: Added carrierData property to store external shipping information
+  carrierData?: CarrierData;
 }
 
 export interface ImportRecord {
@@ -61,6 +73,7 @@ export interface Product {
   totalImported?: number; // Total Imported History
   lastImportDate: number; 
   importHistory?: ImportRecord[]; // NEW: Track distinct import batches
+  updatedAt?: number; // NEW: Timestamp for Delta Sync optimization
 }
 
 export interface Customer {
@@ -98,6 +111,7 @@ export interface BankConfig {
 export interface ShopConfig {
   shopName: string;
   hotline: string;
+  address: string; // NEW: Pickup address for API carriers
 }
 
 export interface Notification {

@@ -36,7 +36,7 @@ export const ROUTE_ZONES: RouteZone[] = [
     // 3. Khu Nhà Phố & Biệt Thự Ehome
     {
         id: 'NHAPHO',
-        name: '3. Nhà Phố Ehome (X,V,U,T,S,R)',
+        name: '3. Nhà Phố Ehome (X,V,U,T,S,R,h,J)',
         priority: 30,
         keywords: [
             'khu x', 'khu v', 'khu u', 'khu t', 'khu s', 'khu r', 'khu h', 'khu j',

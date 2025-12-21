@@ -1,3 +1,4 @@
+
 import jsPDF from 'jspdf';
 import QRCode from 'qrcode';
 import { Order, PaymentMethod, OrderStatus, Product } from '../types';
@@ -380,16 +381,13 @@ export const pdfService = {
                        || products.find(p => normalizeString(p.name).includes(normName));
                 
                 if (p) {
-                    const imported = p.totalImported || 0;
-                    // Note: 'Balance' logic similar to Dashboard: (Total Imported - Ordered)
-                    // This assumes 'Imported' is relevant to the current batch/context.
-                    const remaining = imported - qtyOrdered;
-                    return `${name}: ${qtyOrdered}/${imported} (Dư ${remaining})`;
+                    // UPDATED: Show ONLY Ordered and Stock (No Imported/Balance)
+                    return `${name}: ${qtyOrdered} [Tồn: ${p.stockQuantity || 0}]`;
                 }
                 return `${name}: ${qtyOrdered}`;
             });
 
-        const summaryText = "TỔNG HÀNG (Đặt/Nhập/Dư):  " + summaryParts.join('  |  ');
+        const summaryText = "TỔNG HÀNG (Đặt | Tồn):  " + summaryParts.join('   ');
             
         const sumLines = doc.splitTextToSize(summaryText, tableW);
         doc.text(sumLines, margin, currentY);
