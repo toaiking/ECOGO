@@ -9,6 +9,7 @@ import InventoryManager from './components/InventoryManager';
 import CustomerManager from './components/CustomerManager';
 import PaymentAudit from './components/PaymentAudit';
 import Login from './components/Login';
+import QuickActionWidget from './components/QuickActionWidget';
 import toast, { Toaster } from 'react-hot-toast';
 import { storageService } from './services/storageService';
 
@@ -60,6 +61,10 @@ const App: React.FC = () => {
             <Route path="/customers" element={<CustomerManager />} />
           </Routes>
         </main>
+        
+        {/* Widget Nổi Thông Minh */}
+        <QuickActionWidget />
+        
         <Toaster position="bottom-right" />
       </div>
     </HashRouter>

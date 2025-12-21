@@ -1,103 +1,60 @@
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import toast from 'react-hot-toast';
-import { Order, OrderStatus, PaymentMethod, ShopConfig } from '../types';
+import { Order, OrderStatus, PaymentMethod, BankConfig } from '../types';
 import { storageService, normalizePhone, normalizeString } from '../services/storageService';
+import { reconciliationService } from '../services/reconciliationService';
 import ConfirmModal from './ConfirmModal';
+import { differenceInDays } from 'date-fns';
 
 interface CustomerDebtGroup {
     key: string;
-    customerId: string;
     customerName: string;
     customerPhone: string;
     orders: Order[];
     totalAmount: number;
-    maxReminders: number;
+    daysOld: number;
 }
 
-// Helper to fix "User Gesture" issue with navigator.share
 const dataURLtoFile = (dataurl: string, filename: string) => {
     const arr = dataurl.split(',');
     const mime = arr[0].match(/:(.*?);/)?.[1];
     const bstr = atob(arr[1]);
     let n = bstr.length;
     const u8arr = new Uint8Array(n);
-    while (n--) {
-        u8arr[n] = bstr.charCodeAt(n);
-    }
+    while (n--) u8arr[n] = bstr.charCodeAt(n);
     return new File([u8arr], filename, { type: mime });
 };
 
 const PaymentAudit: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>([]);
-  const [bankConfig, setBankConfig] = useState<any>(null);
-  const [shopConfig, setShopConfig] = useState<ShopConfig | null>(null);
-  
-  // Filters
+  const [bankConfig, setBankConfig] = useState<BankConfig | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedBatch, setSelectedBatch] = useState('ALL');
   
-  // Selection State for Modal
-  const [selectedGroup, setSelectedGroup] = useState<CustomerDebtGroup | null>(null);
+  // Selection States
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedGroupKeys, setSelectedGroupKeys] = useState<Set<string>>(new Set());
+  
+  // UI States
+  const [showPasteModal, setShowPasteModal] = useState(false);
+  const [pasteText, setPasteText] = useState('');
+  const [activeGroup, setActiveGroup] = useState<CustomerDebtGroup | null>(null);
+  const [showBulkConfirm, setShowBulkConfirm] = useState(false);
+  const [isGeneratingQR, setIsGeneratingQR] = useState(false);
 
-  // Confirm Modal State
-  const [confirmData, setConfirmData] = useState<{isOpen: boolean, ids: string[], message: string}>({
-      isOpen: false, ids: [], message: ''
-  });
-
-  // Sharing State
-  const [isSharing, setIsSharing] = useState(false);
-
-  // NEW: Preload Ref
-  const groupQrImgRef = useRef<HTMLImageElement | null>(null);
+  const qrImgRef = useRef<HTMLImageElement | null>(null);
 
   useEffect(() => {
     const unsub = storageService.subscribeOrders((allOrders) => {
-      // 1. DATA CLEANING
-      const validOrders = new Map<string, Order>();
-      const validIdRegex = /^[A-Z0-9]{8}$/;
-
-      if (allOrders && Array.isArray(allOrders)) {
-          allOrders.forEach(o => {
-              if (!o || !o.id) return;
-              if (!validIdRegex.test(o.id)) return;
-              if (!o.customerName || !o.items || o.items.length === 0) return;
-              if (o.status === OrderStatus.CANCELLED) return;
-              if (o.paymentMethod !== PaymentMethod.TRANSFER) return;
-              if (o.paymentVerified) return;
-
-              validOrders.set(o.id, o); 
-          });
-      }
-      
-      const sorted = Array.from(validOrders.values())
+      const filtered = (allOrders || [])
+        .filter(o => o.paymentMethod === PaymentMethod.TRANSFER && !o.paymentVerified && o.status !== OrderStatus.CANCELLED)
         .sort((a, b) => b.createdAt - a.createdAt);
-      
-      setOrders(sorted);
+      setOrders(filtered);
     });
-
     storageService.getBankConfig().then(setBankConfig);
-    storageService.getShopConfig().then(setShopConfig);
-
     return () => { if (unsub) unsub(); };
   }, []);
-
-  // NEW: Preload Effect
-  useEffect(() => {
-      if (selectedGroup && bankConfig && bankConfig.accountNo) {
-          const idsStr = selectedGroup.orders.map(o => o.id).join(' ');
-          const desc = `DH ${idsStr}`;
-          const qrUrl = `https://img.vietqr.io/image/${bankConfig.bankId}-${bankConfig.accountNo}-${bankConfig.template || 'compact2'}.png?amount=${selectedGroup.totalAmount}&addInfo=${encodeURIComponent(desc)}&accountName=${encodeURIComponent(bankConfig.accountName)}`;
-          
-          const img = new Image();
-          img.crossOrigin = "Anonymous";
-          img.src = qrUrl;
-          img.onload = () => {
-              groupQrImgRef.current = img;
-          };
-      } else {
-          groupQrImgRef.current = null;
-      }
-  }, [selectedGroup, bankConfig]);
 
   const batches = useMemo(() => {
     const batchSet = new Set<string>();
@@ -105,579 +62,416 @@ const PaymentAudit: React.FC = () => {
     return Array.from(batchSet).sort();
   }, [orders]);
 
-  const filteredOrders = useMemo(() => {
-    return orders.filter(o => {
-        const matchSearch = searchTerm === '' || 
-             o.customerName.toLowerCase().includes(searchTerm.toLowerCase()) || 
-             o.customerPhone.includes(searchTerm) || 
-             o.id.includes(searchTerm.toUpperCase());
-        const matchBatch = selectedBatch === 'ALL' || o.batchId === selectedBatch;
-        return matchSearch && matchBatch;
-    });
-  }, [orders, searchTerm, selectedBatch]);
-
-  const totalAmount = filteredOrders.reduce((sum, o) => sum + o.totalPrice, 0);
-
-  // --- LOGIC GỘP NHÓM KHÁCH HÀNG ---
   const customerGroups = useMemo(() => {
       const groups: Record<string, CustomerDebtGroup> = {};
-      const processedIds = new Set<string>(); 
+      const now = Date.now();
 
-      filteredOrders.forEach(o => {
-          if (processedIds.has(o.id)) return;
-          processedIds.add(o.id);
+      orders.forEach(o => {
+          const matchSearch = !searchTerm || 
+            normalizeString(o.customerName).includes(normalizeString(searchTerm)) || 
+            o.customerPhone.includes(searchTerm) || 
+            o.id.includes(searchTerm.toUpperCase());
+          const matchBatch = selectedBatch === 'ALL' || o.batchId === selectedBatch;
+          if (!matchSearch || !matchBatch) return;
 
-          let key = '';
-          if (o.customerId) {
-               key = `${o.customerId}_${normalizeString(o.customerName)}`;
-          } else if (o.customerPhone && o.customerPhone.length > 6) {
-               key = normalizePhone(o.customerPhone);
-          } else {
-               const nName = normalizeString(o.customerName);
-               const nAddr = normalizeString(o.address || 'unknown');
-               key = `${nName}|${nAddr}`; 
-          }
+          let key = o.customerId || normalizePhone(o.customerPhone) || `${normalizeString(o.customerName)}|${normalizeString(o.address)}`;
 
           if (!groups[key]) {
               groups[key] = {
                   key,
-                  customerId: o.customerId || '', 
                   customerName: o.customerName,
                   customerPhone: o.customerPhone,
                   orders: [],
                   totalAmount: 0,
-                  maxReminders: 0
+                  daysOld: 0
               };
-          } else {
-              if (!groups[key].customerId && o.customerId) groups[key].customerId = o.customerId;
-              if ((!groups[key].customerPhone || groups[key].customerPhone.length < 8) && o.customerPhone) {
-                   groups[key].customerPhone = o.customerPhone;
-              }
           }
-
           groups[key].orders.push(o);
-          groups[key].totalAmount += (o.totalPrice || 0);
-          groups[key].maxReminders = Math.max(groups[key].maxReminders || 0, o.reminderCount || 0);
+          groups[key].totalAmount += o.totalPrice;
+          const days = differenceInDays(now, o.createdAt);
+          if (days > groups[key].daysOld) groups[key].daysOld = days;
       });
       
-      return Object.values(groups).sort((a, b) => b.totalAmount - a.totalAmount);
-  }, [filteredOrders]);
+      return Object.values(groups).sort((a, b) => b.daysOld - a.daysOld);
+  }, [orders, searchTerm, selectedBatch]);
 
-  // --- ACTIONS ---
-
-  const executeConfirm = async () => {
-    if (confirmData.ids.length > 0) {
-      const firstOrder = orders.find(o => o.id === confirmData.ids[0]);
-      const promises = confirmData.ids.map(id => 
-          storageService.updatePaymentVerification(id, true, firstOrder ? { name: firstOrder.customerName } : undefined)
-      );
-      await Promise.all(promises);
-      toast.success(`Đã xác nhận tiền về!`);
-      setConfirmData({ isOpen: false, ids: [], message: '' });
-      setSelectedGroup(null); // Close modal on success
-    }
+  // Actions for Reminders
+  const handleSms = (group: CustomerDebtGroup) => {
+      const msg = `Chào ${group.customerName}, tổng nợ đơn hàng của bạn là ${new Intl.NumberFormat('vi-VN').format(group.totalAmount)}đ. Vui lòng kiểm tra và thanh toán giúp shop nhé. Cảm ơn!`;
+      const ua = navigator.userAgent.toLowerCase();
+      const separator = (ua.indexOf('iphone') > -1 || ua.indexOf('ipad') > -1) ? '&' : '?';
+      window.open(`sms:${group.customerPhone}${separator}body=${encodeURIComponent(msg)}`, '_self');
+      storageService.incrementReminderCount(group.orders.map(o => o.id));
   };
 
-  const handleConfirmGroup = (group: CustomerDebtGroup) => {
-      const ids = group.orders.map(o => o.id);
-      setConfirmData({
-          isOpen: true,
-          ids: ids,
-          message: `Xác nhận tiền về đủ ${new Intl.NumberFormat('vi-VN').format(group.totalAmount)}đ cho ${ids.length} đơn của ${group.customerName}?`
-      });
+  const handleZalo = (group: CustomerDebtGroup) => {
+      window.open(`https://zalo.me/${normalizePhone(group.customerPhone).replace(/^0/, '84')}`, '_blank');
+      storageService.incrementReminderCount(group.orders.map(o => o.id));
   };
 
-  const incrementReminder = async (ids: string[]) => {
-      await storageService.incrementReminderCount(ids);
-  };
-
-  // UPDATED: Generate Image with Canvas (Cursor Based Logic)
-  const generateAndShareQR = async (
-        amount: number, 
-        content: string, 
-        title: string, 
-        relatedIds: string[], 
-        customerName: string, 
-        orderCount: number,
-        itemsSummary: Record<string, number>, // NEW
-        preloadedImg?: HTMLImageElement // NEW Param for loaded image
-    ) => {
-    if (!bankConfig || !bankConfig.accountNo) {
-        toast.error("Thiếu thông tin Ngân hàng");
-        return;
-    }
-    setIsSharing(true);
-    const toastId = toast.loading("Đang tạo Phiếu thanh toán...");
-    try {
-        let qrImg = preloadedImg;
-        
-        // Fallback if not preloaded (rare but safe)
-        if (!qrImg) {
-            const qrUrl = `https://img.vietqr.io/image/${bankConfig.bankId}-${bankConfig.accountNo}-${bankConfig.template || 'compact2'}.png?amount=${amount}&addInfo=${encodeURIComponent(content)}&accountName=${encodeURIComponent(bankConfig.accountName)}`;
-            qrImg = new Image();
-            qrImg.crossOrigin = "Anonymous";
-            qrImg.src = qrUrl;
-            await new Promise((resolve, reject) => {
-                if(qrImg) {
-                    qrImg.onload = resolve;
-                    qrImg.onerror = reject;
-                }
-            });
-        }
-
-        // 3. Setup Canvas
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        if (!ctx) throw new Error("Canvas error");
-
-        const W = 800;
-        const qrSize = 500;
-        const qrRatio = qrImg ? (qrImg.naturalWidth / qrImg.naturalHeight) : 1;
-        const drawHeight = qrSize / qrRatio;
-
-        const itemsList = Object.entries(itemsSummary);
-        
-        // DYNAMIC HEIGHT CALCULATION
-        let H = 0;
-        H += 140; // Header
-        H += 40; // Spacing
-        H += 100; // Amount Box
-        H += 40; // Spacing
-        H += drawHeight; // QR
-        H += 40; // Spacing
-        H += 150; // Info
-        H += 40; // Spacing
-        H += 60; // Items Header
-        H += (itemsList.length * 50); // Items list
-        H += 40; // Spacing
-        H += 120; // Footer
-        H += 50; // Padding
-
-        canvas.width = W;
-        canvas.height = H;
-
-        // 4. Draw
-        // Background
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, W, H);
-        
-        let cursorY = 0;
-
-        // Header
-        ctx.fillStyle = '#1e3a8a'; // Blue for Debt
-        ctx.fillRect(0, cursorY, W, 140);
-        
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 40px Arial, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('QUÉT MÃ THANH TOÁN', W / 2, cursorY + 70);
-
-        // Shop Name
-        const sName = shopConfig?.shopName || 'ECOGO LOGISTICS';
-        
-        ctx.fillStyle = '#374151';
-        ctx.font = 'bold 32px Arial, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'top';
-        ctx.fillText(sName.toUpperCase(), W / 2, cursorY + 140 + 20);
-
-        cursorY += 140; // Header
-        cursorY += 40; // Spacing
-
-        // Amount
-        ctx.fillStyle = '#eff6ff'; // Light blue
-        
-        if ((ctx as any).roundRect) {
-            ctx.beginPath();
-            (ctx as any).roundRect(100, cursorY, 600, 100, 20);
-            ctx.fill();
-        } else {
-            ctx.fillRect(100, cursorY, 600, 100);
-        }
-
-        ctx.strokeStyle = '#bfdbfe';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-
-        ctx.fillStyle = '#1e40af';
-        ctx.font = 'bold 60px Arial, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(`${new Intl.NumberFormat('vi-VN').format(amount)}đ`, W / 2, cursorY + 50);
-
-        cursorY += 100; // Amount Box
-        cursorY += 40; // Spacing
-
-        // QR (Aspect Ratio Corrected)
-        if (qrImg) {
-            ctx.drawImage(qrImg, (W - qrSize) / 2, cursorY, qrSize, drawHeight);
-        }
-        
-        cursorY += drawHeight; // QR
-        cursorY += 40; // Spacing
-
-        // Divider
-        ctx.strokeStyle = '#e5e7eb';
-        ctx.lineWidth = 2;
-        ctx.setLineDash([10, 10]);
-        ctx.beginPath();
-        ctx.moveTo(50, cursorY);
-        ctx.lineTo(W - 50, cursorY);
-        ctx.stroke();
-        ctx.setLineDash([]);
-
-        cursorY += 40; // Divider Spacing
-
-        // Details
-        ctx.fillStyle = '#1f2937';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'top';
-        
-        ctx.font = 'normal 28px Arial, sans-serif';
-        ctx.fillStyle = '#6b7280';
-        ctx.fillText('Khách hàng:', 80, cursorY);
-        ctx.font = 'bold 28px Arial, sans-serif';
-        ctx.fillStyle = '#111827';
-        ctx.fillText(customerName, 300, cursorY);
-
-        cursorY += 50; // Row 1
-
-        ctx.font = 'normal 28px Arial, sans-serif';
-        ctx.fillStyle = '#6b7280';
-        ctx.fillText('Số lượng đơn:', 80, cursorY);
-        ctx.font = 'bold 28px Arial, sans-serif';
-        ctx.fillStyle = '#111827';
-        ctx.fillText(`${orderCount} đơn hàng`, 300, cursorY);
-
-        cursorY += 70; // Row 2 + Spacing
-
-        // ITEMS LIST HEADER
-        ctx.fillStyle = '#f3f4f6';
-        ctx.fillRect(50, cursorY, 700, 40);
-        ctx.fillStyle = '#374151';
-        ctx.font = 'bold 24px Arial, sans-serif';
-        ctx.textAlign = 'left';
-        ctx.fillText('Chi tiết hàng hóa tổng hợp', 70, cursorY + 8);
-
-        cursorY += 50; // Header + Spacing
-
-        // ITEMS LIST
-        ctx.font = 'normal 26px Arial, sans-serif';
-        ctx.textBaseline = 'middle';
-        
-        itemsList.forEach(([name, qty], index) => {
-            const rowCenterY = cursorY + 20;
-
-            let displayName = name;
-            if (displayName.length > 35) displayName = displayName.substring(0, 32) + "...";
-            
-            ctx.fillStyle = '#1f2937';
-            ctx.textAlign = 'left';
-            ctx.fillText(`${index + 1}. ${displayName}`, 70, rowCenterY);
-            
-            ctx.textAlign = 'right';
-            ctx.font = 'bold 26px Arial, sans-serif';
-            ctx.fillText(`x${qty}`, 730, rowCenterY);
-            ctx.font = 'normal 26px Arial, sans-serif';
-            
-            ctx.beginPath();
-            ctx.strokeStyle = '#f3f4f6';
-            ctx.lineWidth = 1;
-            ctx.setLineDash([]);
-            ctx.moveTo(70, cursorY + 45);
-            ctx.lineTo(730, cursorY + 45);
-            ctx.stroke();
-
-            cursorY += 50; // Row height
-        });
-
-        cursorY += 40; // Spacing
-
-        // Footer
-        if (bankConfig) {
-            const footerY = cursorY;
-            ctx.fillStyle = '#f9fafb';
-            ctx.fillRect(0, footerY, W, 120);
-            ctx.fillStyle = '#4b5563';
-            ctx.font = 'italic 24px Arial, sans-serif';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'top';
-            ctx.fillText(`Ngân hàng: ${bankConfig.bankId} - STK: ${bankConfig.accountNo}`, W / 2, footerY + 30);
-            ctx.fillText(`Chủ TK: ${bankConfig.accountName}`, W / 2, footerY + 70);
-        }
-
-        // 5. Share with User Gesture Fix (dataURLtoFile + synchronous navigator.share call)
-        const dataUrl = canvas.toDataURL('image/png');
-        const file = dataURLtoFile(dataUrl, `debt-${Date.now()}.png`);
-        
-        // Fire-and-forget logic for reminder increment to NOT block user gesture
-        incrementReminder(relatedIds);
-
-        if (navigator.share) {
-            await navigator.share({ 
-                title: title, 
-                text: `Thanh toán công nợ ${customerName}`, 
-                files: [file] 
-            });
-            toast.dismiss(toastId);
-            toast.success("Đã mở chia sẻ!");
-        } else {
-            // Fallback
-            const a = document.createElement('a');
-            a.href = dataUrl;
-            a.download = `debt-${Date.now()}.png`;
-            a.click();
-            toast.success("Đã tải ảnh xuống");
-            toast.dismiss(toastId);
-        }
-
-    } catch (e: any) {
-        console.error(e);
-        toast.dismiss(toastId);
-        toast.error("Lỗi tạo ảnh: " + e.message);
-    } finally {
-        setIsSharing(false);
-    }
-  };
-
-  const handleShareGroupQR = (group: CustomerDebtGroup) => {
-      const idsStr = group.orders.map(o => o.id).join(' ');
-      const desc = `DH ${idsStr}`;
-      const ids = group.orders.map(o => o.id);
+  const handleShareDebtQR = async (group: CustomerDebtGroup) => {
+      if (!bankConfig || !bankConfig.accountNo) {
+          toast.error("Vui lòng cài đặt thông tin Ngân hàng trước.");
+          return;
+      }
+      setIsGeneratingQR(true);
+      const toastId = toast.loading("Đang tạo phiếu nợ...");
       
-      // Calculate Item Summary
-      const itemsSummary: Record<string, number> = {};
-      group.orders.forEach(o => {
-          o.items.forEach(item => {
-              const name = item.name.trim();
-              if (name) {
-                  itemsSummary[name] = (itemsSummary[name] || 0) + item.quantity;
-              }
+      try {
+          const orderIds = group.orders.map(o => o.id).join(' ');
+          const qrUrl = `https://img.vietqr.io/image/${bankConfig.bankId}-${bankConfig.accountNo}-${bankConfig.template || 'compact2'}.png?amount=${group.totalAmount}&addInfo=${encodeURIComponent(`DH ${orderIds}`)}&accountName=${encodeURIComponent(bankConfig.accountName)}`;
+          
+          const img = new Image();
+          img.crossOrigin = "Anonymous";
+          img.src = qrUrl;
+          
+          await new Promise((resolve, reject) => {
+              img.onload = resolve;
+              img.onerror = reject;
           });
+
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          if (!ctx) throw new Error("Canvas error");
+
+          const W = 800;
+          const qrSize = 500;
+          // Calculate height based on number of items
+          const items = Array.from(new Set(group.orders.flatMap(o => o.items.map(i => i.name))));
+          const H = 650 + (items.length * 45);
+          
+          canvas.width = W;
+          canvas.height = H;
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, W, H);
+
+          // Header
+          ctx.fillStyle = '#1e3a8a'; // Dark blue
+          ctx.fillRect(0, 0, W, 140);
+          ctx.fillStyle = '#ffffff';
+          ctx.font = 'bold 42px Arial';
+          ctx.textAlign = 'center';
+          ctx.fillText('PHIẾU THANH TOÁN CÔNG NỢ', W/2, 85);
+
+          // Customer
+          ctx.fillStyle = '#374151';
+          ctx.font = 'bold 32px Arial';
+          ctx.fillText(group.customerName.toUpperCase(), W/2, 190);
+          
+          // Total
+          ctx.fillStyle = '#ef4444';
+          ctx.font = 'black 70px Arial';
+          ctx.fillText(`${new Intl.NumberFormat('vi-VN').format(group.totalAmount)}đ`, W/2, 280);
+
+          // QR
+          ctx.drawImage(img, (W - qrSize) / 2, 320, qrSize, qrSize);
+
+          // Footer info
+          ctx.fillStyle = '#9ca3af';
+          ctx.font = 'italic 24px Arial';
+          ctx.fillText('Vui lòng quét mã QR để thanh toán nhanh chóng', W/2, H - 40);
+
+          const dataUrl = canvas.toDataURL('image/png');
+          const file = dataURLtoFile(dataUrl, `debt-${group.customerName}.png`);
+          
+          if (navigator.share) {
+              await navigator.share({ files: [file], title: `Công nợ ${group.customerName}` });
+          } else {
+              const a = document.createElement('a');
+              a.href = dataUrl;
+              a.download = `debt-${group.customerName}.png`;
+              a.click();
+          }
+          storageService.incrementReminderCount(group.orders.map(o => o.id));
+          toast.success("Đã tạo phiếu nợ!");
+      } catch (e) {
+          console.error(e);
+          toast.error("Lỗi khi tạo ảnh QR");
+      } finally {
+          setIsGeneratingQR(false);
+          toast.dismiss(toastId);
+      }
+  };
+
+  const toggleSelectGroup = (key: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      setSelectedGroupKeys(prev => {
+          const next = new Set(prev);
+          if (next.has(key)) next.delete(key);
+          else next.add(key);
+          setIsSelectionMode(next.size > 0);
+          return next;
       });
-      
-      generateAndShareQR(
-          group.totalAmount, 
-          desc, 
-          `Thanh toán tổng ${group.orders.length} đơn`, 
-          ids, 
-          group.customerName, 
-          group.orders.length,
-          itemsSummary, // Pass summary
-          groupQrImgRef.current || undefined // Pass preloaded image ref
-      );
   };
 
-  // ... (rest of the component)
-  const handleSMS = async (group: CustomerDebtGroup) => {
-     const phone = group.customerPhone;
-     if (!phone) { toast.error("Khách không có SĐT"); return; }
-     if (!bankConfig || !bankConfig.accountNo) { toast.error("Chưa có thông tin ngân hàng"); return; }
-     
-     const ids = group.orders.map(o => o.id);
-     await incrementReminder(ids);
-     
-     const idsStr = ids.join(' ');
-     const content = `DH ${idsStr}`;
-     const price = new Intl.NumberFormat('vi-VN').format(group.totalAmount);
-     
-     const msg = `Chào ${group.customerName}, tổng tiền ${group.orders.length} đơn là ${price}đ. CK tới ${bankConfig.accountNo} (${bankConfig.bankId}). ND: ${content}. Tks!`;
-     
-     const ua = navigator.userAgent.toLowerCase();
-     const isIOS = ua.indexOf('iphone') > -1 || ua.indexOf('ipad') > -1;
-     const separator = isIOS ? '&' : '?';
-     window.open(`sms:${phone}${separator}body=${encodeURIComponent(msg)}`, '_self');
+  const handleSmartPaste = () => {
+      if (!pasteText.trim()) return;
+      const result = reconciliationService.reconcileFromText(pasteText, orders);
+      if (result.matchedOrders.length > 0) {
+          const ids = result.matchedOrders.map(o => o.id);
+          confirmBulkPayment(ids);
+          setShowPasteModal(false);
+          setPasteText('');
+      } else {
+          toast.error("Không tìm thấy mã đơn nào trong nội dung dán.");
+      }
   };
 
-  const ReminderBadge = ({ count }: { count?: number }) => {
-      if (!count || count === 0) return null;
-      return (
-          <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-orange-100 text-orange-600 border border-orange-200">
-              <i className="fas fa-bell text-[8px]"></i> {count}
-          </span>
-      );
-  }
+  const confirmBulkPayment = async (orderIds: string[]) => {
+      const loading = toast.loading(`Đang xử lý ${orderIds.length} đơn...`);
+      try {
+          const promises = orderIds.map(id => storageService.updatePaymentVerification(id, true));
+          await Promise.all(promises);
+          toast.success(`Đã xác nhận thanh toán cho ${orderIds.length} đơn!`);
+          setSelectedGroupKeys(new Set());
+          setIsSelectionMode(false);
+      } catch (e) {
+          toast.error("Lỗi khi cập nhật dữ liệu.");
+      } finally {
+          toast.dismiss(loading);
+      }
+  };
+
+  const executeBulkConfirm = () => {
+      const ids: string[] = [];
+      customerGroups.forEach(g => {
+          if (selectedGroupKeys.has(g.key)) {
+              g.orders.forEach(o => ids.push(o.id));
+          }
+      });
+      confirmBulkPayment(ids);
+      setShowBulkConfirm(false);
+  };
+
+  const getAgingStyle = (days: number) => {
+      if (days >= 5) return 'bg-red-100 text-red-700 border-red-200';
+      if (days >= 2) return 'bg-yellow-100 text-yellow-700 border-yellow-200';
+      return 'bg-eco-100 text-eco-700 border-eco-200';
+  };
 
   return (
-    <div className="max-w-7xl mx-auto pb-24 animate-fade-in px-2 sm:px-4">
-      {/* 1. HEADER & SUMMARY */}
-      <div className="bg-white rounded-2xl p-4 shadow-sm border border-eco-100 mb-4 flex flex-col md:flex-row justify-between items-center gap-3 sticky top-16 z-30">
-        <div className="flex items-center gap-4">
-             <div className="w-11 h-11 rounded-full bg-eco-50 text-eco-600 flex items-center justify-center text-xl shadow-inner ring-4 ring-eco-50/50">
-                 <i className="fas fa-hand-holding-usd"></i>
-             </div>
-             <div>
-                 <h2 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">TỔNG TIỀN CHỜ VỀ</h2>
-                 <div className="text-2xl font-black text-eco-700 leading-none">
-                     {new Intl.NumberFormat('vi-VN').format(totalAmount)}<span className="text-sm text-gray-400 ml-1 font-medium">đ</span>
-                 </div>
-             </div>
-        </div>
-        
-        <div className="flex items-center gap-3 w-full md:w-auto">
-            <div className="relative">
-                <select 
-                    value={selectedBatch} 
-                    onChange={e => setSelectedBatch(e.target.value)}
-                    className="appearance-none bg-gray-100 border border-gray-200 text-gray-700 py-2 pl-3 pr-8 rounded-xl text-xs font-bold outline-none focus:border-eco-500 transition-colors cursor-pointer min-w-[120px]"
-                >
-                    <option value="ALL">📦 Tất cả Lô</option>
-                    {batches.map(b => (
-                        <option key={b} value={b}>{b}</option>
-                    ))}
-                </select>
-                <i className="fas fa-chevron-down absolute right-3 top-2.5 text-gray-400 text-xs pointer-events-none"></i>
-            </div>
-            
-            <div className="relative flex-grow md:flex-grow-0 md:w-64">
-                 <i className="fas fa-search absolute left-3 top-2.5 text-gray-400 text-xs"></i>
-                 <input 
-                     value={searchTerm} 
-                     onChange={e => setSearchTerm(e.target.value)} 
-                     placeholder="Tìm tên, SĐT, mã đơn..." 
-                     className="w-full pl-8 pr-3 py-2 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none shadow-sm focus:border-eco-400 transition-colors" 
-                 />
-            </div>
-        </div>
+    <div className="max-w-6xl mx-auto pb-32 animate-fade-in px-2 sm:px-4">
+      
+      {/* HEADER SECTION */}
+      <div className="flex flex-col gap-4 mb-6 sticky top-16 z-30 bg-gray-50/95 py-2 backdrop-blur-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-xl font-black text-gray-800 uppercase tracking-tighter">Đối soát công nợ</h2>
+              <button 
+                  onClick={() => setShowPasteModal(true)}
+                  className="bg-black text-white px-4 py-2 rounded-xl font-bold text-xs uppercase shadow-lg active:scale-95 transition-all flex items-center gap-2"
+              >
+                  <i className="fas fa-magic"></i> Smart-Paste (AI)
+              </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div className="relative">
+                  <i className="fas fa-search absolute left-3 top-3 text-gray-400 text-xs"></i>
+                  <input 
+                      value={searchTerm} 
+                      onChange={e => setSearchTerm(e.target.value)}
+                      placeholder="Tìm khách, SĐT, mã đơn..." 
+                      className="w-full pl-9 pr-4 py-2.5 rounded-xl border border-gray-200 focus:ring-2 focus:ring-eco-500 outline-none text-sm font-medium" 
+                  />
+              </div>
+              <select 
+                  value={selectedBatch} 
+                  onChange={e => setSelectedBatch(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none text-sm font-bold bg-white"
+              >
+                  <option value="ALL">Tất cả các lô hàng</option>
+                  {batches.map(b => <option key={b} value={b}>{b}</option>)}
+              </select>
+          </div>
       </div>
 
-      {/* 2. TABLE LIST */}
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-          {filteredOrders.length === 0 ? (
-               <div className="text-center py-20 flex flex-col items-center justify-center text-gray-300">
-                   <i className="fas fa-check-circle text-5xl mb-3 opacity-20"></i>
-                   <p className="text-sm font-medium">Tuyệt vời! Không có đơn nợ nào.</p>
-               </div>
+      {/* SUMMARY CARDS */}
+      <div className="flex overflow-x-auto no-scrollbar gap-3 mb-6 pb-2">
+          <div className="flex-shrink-0 min-w-[140px] bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
+              <div className="text-[10px] font-black text-gray-400 uppercase">Tổng nợ</div>
+              <div className="text-xl font-black text-red-600">{new Intl.NumberFormat('vi-VN').format(customerGroups.reduce((s, g) => s + g.totalAmount, 0))}đ</div>
+          </div>
+          <div className="flex-shrink-0 min-w-[140px] bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
+              <div className="text-[10px] font-black text-gray-400 uppercase">Số khách nợ</div>
+              <div className="text-xl font-black text-gray-800">{customerGroups.length}</div>
+          </div>
+          <div className="flex-shrink-0 min-w-[140px] bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
+              <div className="text-[10px] font-black text-gray-400 uppercase">Đơn chờ CK</div>
+              <div className="text-xl font-black text-blue-600">{orders.length}</div>
+          </div>
+      </div>
+
+      {/* CUSTOMER LIST */}
+      <div className="space-y-3">
+          {customerGroups.length === 0 ? (
+              <div className="text-center py-20 text-gray-300">
+                  <i className="fas fa-check-circle text-5xl mb-4 opacity-20"></i>
+                  <p className="font-bold">Tuyệt vời! Không còn công nợ cần xử lý.</p>
+              </div>
           ) : (
-            <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                    <thead className="bg-gray-100 text-gray-500 font-bold uppercase text-[10px] tracking-wider">
-                        <tr>
-                            <th className="p-3 text-center w-12">#</th>
-                            <th className="p-3">Khách Hàng</th>
-                            <th className="p-3 hidden sm:table-cell">SĐT / Liên hệ</th>
-                            <th className="p-3 text-center">Số đơn</th>
-                            <th className="p-3 text-center hidden sm:table-cell">Đã nhắc</th>
-                            <th className="p-3 text-right">Tổng nợ</th>
-                            <th className="p-3 text-center w-20"></th>
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                        {customerGroups.map((group, idx) => (
-                            <tr 
-                                key={group.key} 
-                                onClick={() => setSelectedGroup(group)}
-                                className="hover:bg-blue-50 cursor-pointer transition-colors group"
-                            >
-                                <td className="p-3 text-center font-bold text-gray-400 text-xs">{idx + 1}</td>
-                                <td className="p-3">
-                                    <div className="font-bold text-gray-800 text-sm">{group.customerName}</div>
-                                    <div className="sm:hidden text-[10px] text-gray-500 font-mono mt-0.5">{group.customerPhone}</div>
-                                </td>
-                                <td className="p-3 hidden sm:table-cell">
-                                    <span className="text-xs font-mono text-gray-600 bg-gray-100 px-2 py-1 rounded">{group.customerPhone || '---'}</span>
-                                </td>
-                                <td className="p-3 text-center">
-                                    <span className="text-xs font-bold bg-gray-100 text-gray-700 px-2 py-1 rounded-full">{group.orders.length}</span>
-                                </td>
-                                <td className="p-3 text-center hidden sm:table-cell">
-                                    <ReminderBadge count={group.maxReminders} />
-                                </td>
-                                <td className="p-3 text-right">
-                                    <span className="font-black text-eco-600 text-sm">{new Intl.NumberFormat('vi-VN').format(group.totalAmount)}</span>
-                                </td>
-                                <td className="p-3 text-center">
-                                    <button className="text-gray-300 group-hover:text-blue-600 transition-colors">
-                                        <i className="fas fa-chevron-right"></i>
-                                    </button>
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
+              customerGroups.map(group => (
+                  <div 
+                      key={group.key}
+                      onClick={() => setActiveGroup(group)}
+                      className={`bg-white rounded-2xl border-2 transition-all cursor-pointer p-4 flex items-center gap-3 sm:gap-4 ${
+                          selectedGroupKeys.has(group.key) ? 'border-eco-500 bg-eco-50 shadow-md' : 'border-gray-100 hover:border-gray-200 shadow-sm'
+                      }`}
+                  >
+                      {/* Selection Checkbox */}
+                      <div 
+                          onClick={(e) => toggleSelectGroup(group.key, e)}
+                          className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center flex-shrink-0 transition-colors ${
+                              selectedGroupKeys.has(group.key) ? 'bg-eco-600 border-eco-600 text-white' : 'border-gray-300 bg-white'
+                          }`}
+                      >
+                          {selectedGroupKeys.has(group.key) && <i className="fas fa-check text-xs"></i>}
+                      </div>
+
+                      {/* Main Info */}
+                      <div className="flex-grow min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                              <span className="font-black text-gray-800 text-sm truncate uppercase">{group.customerName}</span>
+                              <span className={`text-[9px] font-black px-2 py-0.5 rounded-full border whitespace-nowrap uppercase ${getAgingStyle(group.daysOld)}`}>
+                                  {group.daysOld === 0 ? 'Hôm nay' : `${group.daysOld} ngày`}
+                              </span>
+                          </div>
+                          <div className="flex items-center gap-2 text-[10px] text-gray-400">
+                              <span className="font-mono">{group.customerPhone || 'N/A'}</span>
+                              <span className="bg-gray-100 px-1.5 py-0.5 rounded font-bold text-gray-500">{group.orders.length} đơn</span>
+                          </div>
+                      </div>
+
+                      {/* Remind Buttons (Hidden on very small screens, use group modal instead) */}
+                      <div className="hidden sm:flex items-center gap-1 shrink-0">
+                          <button onClick={(e) => { e.stopPropagation(); handleZalo(group); }} className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center border border-blue-100" title="Zalo"><i className="fab fa-facebook-messenger text-xs"></i></button>
+                          <button onClick={(e) => { e.stopPropagation(); handleSms(group); }} className="w-8 h-8 rounded-lg bg-orange-50 text-orange-600 flex items-center justify-center border border-orange-100" title="SMS"><i className="fas fa-comment-dots text-xs"></i></button>
+                      </div>
+
+                      {/* Price Area */}
+                      <div className="text-right flex-shrink-0 ml-1">
+                          <div className="text-sm font-black text-red-600 leading-none">{new Intl.NumberFormat('vi-VN').format(group.totalAmount)}đ</div>
+                          <div className="text-[9px] font-bold text-gray-400 uppercase mt-1">Chờ nợ</div>
+                      </div>
+                  </div>
+              ))
           )}
       </div>
 
-      {/* 3. DETAIL POPUP (MODAL) */}
-      {selectedGroup && (
-          <div className="fixed inset-0 z-[100] bg-gray-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in" onClick={() => setSelectedGroup(null)}>
-              <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
-                  {/* Header */}
-                  <div className="p-5 border-b border-gray-100 flex justify-between items-start bg-gray-50">
+      {/* FLOATING ACTION BAR */}
+      {isSelectionMode && (
+          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[50] w-[95%] max-w-md animate-slide-up">
+              <div className="bg-gray-900 text-white rounded-2xl shadow-2xl p-4 flex items-center justify-between border border-gray-700">
+                  <div className="flex items-center gap-3">
+                      <button 
+                        onClick={() => { setSelectedGroupKeys(new Set()); setIsSelectionMode(false); }}
+                        className="w-8 h-8 rounded-full bg-gray-800 flex items-center justify-center hover:bg-gray-700"
+                      >
+                          <i className="fas fa-times text-xs"></i>
+                      </button>
                       <div>
-                          <div className="flex items-center gap-2">
-                              <h3 className="font-bold text-xl text-gray-800">{selectedGroup.customerName}</h3>
-                              <ReminderBadge count={selectedGroup.maxReminders} />
-                          </div>
-                          <div className="text-sm text-gray-500 font-mono mt-1 flex items-center gap-2">
-                              <i className="fas fa-phone-alt text-xs"></i> {selectedGroup.customerPhone || 'Không có SĐT'}
-                          </div>
-                      </div>
-                      <div className="text-right">
-                          <div className="text-[10px] font-bold text-gray-400 uppercase">Tổng nợ</div>
-                          <div className="text-xl font-black text-eco-600">{new Intl.NumberFormat('vi-VN').format(selectedGroup.totalAmount)}đ</div>
+                          <div className="text-[10px] font-bold text-gray-400 uppercase leading-none">Đã chọn</div>
+                          <div className="text-lg font-black leading-none mt-1">{selectedGroupKeys.size} khách</div>
                       </div>
                   </div>
+                  <button 
+                    onClick={() => setShowBulkConfirm(true)}
+                    className="bg-eco-600 hover:bg-eco-500 px-6 py-2.5 rounded-xl font-black text-sm uppercase shadow-lg shadow-eco-900 transition-all active:scale-95"
+                  >
+                      Xác nhận đã nhận <i className="fas fa-check-double ml-1"></i>
+                  </button>
+              </div>
+          </div>
+      )}
 
-                  {/* Order List */}
-                  <div className="flex-grow overflow-y-auto p-4 space-y-3 bg-gray-50/30">
-                      <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 px-1">Chi tiết đơn hàng ({selectedGroup.orders.length})</div>
-                      {selectedGroup.orders.map(o => (
-                          <div key={o.id} className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm">
-                              <div className="flex justify-between items-start mb-1">
-                                  <div className="flex items-center gap-2">
-                                      <span className="font-mono font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded text-[10px]">#{o.id}</span>
-                                      {o.batchId && <span className="text-[10px] text-gray-400 border border-gray-100 px-1.5 rounded">{o.batchId}</span>}
-                                  </div>
-                                  <span className="font-bold text-gray-800 text-sm">{new Intl.NumberFormat('vi-VN').format(o.totalPrice)}</span>
-                              </div>
-                              <div className="text-xs text-gray-700 leading-relaxed pl-1">
-                                  {o.items.map(i => `${i.name} (x${i.quantity})`).join(', ')}
-                              </div>
-                              {o.notes && <div className="text-[10px] text-orange-600 italic mt-1 bg-orange-50 px-2 py-1 rounded border border-orange-100 inline-block"><i className="fas fa-sticky-note mr-1"></i>{o.notes}</div>}
-                          </div>
-                      ))}
+      {/* SMART PASTE MODAL */}
+      {showPasteModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm animate-fade-in">
+              <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-scale-in">
+                  <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                      <h3 className="font-black text-gray-800 uppercase text-sm tracking-tight">Smart-Paste (Đối soát nhanh)</h3>
+                      <button onClick={() => setShowPasteModal(false)} className="text-gray-400"><i className="fas fa-times"></i></button>
                   </div>
-
-                  {/* Footer Actions */}
-                  <div className="p-4 bg-white border-t border-gray-100 grid grid-cols-2 gap-3">
+                  <div className="p-6 space-y-4">
+                      <p className="text-xs text-gray-500 font-medium">Dán nội dung tin nhắn báo tiền về của Ngân hàng hoặc Zalo vào đây. AI sẽ tự động tìm mã đơn hàng.</p>
+                      <textarea 
+                          value={pasteText}
+                          onChange={e => setPasteText(e.target.value)}
+                          className="w-full h-40 p-4 bg-gray-50 border-2 border-gray-200 rounded-2xl outline-none focus:border-black font-medium text-sm resize-none"
+                          placeholder="VD: +150,000 VND ND: DH ABC123456..."
+                      />
                       <button 
-                          onClick={() => handleConfirmGroup(selectedGroup)} 
-                          className="col-span-2 py-3 bg-eco-600 hover:bg-eco-700 text-white font-bold rounded-xl shadow-lg shadow-green-200 transition-transform active:scale-95 flex items-center justify-center gap-2"
+                          onClick={handleSmartPaste}
+                          className="w-full py-4 bg-black text-white rounded-2xl font-black uppercase text-xs shadow-xl active:scale-95 transition-all"
                       >
-                          <i className="fas fa-check-circle"></i> Xác nhận Đã nhận tiền
-                      </button>
-                      
-                      <button 
-                          onClick={() => handleShareGroupQR(selectedGroup)} 
-                          disabled={isSharing}
-                          className="py-3 bg-white border border-gray-200 hover:border-blue-300 hover:bg-blue-50 text-blue-700 font-bold rounded-xl transition-colors flex items-center justify-center gap-2 shadow-sm"
-                      >
-                          <i className="fas fa-qrcode"></i> Gửi mã QR
-                      </button>
-                      
-                      <button 
-                          onClick={() => handleSMS(selectedGroup)} 
-                          className="py-3 bg-white border border-gray-200 hover:border-orange-300 hover:bg-orange-50 text-orange-600 font-bold rounded-xl transition-colors flex items-center justify-center gap-2 shadow-sm"
-                      >
-                          <i className="fas fa-comment-dots"></i> Nhắn SMS
+                          Bắt đầu AI Scanning <i className="fas fa-magic ml-2"></i>
                       </button>
                   </div>
               </div>
           </div>
       )}
 
-      {/* CONFIRM MODAL */}
+      {/* GROUP DETAIL MODAL */}
+      {activeGroup && (
+          <div className="fixed inset-0 z-[100] bg-gray-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in" onClick={() => setActiveGroup(null)}>
+              <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg flex flex-col max-h-[85vh] animate-scale-in" onClick={e => e.stopPropagation()}>
+                  <div className="p-6 border-b border-gray-100 bg-gray-50 flex justify-between items-start">
+                      <div className="min-w-0">
+                          <h3 className="font-black text-xl text-gray-800 uppercase truncate pr-4">{activeGroup.customerName}</h3>
+                          <p className="text-sm font-bold text-gray-400 mt-1">{activeGroup.customerPhone || 'Không có SĐT'}</p>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                          <div className="text-[10px] font-black text-gray-400 uppercase">Tổng nợ</div>
+                          <div className="text-2xl font-black text-red-600 leading-none mt-1">{new Intl.NumberFormat('vi-VN').format(activeGroup.totalAmount)}đ</div>
+                      </div>
+                  </div>
+
+                  <div className="flex-grow overflow-y-auto p-4 space-y-3 bg-gray-50/30">
+                      {activeGroup.orders.map(o => (
+                          <div key={o.id} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex justify-between items-center group">
+                              <div className="min-w-0">
+                                  <div className="flex items-center gap-2 mb-1">
+                                      <span className="font-black text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg text-[11px]">#{o.id}</span>
+                                      <span className="text-[10px] text-gray-400 font-bold italic">{new Date(o.createdAt).toLocaleDateString('vi-VN')}</span>
+                                  </div>
+                                  <div className="text-[11px] font-bold text-gray-500 leading-tight truncate max-w-[220px]">
+                                      {o.items.map(i => `${i.name} (x${i.quantity})`).join(', ')}
+                                  </div>
+                              </div>
+                              <div className="text-right">
+                                  <div className="font-black text-gray-800 text-sm">{new Intl.NumberFormat('vi-VN').format(o.totalPrice)}đ</div>
+                                  <button 
+                                      onClick={() => confirmBulkPayment([o.id])}
+                                      className="text-[9px] font-black text-blue-600 uppercase hover:underline mt-1"
+                                    >Xác nhận lẻ</button>
+                              </div>
+                          </div>
+                      ))}
+                  </div>
+
+                  <div className="p-4 bg-white border-t border-gray-100 flex flex-col gap-3">
+                      <div className="grid grid-cols-3 gap-2">
+                          <button onClick={() => handleZalo(activeGroup)} className="py-3 bg-blue-50 text-blue-600 border border-blue-100 rounded-xl font-bold text-xs uppercase flex items-center justify-center gap-2"><i className="fab fa-facebook-messenger"></i> Zalo</button>
+                          <button onClick={() => handleSms(activeGroup)} className="py-3 bg-orange-50 text-orange-600 border border-orange-100 rounded-xl font-bold text-xs uppercase flex items-center justify-center gap-2"><i className="fas fa-comment-dots"></i> SMS</button>
+                          <button onClick={() => handleShareDebtQR(activeGroup)} disabled={isGeneratingQR} className="py-3 bg-indigo-50 text-indigo-600 border border-indigo-100 rounded-xl font-bold text-xs uppercase flex items-center justify-center gap-2"><i className="fas fa-qrcode"></i> Gửi QR</button>
+                      </div>
+                      <button 
+                        onClick={() => { confirmBulkPayment(activeGroup.orders.map(o => o.id)); setActiveGroup(null); }}
+                        className="w-full py-4 bg-black text-white rounded-2xl font-black uppercase text-xs shadow-xl active:scale-95 transition-all"
+                      >
+                          Xác nhận Đã trả nợ Toàn bộ <i className="fas fa-check-double ml-1"></i>
+                      </button>
+                  </div>
+              </div>
+          </div>
+      )}
+
       <ConfirmModal 
-        isOpen={confirmData.isOpen}
-        title="Xác nhận thanh toán"
-        message={confirmData.message}
-        onConfirm={executeConfirm}
-        onCancel={() => setConfirmData({ ...confirmData, isOpen: false })}
-        confirmLabel="Tiền đã về"
-        isDanger={false}
+          isOpen={showBulkConfirm} 
+          title="Xác nhận thanh toán?" 
+          message={`Hệ thống sẽ cập nhật trạng thái "Đã thanh toán" cho toàn bộ đơn hàng của ${selectedGroupKeys.size} khách hàng đã chọn.`}
+          onConfirm={executeBulkConfirm}
+          onCancel={() => setShowBulkConfirm(false)}
+          confirmLabel="Xác nhận ngay"
       />
     </div>
   );
