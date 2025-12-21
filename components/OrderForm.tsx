@@ -72,7 +72,15 @@ const OrderForm: React.FC = () => {
       const inventoryItems = products.map(p => { const normName = normalizeString(p.name); const soldData = soldMap.get(normName); if (soldData) soldMap.delete(normName); return { product: p, soldInBatch: soldData?.qty || 0, stock: p.stockQuantity || 0, isExternal: false }; });
       const externalItems = Array.from(soldMap.values()).map(ext => ({ product: { id: ext.productId || 'EXT', name: ext.name, defaultPrice: 0, stockQuantity: 0 } as Product, soldInBatch: ext.qty, stock: 0, isExternal: true }));
       const allItems = [...inventoryItems, ...externalItems];
-      return allItems.filter(item => { if (sidebarTab === 'ACTIVE') return item.soldInBatch > 0; if (sidebarTab === 'WARNING') return !item.isExternal && item.stock < 10; if (sidebarTab === 'SEARCH') { if (!sidebarSearch) return true; return normalizeString(item.product.name).includes(normalizeString(sidebarSearch)); } return false; }).sort((a, b) => b.soldInBatch - a.soldInBatch);
+      return allItems.filter(item => { 
+          if (sidebarTab === 'ACTIVE') return item.soldInBatch > 0; 
+          if (sidebarTab === 'WARNING') return !item.isExternal && item.stock < 10; 
+          if (sidebarTab === 'SEARCH') { 
+              if (!sidebarSearch) return true; 
+              return normalizeString(item.product.name).includes(normalizeString(sidebarSearch)); 
+          } 
+          return false; 
+      }).sort((a, b) => b.soldInBatch - a.soldInBatch);
   }, [orders, products, batchId, sidebarTab, sidebarSearch]);
 
   const handleVoiceInput = () => {
@@ -270,14 +278,42 @@ const OrderForm: React.FC = () => {
 
             {/* Sidebar Column - Tighter on Mobile */}
             <div className={`${mobileTab === 'STATS' ? 'flex' : 'hidden'} sm:flex sm:w-[40%] flex-col bg-gray-50 h-full overflow-hidden border-l border-gray-100`}>
-                <div className="p-2 bg-white border-b border-gray-100">
+                <div className="p-2 bg-white border-b border-gray-100 space-y-2">
                     <div className="flex gap-1 p-0.5 bg-gray-100 rounded-lg">
-                        {(['ACTIVE', 'WARNING', 'SEARCH'] as SidebarTab[]).map(tab => <button key={tab} onClick={() => setSidebarTab(tab)} className={`flex-1 py-1.5 text-[9px] font-black rounded-md transition-all ${sidebarTab === tab ? 'bg-white text-eco-700 shadow-sm' : 'text-gray-400'}`}>{tab === 'ACTIVE' ? 'ĐANG BÁN' : tab === 'WARNING' ? 'SẮP HẾT' : 'TÌM KHO'}</button>)}
+                        {(['ACTIVE', 'WARNING', 'SEARCH'] as SidebarTab[]).map(tab => (
+                            <button 
+                                key={tab} 
+                                onClick={() => { setSidebarTab(tab); if (tab !== 'SEARCH') setSidebarSearch(''); }} 
+                                className={`flex-1 py-1.5 text-[9px] font-black rounded-md transition-all ${sidebarTab === tab ? 'bg-white text-eco-700 shadow-sm' : 'text-gray-400'}`}
+                            >
+                                {tab === 'ACTIVE' ? 'ĐANG BÁN' : tab === 'WARNING' ? 'SẮP HẾT' : 'TÌM KHO'}
+                            </button>
+                        ))}
                     </div>
+                    {/* Hidden Search Input - Animated appearance */}
+                    {sidebarTab === 'SEARCH' && (
+                        <div className="relative animate-scale-in">
+                            <input 
+                                value={sidebarSearch}
+                                onChange={e => setSidebarSearch(e.target.value)}
+                                className="w-full p-2 pl-7 bg-gray-50 border border-gray-200 rounded-lg outline-none text-[10px] font-bold text-gray-700 placeholder-gray-400 focus:border-eco-500 uppercase"
+                                placeholder="Gõ tên hàng cần tìm..."
+                                autoFocus
+                            />
+                            <i className="fas fa-search absolute left-2.5 top-2.5 text-[9px] text-gray-300"></i>
+                            {sidebarSearch && (
+                                <button onClick={() => setSidebarSearch('')} className="absolute right-2 top-2 text-gray-300 hover:text-gray-500">
+                                    <i className="fas fa-times-circle text-[10px]"></i>
+                                </button>
+                            )}
+                        </div>
+                    )}
                 </div>
                 <div className="flex-grow overflow-y-auto p-2 space-y-1.5 no-scrollbar">
                     {filteredSidebarProducts.length === 0 ? (
-                        <div className="py-10 text-center text-gray-300 italic text-[9px] uppercase font-black">Không có hàng</div>
+                        <div className="py-10 text-center text-gray-300 italic text-[9px] uppercase font-black">
+                            {sidebarSearch ? 'Không tìm thấy hàng' : 'Không có hàng'}
+                        </div>
                     ) : filteredSidebarProducts.map((item) => (
                         <div key={item.product.id + (item.isExternal ? '-ext' : '')} className={`flex items-center gap-2 p-2 bg-white rounded-lg border border-transparent shadow-sm hover:border-gray-200 group`}>
                             <div onClick={() => handleQuickInsert(item.product)} className={`w-7 h-7 rounded-md flex items-center justify-center text-[9px] font-black shrink-0 cursor-pointer ${item.isExternal ? 'bg-orange-600 text-white' : item.soldInBatch > 0 ? 'bg-eco-600 text-white' : 'bg-gray-100 text-gray-400'}`}>{item.soldInBatch > 0 ? item.soldInBatch : '+'}</div>
