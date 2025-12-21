@@ -100,17 +100,10 @@ const OrderForm: React.FC = () => {
   const selectProductForItem = (index: number, product: Product) => { const newItems = [...items]; newItems[index] = { ...newItems[index], productId: product.id, name: product.name, price: product.defaultPrice }; setItems(newItems); setActiveProductRow(null); };
   const addTagToNotes = (tag: string) => { setCustomerInfo(prev => ({ ...prev, notes: prev.notes ? `${prev.notes}, ${tag}` : tag })); };
 
-  // SMART AUTO-FILL: Khi chọn khách hàng, tự động điền địa chỉ + món hàng họ thường mua
   const handleSelectCustomer = (s: Customer) => {
-      setCustomerInfo({ 
-          customerId: s.id, 
-          customerName: s.name, 
-          customerPhone: s.phone, 
-          address: s.address, 
-          notes: customerInfo.notes 
-      });
+      setCustomerInfo({ customerId: s.id, customerName: s.name, customerPhone: s.phone, address: s.address, notes: customerInfo.notes });
       setShowCustomerSuggestions(false);
-      toast.success(`Đã tự động điền thông tin học được từ ${s.name}`, { icon: '🧠' });
+      toast.success(`Đã tự động điền: ${s.name}`, { icon: '🧠', duration: 1000 });
   };
 
   const handleQuickInsert = (product: Product) => {
@@ -129,7 +122,7 @@ const OrderForm: React.FC = () => {
         setItems([...items, { id: uuidv4(), productId: product.id, name: product.name, price: product.defaultPrice, quantity: 1 }]);
       }
     }
-    toast.success(`Đã thêm ${product.name}`);
+    toast.success(`Thêm ${product.name}`, { duration: 800 });
   };
 
   const handleSaveProduct = async (data: Product, isImport: boolean = false, qty: number = 0) => {
@@ -146,163 +139,153 @@ const OrderForm: React.FC = () => {
     setShowProductModal(false);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     const validItems = items.filter(i => i.name && i.name.trim() !== '') as OrderItem[];
-    if (!customerInfo.customerName || !customerInfo.address || validItems.length === 0) { toast.error('Thiếu thông tin'); return; }
+    if (!customerInfo.customerName || !customerInfo.address || validItems.length === 0) { toast.error('Vui lòng điền đủ thông tin'); return; }
     const newOrder: Order = { id: uuidv4().slice(0, 8).toUpperCase(), customerId: customerInfo.customerId, batchId: batchId, customerName: customerInfo.customerName, customerPhone: customerInfo.customerPhone, address: customerInfo.address, items: validItems, notes: customerInfo.notes, totalPrice: totalPrice, paymentMethod: PaymentMethod.CASH, status: OrderStatus.PENDING, createdAt: Date.now(), updatedAt: Date.now(), orderIndex: Date.now() };
     await storageService.saveOrder(newOrder);
-    toast.success('Đã lưu đơn thành công!');
+    toast.success('Đã lưu đơn!', { icon: '✅' });
     setCustomerInfo({ customerId: '', customerName: '', customerPhone: '', address: '', notes: '' });
     setItems([{ id: uuidv4(), name: '', quantity: 1, price: 0 }]);
     if (nameInputRef.current) nameInputRef.current.focus();
   };
 
-  const inputBaseClass = "w-full p-3 bg-white border border-gray-200 rounded-xl outline-none text-sm font-semibold text-gray-800 placeholder-gray-300 focus:border-eco-500 focus:ring-4 focus:ring-eco-50/50 transition-all uppercase";
+  const inputClass = "w-full p-2 bg-white border border-gray-200 rounded-lg outline-none text-sm font-bold text-gray-800 placeholder-gray-300 focus:border-eco-500 uppercase transition-all";
 
   return (
-    <div className="flex flex-col h-[calc(100vh-6rem)] bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden relative">
+    <div className="flex flex-col h-[calc(100vh-4.5rem)] sm:h-[calc(100vh-6rem)] bg-white rounded-xl sm:rounded-3xl shadow-sm border border-gray-100 overflow-hidden relative">
         {isProcessingAI && (
             <div className="absolute inset-0 z-50 bg-white/80 backdrop-blur-md flex items-center justify-center">
                 <div className="flex flex-col items-center">
                     <div className="w-12 h-12 border-4 border-eco-100 border-t-eco-600 rounded-full animate-spin"></div>
-                    <span className="mt-4 text-xs font-bold text-eco-800 tracking-widest uppercase italic">AI Đang phân tích đơn...</span>
+                    <span className="mt-4 text-[10px] font-black text-eco-800 uppercase tracking-widest italic">AI Đang phân tích...</span>
                 </div>
             </div>
         )}
 
-        <div className="sm:hidden flex border-b border-gray-100 bg-white shrink-0">
-            <button onClick={() => setMobileTab('FORM')} className={`flex-1 py-4 text-[10px] font-black transition-all ${mobileTab === 'FORM' ? 'bg-eco-50 text-eco-700' : 'text-gray-400'}`}>TẠO ĐƠN</button>
-            <button onClick={() => setMobileTab('STATS')} className={`flex-1 py-4 text-[10px] font-black transition-all ${mobileTab === 'STATS' ? 'bg-eco-50 text-eco-700' : 'text-gray-400'}`}>THỐNG KÊ LÔ</button>
+        {/* Top Header - Merged Toolbar */}
+        <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-100 shrink-0">
+            <div ref={batchWrapperRef} className="relative">
+                <div className="flex items-center bg-white border border-gray-200 rounded-lg px-2 py-1 cursor-pointer" onClick={() => setShowBatchSuggestions(!showBatchSuggestions)}>
+                    <input value={batchId} onChange={(e) => setBatchId(e.target.value)} className="w-28 text-[10px] font-black text-gray-700 outline-none uppercase bg-transparent" placeholder="LÔ HÀNG..." />
+                    <i className="fas fa-chevron-down text-[8px] ml-1 text-gray-400"></i>
+                </div>
+                {showBatchSuggestions && (
+                    <div className="absolute top-full left-0 mt-1 w-48 bg-white border border-gray-100 rounded-lg shadow-xl z-[60] max-h-48 overflow-y-auto no-scrollbar animate-scale-in">
+                        {existingBatches.map(b => <div key={b} onClick={() => { setBatchId(b); setShowBatchSuggestions(false); }} className="px-3 py-2 hover:bg-eco-50 text-[10px] font-bold text-gray-700 border-b border-gray-50">{b}</div>)}
+                    </div>
+                )}
+            </div>
+            
+            <div className="flex gap-2">
+                <div className="sm:hidden flex bg-gray-200 p-0.5 rounded-lg">
+                    <button onClick={() => setMobileTab('FORM')} className={`px-3 py-1 text-[9px] font-black rounded-md transition-all ${mobileTab === 'FORM' ? 'bg-white text-eco-700 shadow-sm' : 'text-gray-500'}`}>ĐƠN</button>
+                    <button onClick={() => setMobileTab('STATS')} className={`px-3 py-1 text-[9px] font-black rounded-md transition-all ${mobileTab === 'STATS' ? 'bg-white text-eco-700 shadow-sm' : 'text-gray-500'}`}>KHO</button>
+                </div>
+                <button onClick={handleVoiceInput} disabled={isListening} className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${isListening ? 'bg-red-500 text-white animate-pulse' : 'bg-white border border-gray-200 text-gray-400'}`}><i className={`fas ${isListening ? 'fa-microphone-slash' : 'fa-microphone'} text-xs`}></i></button>
+            </div>
         </div>
 
-        <div className="flex flex-col sm:flex-row h-full overflow-hidden">
+        <div className="flex flex-col sm:flex-row h-full overflow-hidden relative">
             {/* Form Column */}
-            <div className={`${mobileTab === 'FORM' ? 'flex' : 'hidden'} sm:flex sm:w-[65%] flex-col h-full overflow-hidden relative border-r border-gray-50`}>
-                <div className="flex flex-col shrink-0 bg-white z-20 border-b border-gray-100">
-                    <div className="px-5 py-3 flex justify-between items-center bg-gray-50/50">
-                       <div ref={batchWrapperRef} className="relative">
-                            <div className="flex items-center bg-white border border-gray-200 rounded-xl px-3 py-1.5 shadow-sm cursor-pointer hover:border-eco-300 transition-colors" onClick={() => setShowBatchSuggestions(!showBatchSuggestions)}>
-                                <input value={batchId} onChange={(e) => setBatchId(e.target.value)} className="w-44 text-[11px] font-black text-gray-700 outline-none bg-transparent uppercase" placeholder="LÔ HÀNG..." />
-                                <i className="fas fa-chevron-down text-[10px] ml-2 text-gray-400"></i>
-                            </div>
-                            {showBatchSuggestions && (
-                                <div className="absolute top-full left-0 mt-2 w-64 bg-white border border-gray-100 rounded-2xl shadow-xl z-[100] overflow-hidden animate-scale-in">
-                                    <div className="p-2 max-h-60 overflow-y-auto no-scrollbar">
-                                        {existingBatches.map(b => <div key={b} onClick={() => { setBatchId(b); setShowBatchSuggestions(false); }} className="px-4 py-2.5 hover:bg-eco-50 rounded-xl cursor-pointer text-xs font-bold text-gray-700 transition-colors">{b}</div>)}
-                                    </div>
-                                </div>
-                            )}
-                       </div>
-                       <button onClick={handleVoiceInput} disabled={isListening} className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${isListening ? 'bg-red-500 text-white shadow-lg shadow-red-200 animate-pulse' : 'bg-white border border-gray-200 text-gray-500 hover:text-eco-600 hover:border-eco-200 shadow-sm'}`} title="Nhập liệu bằng giọng nói"><i className={`fas ${isListening ? 'fa-microphone-slash' : 'fa-microphone'}`}></i></button>
-                    </div>
-                    <div className="px-5 py-4 flex gap-5 items-center bg-white">
-                        <div className="flex-col min-w-[120px]">
-                            <div className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-1">Tổng tiền:</div>
-                            <div className="text-2xl font-black text-eco-700 tracking-tighter leading-none italic">{new Intl.NumberFormat('vi-VN').format(totalPrice)}<span className="text-[10px] text-gray-300 ml-1 font-bold not-italic">đ</span></div>
-                        </div>
-                        <button onClick={handleSubmit} className="flex-grow bg-gray-900 hover:bg-black text-white rounded-2xl py-5 px-8 font-black text-sm shadow-lg shadow-gray-200 active:scale-[0.98] transition-all uppercase tracking-[0.1em] italic">LƯU ĐƠN HÀNG <i className="fas fa-check-circle ml-2"></i></button>
-                    </div>
-                </div>
-
-                <form onSubmit={handleSubmit} className="flex-grow overflow-y-auto p-5 space-y-6 pb-24 bg-gray-50/20">
-                    {/* Customer Info Card */}
-                    <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm space-y-5">
-                        <div className="grid grid-cols-12 gap-5" ref={customerWrapperRef}>
-                            <div className="col-span-7 relative">
-                                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-2 ml-1 tracking-widest">Khách nhận hàng</label>
-                                <input ref={nameInputRef} value={customerInfo.customerName} onChange={(e) => { setCustomerInfo({...customerInfo, customerName: e.target.value}); setShowCustomerSuggestions(true); }} required className={inputBaseClass} placeholder="Tên khách..." />
+            <div className={`${mobileTab === 'FORM' ? 'flex' : 'hidden'} sm:flex sm:w-[60%] flex-col h-full overflow-hidden relative`}>
+                
+                <form className="flex-grow overflow-y-auto p-3 space-y-3 pb-24 bg-gray-50/20">
+                    {/* Customer Info Section - More compact */}
+                    <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm space-y-2">
+                        <div className="flex gap-2" ref={customerWrapperRef}>
+                            <div className="flex-grow relative">
+                                <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Người nhận</label>
+                                <input ref={nameInputRef} value={customerInfo.customerName} onChange={(e) => { setCustomerInfo({...customerInfo, customerName: e.target.value}); setShowCustomerSuggestions(true); }} required className={inputClass} placeholder="TÊN KHÁCH..." />
                                 {showCustomerSuggestions && customerInfo.customerName && (
-                                    <ul className="absolute z-30 w-full bg-white border border-gray-100 rounded-2xl shadow-xl mt-2 max-h-56 overflow-y-auto no-scrollbar animate-fade-in">
+                                    <ul className="absolute z-40 w-full bg-white border border-gray-200 rounded-lg shadow-2xl mt-1 max-h-48 overflow-y-auto no-scrollbar">
                                         {customers.filter(c => c.name.toLowerCase().includes(customerInfo.customerName.toLowerCase())).sort((a,b) => (b.totalOrders || 0) - (a.totalOrders || 0)).slice(0, 5).map(s => (
-                                            <li key={s.id} onClick={() => handleSelectCustomer(s)} className="px-4 py-3.5 hover:bg-eco-50 cursor-pointer border-b border-gray-50 flex flex-col transition-colors">
-                                                <div className="flex justify-between items-center">
-                                                    <span className="text-sm font-bold text-gray-800 uppercase tracking-tight">{s.name}</span>
-                                                    {(s.totalOrders || 0) > 5 && <span className="text-[9px] font-black text-white bg-blue-600 px-1.5 rounded-full uppercase">Thân thiết</span>}
-                                                </div>
-                                                <span className="text-[10px] text-gray-400 font-bold uppercase mt-1">{s.phone} • {s.address}</span>
+                                            <li key={s.id} onClick={() => handleSelectCustomer(s)} className="px-3 py-2 hover:bg-eco-50 border-b border-gray-50 flex flex-col">
+                                                <span className="text-xs font-black text-gray-800 uppercase">{s.name} {(s.totalOrders || 0) > 5 && '⭐'}</span>
+                                                <span className="text-[9px] text-gray-400 truncate">{s.phone} • {s.address}</span>
                                             </li>
                                         ))}
                                     </ul>
                                 )}
                             </div>
-                            <div className="col-span-5">
-                                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-2 ml-1 tracking-widest">Số điện thoại</label>
-                                <input value={customerInfo.customerPhone} onChange={(e) => setCustomerInfo({...customerInfo, customerPhone: e.target.value})} className={inputBaseClass} placeholder="09xxxx" />
+                            <div className="w-[40%]">
+                                <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Số ĐT</label>
+                                <input value={customerInfo.customerPhone} onChange={(e) => setCustomerInfo({...customerInfo, customerPhone: e.target.value})} className={inputClass} placeholder="09XXX..." />
                             </div>
                         </div>
                         <div>
-                            <label className="block text-[10px] font-bold text-gray-400 uppercase mb-2 ml-1 tracking-widest">Địa chỉ giao</label>
-                            <input value={customerInfo.address} onChange={(e) => setCustomerInfo({...customerInfo, address: e.target.value})} required className={inputBaseClass} placeholder="Số nhà, tên đường, khu vực..." />
+                            <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Địa chỉ giao</label>
+                            <input value={customerInfo.address} onChange={(e) => setCustomerInfo({...customerInfo, address: e.target.value})} required className={inputClass} placeholder="SỐ NHÀ, TÊN ĐƯỜNG..." />
                         </div>
-                        <div>
-                            <label className="block text-[10px] font-bold text-gray-400 uppercase mb-2 ml-1 tracking-widest">Ghi chú vận chuyển</label>
-                            <input value={customerInfo.notes} onChange={(e) => setCustomerInfo({...customerInfo, notes: e.target.value})} className={inputBaseClass} placeholder="Giao hẻm, gọi trước khi đi..." />
-                            <div className="flex flex-wrap gap-2 mt-3">
-                                {quickTags.map(tag => <button key={tag} type="button" onClick={() => addTagToNotes(tag)} className="px-3 py-1.5 bg-gray-50 hover:bg-eco-600 hover:text-white text-gray-500 rounded-xl text-[10px] font-bold border border-gray-100 uppercase transition-all active:scale-95">{tag}</button>)}
+                        <div className="relative">
+                            <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Ghi chú</label>
+                            <input value={customerInfo.notes} onChange={(e) => setCustomerInfo({...customerInfo, notes: e.target.value})} className={inputClass} placeholder="GHI CHÚ GIAO HÀNG..." />
+                            <div className="flex flex-wrap gap-1.5 mt-2">
+                                {quickTags.slice(0, 4).map(tag => <button key={tag} type="button" onClick={() => addTagToNotes(tag)} className="px-2 py-1 bg-gray-100 text-gray-500 rounded-md text-[8px] font-black uppercase">{tag}</button>)}
                             </div>
                         </div>
                     </div>
 
-                    {/* Items List */}
-                    <div className="space-y-4" ref={productWrapperRef}>
+                    {/* Items Section - Slimmer rows */}
+                    <div className="space-y-2" ref={productWrapperRef}>
                         <div className="flex justify-between items-center px-1">
-                            <h3 className="text-[11px] font-black text-gray-400 uppercase tracking-[0.2em] flex items-center gap-2 italic"><i className="fas fa-shopping-basket text-eco-600"></i> Danh sách hàng hóa</h3>
-                            <button type="button" onClick={addItemRow} className="text-[10px] font-black text-eco-700 bg-eco-50 px-4 py-2 rounded-xl border border-eco-200 uppercase hover:bg-eco-100 shadow-sm transition-all active:scale-95">+ Dòng mới</button>
+                            <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest italic">Hàng hóa</span>
+                            <button type="button" onClick={addItemRow} className="text-[9px] font-black text-eco-600 bg-white border border-eco-200 px-3 py-1 rounded-lg shadow-sm">+ Thêm món</button>
                         </div>
-                        <div className="space-y-3">
+                        <div className="space-y-1.5">
                             {items.map((item, idx) => (
-                                <div key={item.id} className="flex items-center gap-3 bg-white p-4 rounded-[1.5rem] border border-gray-100 shadow-sm relative group animate-fade-in">
+                                <div key={item.id} className="flex items-center gap-1.5 bg-white p-2 rounded-lg border border-gray-100 shadow-sm relative group">
                                     <div className="flex-grow relative">
-                                        <input value={item.name} onChange={(e) => handleItemChange(idx, 'name', e.target.value)} onFocus={() => setActiveProductRow(idx)} className="w-full p-2.5 bg-gray-50 border border-transparent rounded-xl text-sm font-bold text-gray-800 outline-none focus:bg-white focus:border-eco-200 uppercase placeholder-gray-300 transition-all" placeholder="Tên hàng..." />
+                                        <input value={item.name} onChange={(e) => handleItemChange(idx, 'name', e.target.value)} onFocus={() => setActiveProductRow(idx)} className="w-full p-1.5 bg-gray-50 border-none rounded-md text-xs font-bold text-gray-800 outline-none uppercase placeholder-gray-300" placeholder="TÊN MÓN..." />
                                         {activeProductRow === idx && (
-                                            <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-gray-100 rounded-2xl shadow-xl z-50 max-h-56 overflow-y-auto no-scrollbar animate-scale-in">
-                                                {products.filter(p => !item.name || normalizeString(p.name).includes(normalizeString(item.name))).map(p => <div key={p.id} onMouseDown={() => selectProductForItem(idx, p)} className="px-4 py-3 hover:bg-blue-50 cursor-pointer flex justify-between items-center border-b border-gray-50 transition-colors"><div className="flex flex-col"><span className="text-sm font-bold text-gray-700 uppercase">{p.name}</span><span className="text-[10px] text-gray-400 font-bold uppercase mt-0.5">Tồn: {p.stockQuantity} sp</span></div><span className="text-xs font-black text-blue-600">{new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}đ</span></div>)}
-                                                <div onMouseDown={() => { setEditingProduct(null); setEditMode('SET'); setShowProductModal(true); }} className="p-3.5 bg-gray-50 text-center text-[10px] font-black text-eco-600 hover:bg-eco-100 border-t border-gray-100 uppercase italic cursor-pointer">+ Tạo mới vào kho</div>
+                                            <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-100 rounded-lg shadow-2xl z-50 max-h-48 overflow-y-auto no-scrollbar">
+                                                {products.filter(p => !item.name || normalizeString(p.name).includes(normalizeString(item.name))).map(p => <div key={p.id} onMouseDown={() => selectProductForItem(idx, p)} className="px-3 py-2 hover:bg-blue-50 cursor-pointer flex justify-between items-center border-b border-gray-50"><div className="flex flex-col"><span className="text-[11px] font-bold text-gray-700 uppercase">{p.name}</span><span className="text-[9px] text-gray-400 uppercase">Tồn: {p.stockQuantity}</span></div><span className="text-[10px] font-black text-blue-600">{new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}đ</span></div>)}
+                                                <div onMouseDown={() => { setEditingProduct(null); setEditMode('SET'); setShowProductModal(true); }} className="p-2 bg-gray-50 text-center text-[9px] font-black text-eco-600 uppercase italic cursor-pointer">+ Tạo mới hàng</div>
                                             </div>
                                         )}
                                     </div>
+                                    <div className="w-12">
+                                        <input type="number" step="any" value={item.quantity === 0 ? '' : item.quantity} onChange={(e) => handleItemChange(idx, 'quantity', Number(e.target.value))} className="w-full p-1.5 text-center bg-gray-50 border-none rounded-md text-xs font-black text-eco-700 outline-none" placeholder="SL" />
+                                    </div>
                                     <div className="w-20">
-                                        <input type="number" step="any" value={item.quantity === 0 ? '' : item.quantity} onChange={(e) => handleItemChange(idx, 'quantity', Number(e.target.value))} className="w-full p-2.5 text-center bg-gray-50 border border-transparent rounded-xl text-sm font-black text-eco-700 outline-none focus:bg-white focus:border-eco-200 transition-all" placeholder="SL" />
+                                        <input type="number" value={item.price === 0 ? '' : item.price} onChange={(e) => handleItemChange(idx, 'price', Number(e.target.value))} className="w-full p-1.5 text-right bg-gray-50 border-none rounded-md text-xs font-black text-gray-800 outline-none" placeholder="GIÁ" />
                                     </div>
-                                    <div className="w-28">
-                                        <input type="number" value={item.price === 0 ? '' : item.price} onChange={(e) => handleItemChange(idx, 'price', Number(e.target.value))} className="w-full p-2.5 text-right bg-gray-50 border border-transparent rounded-xl text-sm font-black text-gray-800 outline-none focus:bg-white focus:border-eco-200 transition-all" placeholder="GIÁ" />
-                                    </div>
-                                    <button type="button" onClick={() => removeItemRow(idx)} className="text-gray-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"><i className="fas fa-times-circle text-2xl"></i></button>
+                                    <button type="button" onClick={() => removeItemRow(idx)} className="text-gray-300 hover:text-red-500 w-6 h-6 flex items-center justify-center"><i className="fas fa-times-circle"></i></button>
                                 </div>
                             ))}
                         </div>
                     </div>
                 </form>
+
+                {/* Sticky Bottom Action Bar */}
+                <div className="absolute bottom-0 left-0 right-0 bg-white border-t border-gray-100 p-3 flex gap-3 items-center shadow-[0_-4px_10px_rgba(0,0,0,0.05)] z-20">
+                    <div className="shrink-0">
+                        <div className="text-[8px] text-gray-400 font-black uppercase tracking-widest">TỔNG TIỀN</div>
+                        <div className="text-xl font-black text-eco-700 italic leading-none">{new Intl.NumberFormat('vi-VN').format(totalPrice)}<span className="text-[9px] font-bold not-italic ml-0.5">đ</span></div>
+                    </div>
+                    <button onClick={() => handleSubmit()} className="flex-grow bg-gray-900 text-white rounded-xl py-3.5 px-4 font-black text-[11px] shadow-lg active:scale-[0.98] transition-all uppercase tracking-widest italic">LƯU ĐƠN HÀNG <i className="fas fa-check-circle ml-1"></i></button>
+                </div>
             </div>
 
-            {/* Sidebar Column */}
-            <div className={`${mobileTab === 'STATS' ? 'flex' : 'hidden'} sm:flex sm:w-[35%] flex-col bg-gray-50 h-full overflow-hidden`}>
-                <div className="p-4 bg-white border-b border-gray-100">
-                    <div className="flex gap-1.5 p-1 bg-gray-100 rounded-2xl mb-3">
-                        {(['ACTIVE', 'WARNING', 'SEARCH'] as SidebarTab[]).map(tab => <button key={tab} onClick={() => setSidebarTab(tab)} className={`flex-1 py-2 text-[10px] font-black rounded-xl transition-all ${sidebarTab === tab ? 'bg-white text-eco-700 shadow-sm' : 'text-gray-400 hover:text-gray-500'}`}>{tab === 'ACTIVE' ? 'ĐANG BÁN' : tab === 'WARNING' ? 'SẮP HẾT' : 'TÌM KHO'}</button>)}
+            {/* Sidebar Column - Tighter on Mobile */}
+            <div className={`${mobileTab === 'STATS' ? 'flex' : 'hidden'} sm:flex sm:w-[40%] flex-col bg-gray-50 h-full overflow-hidden border-l border-gray-100`}>
+                <div className="p-2 bg-white border-b border-gray-100">
+                    <div className="flex gap-1 p-0.5 bg-gray-100 rounded-lg">
+                        {(['ACTIVE', 'WARNING', 'SEARCH'] as SidebarTab[]).map(tab => <button key={tab} onClick={() => setSidebarTab(tab)} className={`flex-1 py-1.5 text-[9px] font-black rounded-md transition-all ${sidebarTab === tab ? 'bg-white text-eco-700 shadow-sm' : 'text-gray-400'}`}>{tab === 'ACTIVE' ? 'ĐANG BÁN' : tab === 'WARNING' ? 'SẮP HẾT' : 'TÌM KHO'}</button>)}
                     </div>
-                    {sidebarTab === 'SEARCH' && (
-                        <div className="relative animate-fade-in">
-                            <input value={sidebarSearch} onChange={e => setSidebarSearch(e.target.value)} className="w-full pl-9 pr-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-[10px] font-bold outline-none focus:bg-white focus:border-eco-400 uppercase transition-all" placeholder="TÌM TÊN HOẶC SKU..." />
-                            <i className="fas fa-search absolute left-3 top-3.5 text-gray-300 text-[10px]"></i>
-                        </div>
-                    )}
                 </div>
-                <div className="flex-grow overflow-y-auto p-3 space-y-2 no-scrollbar">
+                <div className="flex-grow overflow-y-auto p-2 space-y-1.5 no-scrollbar">
                     {filteredSidebarProducts.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center h-64 text-gray-300 opacity-40 italic">
-                            <i className="fas fa-layer-group text-4xl mb-3"></i>
-                            <p className="text-[10px] font-black uppercase tracking-widest text-center leading-relaxed">Chưa có giao dịch<br/>trong lô này</p>
-                        </div>
+                        <div className="py-10 text-center text-gray-300 italic text-[9px] uppercase font-black">Không có hàng</div>
                     ) : filteredSidebarProducts.map((item) => (
-                        <div key={item.product.id + (item.isExternal ? '-ext' : '')} className={`flex items-center gap-3 p-3 hover:bg-white rounded-2xl transition-all border border-transparent hover:border-gray-200 hover:shadow-sm group ${item.isExternal ? 'bg-orange-50/50' : 'bg-white/50'}`}>
-                            <div className={`w-8 h-8 rounded-xl flex items-center justify-center text-[11px] font-black shrink-0 shadow-sm ${item.isExternal ? 'bg-orange-600 text-white' : item.soldInBatch > 0 ? 'bg-eco-600 text-white' : 'bg-gray-200 text-gray-400'}`}>{item.soldInBatch > 0 ? item.soldInBatch : '0'}</div>
-                            <div className="flex-grow min-w-0 flex items-center justify-between gap-2">
-                                <div onClick={() => handleQuickInsert(item.product)} className={`text-[11px] font-bold truncate cursor-pointer hover:text-eco-600 uppercase tracking-tight italic transition-colors ${item.isExternal ? 'text-orange-700' : 'text-gray-700'}`}>{item.product.name}</div>
-                                <div className="flex items-center gap-2 shrink-0">
-                                    {!item.isExternal && <div className={`text-[10px] font-bold uppercase ${item.stock < 5 ? 'text-red-500' : 'text-gray-400'}`}>T:{item.stock}</div>}
-                                    <button onClick={() => { setEditingProduct(item.product); setEditMode('IMPORT'); setShowProductModal(true); }} className="opacity-0 group-hover:opacity-100 text-[9px] text-blue-600 font-black uppercase tracking-widest transition-opacity hover:underline">Sửa</button>
+                        <div key={item.product.id + (item.isExternal ? '-ext' : '')} className={`flex items-center gap-2 p-2 bg-white rounded-lg border border-transparent shadow-sm hover:border-gray-200 group`}>
+                            <div onClick={() => handleQuickInsert(item.product)} className={`w-7 h-7 rounded-md flex items-center justify-center text-[9px] font-black shrink-0 cursor-pointer ${item.isExternal ? 'bg-orange-600 text-white' : item.soldInBatch > 0 ? 'bg-eco-600 text-white' : 'bg-gray-100 text-gray-400'}`}>{item.soldInBatch > 0 ? item.soldInBatch : '+'}</div>
+                            <div className="flex-grow min-w-0 flex items-center justify-between gap-1">
+                                <div onClick={() => handleQuickInsert(item.product)} className={`text-[10px] font-bold truncate cursor-pointer uppercase ${item.isExternal ? 'text-orange-700' : 'text-gray-700'}`}>{item.product.name}</div>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                    {!item.isExternal && <span className={`text-[8px] font-black ${item.stock < 5 ? 'text-red-500' : 'text-gray-300'}`}>T:{item.stock}</span>}
+                                    <button onClick={() => { setEditingProduct(item.product); setEditMode('IMPORT'); setShowProductModal(true); }} className="opacity-0 group-hover:opacity-100 text-[8px] text-blue-600 font-black uppercase">Sửa</button>
                                 </div>
                             </div>
                         </div>
