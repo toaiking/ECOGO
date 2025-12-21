@@ -76,6 +76,15 @@ const ensureOrdersLoaded = (): Order[] => {
     return _memoryOrders || [];
 };
 
+const ensureCustomersLoaded = (): Customer[] => {
+    if (_memoryCustomers) return _memoryCustomers;
+    try {
+        const local = localStorage.getItem(CUSTOMER_KEY);
+        _memoryCustomers = local ? (JSON.parse(local) as Customer[]) : [];
+    } catch { _memoryCustomers = []; }
+    return _memoryCustomers || [];
+};
+
 export const normalizeString = (str: string): string => {
     if (!str) return "";
     return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/g, "d").replace(/Đ/g, "D").replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
@@ -161,6 +170,44 @@ export const storageService = {
     prods.forEach(p => batch.set(doc(db, "products", p.id), sanitize(p)));
     await batch.commit();
     return orders.length + prods.length;
+  },
+
+  // --- CUSTOMER INTELLIGENCE (LEARNING) ---
+  learnCustomerInfo: async (order: Order) => {
+      const customers = ensureCustomersLoaded();
+      const phone = normalizePhone(order.customerPhone);
+      let existing = customers.find(c => c.id === order.customerId);
+      
+      if (!existing && phone.length > 8) {
+          existing = customers.find(c => normalizePhone(c.phone) === phone);
+      }
+
+      const now = Date.now();
+      if (existing) {
+          // Update learned info
+          const updated: Customer = {
+              ...existing,
+              address: order.address || existing.address, // Luôn ưu tiên địa chỉ mới nhất
+              phone: order.customerPhone || existing.phone,
+              lastOrderDate: now,
+              totalOrders: (existing.totalOrders || 0) + 1,
+              updatedAt: now
+          };
+          await storageService.upsertCustomer(updated);
+      } else if (order.customerName) {
+          // Create new from learned info
+          const newCust: Customer = {
+              id: order.customerId || uuidv4(),
+              name: order.customerName,
+              phone: order.customerPhone,
+              address: order.address,
+              lastOrderDate: now,
+              totalOrders: 1,
+              priorityScore: 999,
+              updatedAt: now
+          };
+          await storageService.upsertCustomer(newCust);
+      }
   },
 
   // --- PRODUCT MANAGEMENT ---
@@ -333,6 +380,9 @@ export const storageService = {
     _memoryOrders = list;
     localStorage.setItem(ORDER_KEY, JSON.stringify(list));
     window.dispatchEvent(new Event('storage_' + ORDER_KEY));
+
+    // Learn from customer info automatically
+    storageService.learnCustomerInfo(order);
 
     const prods = ensureProductsLoaded();
     order.items.forEach(item => {
@@ -514,14 +564,7 @@ export const storageService = {
 
   // --- CUSTOMER MANAGEMENT ---
   subscribeCustomers: (callback: (c: Customer[]) => void) => {
-      const load = () => {
-          try {
-              const local = localStorage.getItem(CUSTOMER_KEY);
-              _memoryCustomers = local ? (JSON.parse(local) as Customer[]) : [];
-              callback(_memoryCustomers || []);
-          } catch { callback([]); }
-      };
-      load();
+      callback(ensureCustomersLoaded());
       if (isOnline()) {
           return onSnapshot(collection(db, "customers"), (snap) => {
               const l: Customer[] = [];
@@ -536,13 +579,11 @@ export const storageService = {
   },
 
   getAllCustomers: async (): Promise<Customer[]> => {
-      if (_memoryCustomers) return _memoryCustomers;
-      const local = localStorage.getItem(CUSTOMER_KEY);
-      return local ? (JSON.parse(local) as Customer[]) : [];
+      return ensureCustomersLoaded();
   },
 
   upsertCustomer: async (c: Customer) => {
-      const list = await storageService.getAllCustomers();
+      const list = ensureCustomersLoaded();
       const idx = list.findIndex(x => x.id === c.id);
       const cSave = { ...c, updatedAt: Date.now() };
       if (idx >= 0) list[idx] = cSave; else list.unshift(cSave);
@@ -552,14 +593,14 @@ export const storageService = {
   },
 
   deleteCustomer: async (id: string) => {
-      const list = (await storageService.getAllCustomers()).filter(c => c.id !== id);
+      const list = ensureCustomersLoaded().filter(c => c.id !== id);
       _memoryCustomers = list;
       localStorage.setItem(CUSTOMER_KEY, JSON.stringify(list));
       await safeCloudOp(() => deleteDoc(doc(db, "customers", id)));
   },
 
   importCustomersBatch: async (customers: Customer[], localOnly: boolean = false) => {
-      const list = await storageService.getAllCustomers();
+      const list = ensureCustomersLoaded();
       const newMap = new Map<string, Customer>(list.map(c => [c.id, c]));
       customers.forEach(c => newMap.set(c.id, { ...c, updatedAt: Date.now() }));
       const finalList = Array.from(newMap.values());
@@ -590,14 +631,14 @@ export const storageService = {
   },
 
   markAllCustomersAsOld: async () => {
-      const list = await storageService.getAllCustomers();
+      const list = ensureCustomersLoaded();
       list.forEach(c => { c.isLegacy = true; c.totalOrders = (c.totalOrders || 0) + 1; });
       await storageService.importCustomersBatch(list);
       return list.length;
   },
 
   fixDuplicateCustomerIds: async () => {
-      const list = await storageService.getAllCustomers();
+      const list = ensureCustomersLoaded();
       const seen = new Set();
       let fixed = 0;
       for (const c of list) {
@@ -612,7 +653,7 @@ export const storageService = {
   },
 
   mergeCustomersByPhone: async () => {
-      const list = await storageService.getAllCustomers();
+      const list = ensureCustomersLoaded();
       const phoneMap = new Map<string, Customer[]>();
       list.forEach(c => {
           if (c.phone) {
@@ -646,7 +687,7 @@ export const storageService = {
   },
 
   findMatchingCustomer: (phone: string, addr: string, id?: string) => {
-      const list = _memoryCustomers || [];
+      const list = ensureCustomersLoaded();
       if (id) return list.find(c => c.id === id);
       const p = normalizePhone(phone);
       if (p.length > 8) return list.find(c => normalizePhone(c.phone) === p);

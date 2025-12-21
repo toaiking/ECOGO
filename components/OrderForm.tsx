@@ -100,6 +100,19 @@ const OrderForm: React.FC = () => {
   const selectProductForItem = (index: number, product: Product) => { const newItems = [...items]; newItems[index] = { ...newItems[index], productId: product.id, name: product.name, price: product.defaultPrice }; setItems(newItems); setActiveProductRow(null); };
   const addTagToNotes = (tag: string) => { setCustomerInfo(prev => ({ ...prev, notes: prev.notes ? `${prev.notes}, ${tag}` : tag })); };
 
+  // SMART AUTO-FILL: Khi chọn khách hàng, tự động điền địa chỉ + món hàng họ thường mua
+  const handleSelectCustomer = (s: Customer) => {
+      setCustomerInfo({ 
+          customerId: s.id, 
+          customerName: s.name, 
+          customerPhone: s.phone, 
+          address: s.address, 
+          notes: customerInfo.notes 
+      });
+      setShowCustomerSuggestions(false);
+      toast.success(`Đã tự động điền thông tin học được từ ${s.name}`, { icon: '🧠' });
+  };
+
   const handleQuickInsert = (product: Product) => {
     const existingIdx = items.findIndex(i => i.productId === product.id);
     if (existingIdx >= 0) {
@@ -170,7 +183,6 @@ const OrderForm: React.FC = () => {
                     <div className="px-5 py-3 flex justify-between items-center bg-gray-50/50">
                        <div ref={batchWrapperRef} className="relative">
                             <div className="flex items-center bg-white border border-gray-200 rounded-xl px-3 py-1.5 shadow-sm cursor-pointer hover:border-eco-300 transition-colors" onClick={() => setShowBatchSuggestions(!showBatchSuggestions)}>
-                                {/* Width increased by 30%: w-32 -> w-44 */}
                                 <input value={batchId} onChange={(e) => setBatchId(e.target.value)} className="w-44 text-[11px] font-black text-gray-700 outline-none bg-transparent uppercase" placeholder="LÔ HÀNG..." />
                                 <i className="fas fa-chevron-down text-[10px] ml-2 text-gray-400"></i>
                             </div>
@@ -187,10 +199,8 @@ const OrderForm: React.FC = () => {
                     <div className="px-5 py-4 flex gap-5 items-center bg-white">
                         <div className="flex-col min-w-[120px]">
                             <div className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-1">Tổng tiền:</div>
-                            {/* Font size and styling matched to Dashboard stat values */}
                             <div className="text-2xl font-black text-eco-700 tracking-tighter leading-none italic">{new Intl.NumberFormat('vi-VN').format(totalPrice)}<span className="text-[10px] text-gray-300 ml-1 font-bold not-italic">đ</span></div>
                         </div>
-                        {/* Save Button: Increased font size (text-sm) and more prominent py-5 for reasonable size */}
                         <button onClick={handleSubmit} className="flex-grow bg-gray-900 hover:bg-black text-white rounded-2xl py-5 px-8 font-black text-sm shadow-lg shadow-gray-200 active:scale-[0.98] transition-all uppercase tracking-[0.1em] italic">LƯU ĐƠN HÀNG <i className="fas fa-check-circle ml-2"></i></button>
                     </div>
                 </div>
@@ -204,7 +214,15 @@ const OrderForm: React.FC = () => {
                                 <input ref={nameInputRef} value={customerInfo.customerName} onChange={(e) => { setCustomerInfo({...customerInfo, customerName: e.target.value}); setShowCustomerSuggestions(true); }} required className={inputBaseClass} placeholder="Tên khách..." />
                                 {showCustomerSuggestions && customerInfo.customerName && (
                                     <ul className="absolute z-30 w-full bg-white border border-gray-100 rounded-2xl shadow-xl mt-2 max-h-56 overflow-y-auto no-scrollbar animate-fade-in">
-                                        {customers.filter(c => c.name.toLowerCase().includes(customerInfo.customerName.toLowerCase())).slice(0, 5).map(s => <li key={s.id} onClick={() => { setCustomerInfo({ customerId: s.id, customerName: s.name, customerPhone: s.phone, address: s.address, notes: customerInfo.notes }); setShowCustomerSuggestions(false); }} className="px-4 py-3.5 hover:bg-eco-50 cursor-pointer border-b border-gray-50 flex flex-col transition-colors"><span className="text-sm font-bold text-gray-800 uppercase tracking-tight">{s.name}</span><span className="text-[10px] text-gray-400 font-bold uppercase mt-1">{s.phone} • {s.address}</span></li>)}
+                                        {customers.filter(c => c.name.toLowerCase().includes(customerInfo.customerName.toLowerCase())).sort((a,b) => (b.totalOrders || 0) - (a.totalOrders || 0)).slice(0, 5).map(s => (
+                                            <li key={s.id} onClick={() => handleSelectCustomer(s)} className="px-4 py-3.5 hover:bg-eco-50 cursor-pointer border-b border-gray-50 flex flex-col transition-colors">
+                                                <div className="flex justify-between items-center">
+                                                    <span className="text-sm font-bold text-gray-800 uppercase tracking-tight">{s.name}</span>
+                                                    {(s.totalOrders || 0) > 5 && <span className="text-[9px] font-black text-white bg-blue-600 px-1.5 rounded-full uppercase">Thân thiết</span>}
+                                                </div>
+                                                <span className="text-[10px] text-gray-400 font-bold uppercase mt-1">{s.phone} • {s.address}</span>
+                                            </li>
+                                        ))}
                                     </ul>
                                 )}
                             </div>

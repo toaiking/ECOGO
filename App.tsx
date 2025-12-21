@@ -21,7 +21,7 @@ const App: React.FC = () => {
       setIsAuthenticated(true);
     }
 
-    const handleQuota = () => toast.error("Hết băng thông Cloud trong ngày. Ứng dụng đã chuyển sang chế độ Offline (Dữ liệu an toàn trên máy).", { duration: 6000, icon: '🔥' });
+    const handleQuota = () => toast.error("Hết băng thông Cloud trong ngày. Ứng dụng đã chuyển sang chế độ Offline.", { duration: 6000, icon: '🔥' });
     window.addEventListener('quota_exhausted', handleQuota);
     return () => window.removeEventListener('quota_exhausted', handleQuota);
   }, []);
