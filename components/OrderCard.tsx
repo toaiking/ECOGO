@@ -213,6 +213,9 @@ export const OrderCard: React.FC<Props> = ({
   const isCompleted = order.status === OrderStatus.DELIVERED || order.status === OrderStatus.CANCELLED;
   
   const PaymentBadge = ({ compact = false }: { compact?: boolean }) => {
+    // Hide Cash completely from this badge (below price or compact row)
+    if (order.paymentMethod === PaymentMethod.CASH) return null;
+
     // Show badge if: Completed, OR Transfer, OR Paid. 
     // This allows toggling "Chờ CK" -> "Đã nhận" even if status is not Delivered yet
     const showText = isCompleted || order.paymentMethod === PaymentMethod.TRANSFER || order.paymentMethod === PaymentMethod.PAID;
@@ -222,18 +225,38 @@ export const OrderCard: React.FC<Props> = ({
     const isTransfer = order.paymentMethod === PaymentMethod.TRANSFER;
     let text = '', style = '';
     
-    if (order.paymentMethod === PaymentMethod.CASH) { 
-        text = 'Tiền mặt'; 
-        style = 'text-gray-500 bg-gray-50 border-gray-200'; 
-    } else if (order.paymentMethod === PaymentMethod.PAID) { 
+    if (order.paymentMethod === PaymentMethod.PAID) { 
         text = 'Đã TT'; 
         style = 'text-green-700 bg-green-50 border-green-100'; 
     } else { 
         text = order.paymentVerified ? 'Đã nhận' : 'Chờ CK'; 
-        style = order.paymentVerified ? 'text-green-700 bg-green-50 border-green-100 cursor-pointer hover:bg-green-100' : 'text-blue-600 bg-blue-50 border-blue-100 cursor-pointer hover:bg-blue-100'; 
+        style = order.paymentVerified ? 'text-green-700 bg-green-50 border-green-100' : 'text-blue-600 bg-blue-50 border-blue-100'; 
     }
+
+    // Interaction Logic: Allow if Transfer OR if Completed (to fix mistakes)
+    const canInteract = isCompleted || isTransfer;
+    const interactionStyle = canInteract ? 'cursor-pointer hover:opacity-80 hover:shadow-sm' : '';
+
+    const handleClick = (e: React.MouseEvent) => {
+        if (!canInteract) return;
+        e.stopPropagation();
+        
+        if (isTransfer) {
+            // Toggle verification directly for transfers
+            togglePaymentVerification();
+        } else {
+            // For Paid completed orders, allow re-opening the choice modal to switch method
+            setShowCompactPaymentChoice(true);
+        }
+    };
     
-    return (<div className="flex items-center gap-1" onClick={(e) => { if (isTransfer) { e.stopPropagation(); togglePaymentVerification(); } }}><span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap transition-colors ${style}`}>{text}</span></div>);
+    return (
+        <div className="flex items-center gap-1" onClick={handleClick}>
+            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap transition-all ${style} ${interactionStyle}`}>
+                {text}
+            </span>
+        </div>
+    );
   };
 
   const HeaderPaymentBadge = () => {
@@ -244,7 +267,14 @@ export const OrderCard: React.FC<Props> = ({
       if (order.paymentMethod === PaymentMethod.CASH) { label = 'TM'; style = 'bg-gray-100 text-gray-600 border-gray-200'; } 
       else if (order.paymentMethod === PaymentMethod.PAID) { label = 'Đã TT'; style = 'bg-green-50 text-green-700 border-green-100'; } 
       else { if (order.paymentVerified) { label = 'Đã CK'; style = 'bg-green-50 text-green-700 border-green-100'; } else { label = 'Chờ CK'; style = 'bg-blue-50 text-blue-600 border-blue-100 cursor-pointer hover:bg-blue-100'; } }
-      return (<span onClick={(e) => { if (isTransfer) { e.stopPropagation(); togglePaymentVerification(); } }} className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap transition-colors ${style}`} title={isTransfer ? "Bấm để đổi trạng thái" : ""}>{label}</span>);
+      
+      const handleClick = (e: React.MouseEvent) => {
+          e.stopPropagation();
+          if (isTransfer) togglePaymentVerification();
+          else setShowCompactPaymentChoice(true);
+      };
+
+      return (<span onClick={handleClick} className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap transition-colors cursor-pointer hover:shadow-sm ${style}`} title="Bấm để đổi trạng thái">{label}</span>);
   };
 
   const CheckboxOverlay = () => { if (!isSelectionMode) return null; return (<div className={`absolute top-0 bottom-0 left-0 w-1.5 ${isSelected ? 'bg-eco-500' : 'bg-transparent'}`}></div>); }
