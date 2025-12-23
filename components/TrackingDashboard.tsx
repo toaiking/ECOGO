@@ -845,6 +845,33 @@ const TrackingDashboard: React.FC = () => {
                 </div>
 
                 <div>
+                    <label className="text-[10px] font-bold text-gray-400 uppercase ml-1">Hình thức thanh toán</label>
+                    <div className="flex bg-gray-100 p-1 rounded-xl mt-1">
+                        <button
+                            type="button"
+                            onClick={() => setEditingOrder({...editingOrder, paymentMethod: PaymentMethod.CASH})}
+                            className={`flex-1 py-2.5 rounded-lg text-xs font-bold transition-all ${editingOrder.paymentMethod === PaymentMethod.CASH ? 'bg-white shadow-sm text-green-700' : 'text-gray-500 hover:text-gray-700'}`}
+                        >
+                            <i className="fas fa-money-bill-wave mr-1"></i> Tiền mặt
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setEditingOrder({...editingOrder, paymentMethod: PaymentMethod.TRANSFER, paymentVerified: false})}
+                            className={`flex-1 py-2.5 rounded-lg text-xs font-bold transition-all ${editingOrder.paymentMethod === PaymentMethod.TRANSFER && !editingOrder.paymentVerified ? 'bg-white shadow-sm text-blue-700' : 'text-gray-500 hover:text-gray-700'}`}
+                        >
+                            <i className="fas fa-university mr-1"></i> Chờ CK
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setEditingOrder({...editingOrder, paymentMethod: PaymentMethod.TRANSFER, paymentVerified: true})}
+                            className={`flex-1 py-2.5 rounded-lg text-xs font-bold transition-all ${editingOrder.paymentMethod === PaymentMethod.TRANSFER && editingOrder.paymentVerified ? 'bg-white shadow-sm text-purple-700' : 'text-gray-500 hover:text-gray-700'}`}
+                        >
+                            <i className="fas fa-check-circle mr-1"></i> Đã CK
+                        </button>
+                    </div>
+                </div>
+
+                <div>
                     <label className="text-[10px] font-bold text-gray-400 uppercase ml-1">Ghi chú</label>
                     <input value={editingOrder.notes || ''} onChange={e => setEditingOrder({...editingOrder, notes: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none text-sm focus:border-blue-500 transition-colors text-gray-800" />
                 </div>
