@@ -586,7 +586,7 @@ export const pdfService = {
             const custLines = doc.splitTextToSize(custText, wCust - 1.5);
             const addrLines = doc.splitTextToSize(o.address, wAddr - 1.5);
             doc.setFont(fontName, 'normal');
-            const itemsStr = o.items.map(it => `${it.name} (SL:${it.quantity})`).join(', ');
+            const itemsStr = o.items.map(it => `${it.name} (x:${it.quantity})`).join(', ');
             const itemsLines = doc.splitTextToSize(itemsStr, wItem - 1.5);
             doc.setFont(fontName, 'italic');
             const noteLines = doc.splitTextToSize(o.notes || '', wNote - 1.5);
