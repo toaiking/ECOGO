@@ -429,7 +429,7 @@ const InventoryManager: React.FC = () => {
     <div className="max-w-7xl mx-auto pb-24 animate-fade-in relative">
       <div className="sticky top-0 z-30 bg-white/95 backdrop-blur-md shadow-sm border-b border-gray-200 p-3">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <h2 className="text-2xl font-black tracking-tighter text-gray-800 uppercase shrink-0">Kho Hàng <span className="text-eco-600">Vivid</span></h2>
+              <h2 className="text-2xl font-black tracking-tighter text-gray-800 uppercase shrink-0">Kho Hàng <span className="text-eco-600">NẤM LÙN</span></h2>
               <div className="flex items-center gap-3">
                   <div className="relative flex-grow md:w-64">
                       <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Tìm tên hàng..." className="w-full pl-8 pr-3 py-2.5 bg-white border-2 border-gray-800 rounded-xl text-xs font-black outline-none text-gray-800" />
