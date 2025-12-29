@@ -225,7 +225,7 @@ export const pdfService = {
             doc.setFont('Roboto', 'normal');
             doc.setTextColor(0, 0, 0); 
             
-            const itemsStr = order.items.map(it => `${it.name} [SL:${it.quantity}]`).join(', ');
+            const itemsStr = order.items.map(it => `${it.name} [x${it.quantity}]`).join(', ');
             const itemLines = doc.splitTextToSize(itemsStr, contentW);
             const displayItems = itemLines.length > 4 ? itemLines.slice(0, 4) : itemLines;
             if (itemLines.length > 4) displayItems[3] += '...';
@@ -316,65 +316,256 @@ export const pdfService = {
         doc.save(`Tem_${batchName}.pdf`);
     },
 
-    generateCompactList: async (orders: Order[], batchName: string) => {
+    // --- MODE 1: SINGLE COLUMN LIST (HIGH DENSITY TABLE) ---
+    // Updated: High density (50 rows/page), Bold Address, Explicit Quantity, Payment Status
+    generateCompactList: async (orders: Order[], batchId: string) => {
         const doc = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
+        
         await loadFonts(doc);
+        const fontName = 'Roboto';
 
-        // Title
-        doc.setFontSize(16);
-        doc.setFont('Roboto', 'bold');
-        doc.text(`DANH SÁCH GIAO HÀNG - ${batchName}`, 105, 15, { align: 'center' });
-        doc.setFontSize(10);
-        doc.text(`Ngày: ${new Date().toLocaleDateString('vi-VN')} | SL: ${orders.length} đơn`, 105, 22, { align: 'center' });
-
-        let y = 30;
+        // --- PAGE CONFIG ---
+        const pageW = 210;
+        const pageH = 297;
+        const margin = 5; 
+        const headerH = 12; 
+        const tableW = pageW - (margin * 2); // 200mm
         
-        // Table Header
-        doc.setFontSize(9);
-        doc.setFillColor(240, 240, 240);
-        doc.rect(10, y, 190, 8, 'F');
-        doc.text("#", 12, y + 5);
-        doc.text("Khách hàng", 25, y + 5);
-        doc.text("Địa chỉ", 70, y + 5);
-        doc.text("Thu hộ", 170, y + 5);
-        doc.text("Ghi chú", 195, y + 5, { align: 'right' });
-        
-        y += 10;
+        // --- COLUMN WIDTHS (Total 200mm) ---
+        const wIdx = 8;
+        const wCust = 42; 
+        const wAddr = 65; // Wide for address
+        const wItem = 45; // Items
+        const wNote = 15; 
+        const wPrice = 25; 
 
-        orders.forEach((o, idx) => {
-            if (y > 270) {
-                doc.addPage();
-                y = 20;
-            }
-            
-            doc.setFont('Roboto', 'normal');
-            doc.text(`${idx + 1}`, 12, y);
-            
-            doc.setFont('Roboto', 'bold');
-            doc.text(o.customerName, 25, y);
-            doc.setFont('Roboto', 'normal');
-            doc.text(o.customerPhone, 25, y + 4);
-            
-            const addr = doc.splitTextToSize(o.address, 95);
-            doc.text(addr, 70, y);
-            
-            const cod = o.paymentMethod === 'CASH' ? new Intl.NumberFormat('vi-VN').format(o.totalPrice) : "0";
-            doc.setFont('Roboto', 'bold');
-            doc.text(cod, 170, y);
-            
-            doc.setFont('Roboto', 'italic');
-            doc.setFontSize(8);
-            // Check box for signature
-            doc.setDrawColor(0);
-            doc.setLineWidth(0.2);
-            doc.rect(185, y - 3, 10, 6);
-            
-            doc.setFontSize(9);
-            y += Math.max(addr.length * 5, 10);
-            doc.setLineWidth(0.1);
-            doc.line(10, y - 2, 200, y - 2); // Separator
+        // X Positions
+        const xIdx = margin;
+        const xCust = xIdx + wIdx;
+        const xAddr = xCust + wCust;
+        const xItem = xAddr + wAddr;
+        const xNote = xItem + wItem;
+        const xPrice = xNote + wNote;
+
+        let currentY = headerH + 5;
+        
+        // --- HIGH DENSITY SETTINGS ---
+        const fontSize = 7; 
+        const rowPadding = 1; 
+        const lineHeight = 3; 
+
+        // Data Prep
+        let totalAmount = 0;
+        const itemSummary: Record<string, number> = {};
+
+        const validOrders = orders.filter(o => o.status !== OrderStatus.CANCELLED);
+        validOrders.forEach(o => {
+            totalAmount += o.totalPrice;
+            o.items.forEach(item => {
+                const name = item.name.trim();
+                if(name) itemSummary[name] = (itemSummary[name] || 0) + item.quantity;
+            });
         });
 
-        doc.save(`DanhSach_${batchName}.pdf`);
+        const drawPageHeader = (pageNo: number) => {
+            doc.setFillColor(255, 255, 255);
+            doc.rect(0, 0, pageW, headerH, 'F');
+
+            // Doc Title
+            doc.setFontSize(10);
+            doc.setFont(fontName, 'bold');
+            doc.setTextColor(0, 0, 0);
+            doc.text(`${batchId} (${new Date().toLocaleDateString('vi-VN')}) - Tổng: ${validOrders.length} đơn`, margin, 8);
+            
+            doc.setFontSize(8);
+            doc.setFont(fontName, 'normal');
+            doc.text(`Trang ${pageNo}`, pageW - margin, 8, { align: 'right' });
+            
+            // --- TABLE HEADER (BLACK BG) ---
+            const hY = 10;
+            const hHeight = 5;
+            
+            doc.setFillColor(0, 0, 0);
+            doc.rect(margin, hY, tableW, hHeight, 'F');
+            doc.setTextColor(255, 255, 255); 
+            doc.setFontSize(7);
+            doc.setFont(fontName, 'bold');
+            
+            // Dividers
+            doc.setDrawColor(255, 255, 255);
+            doc.setLineWidth(0.2);
+            doc.line(xCust, hY, xCust, hY + hHeight);
+            doc.line(xAddr, hY, xAddr, hY + hHeight);
+            doc.line(xItem, hY, xItem, hY + hHeight);
+            doc.line(xNote, hY, xNote, hY + hHeight);
+            doc.line(xPrice, hY, xPrice, hY + hHeight);
+
+            // Text
+            const ty = hY + 3.5;
+            doc.text("STT", xIdx + 1, ty);
+            doc.text("KHÁCH - SĐT", xCust + 1, ty);
+            doc.text("ĐỊA CHỈ", xAddr + 1, ty);
+            doc.text("HÀNG HÓA (SL)", xItem + 1, ty);
+            doc.text("GHI CHÚ", xNote + 1, ty);
+            doc.text("TỔNG TIỀN", xPrice + wPrice - 1, ty, { align: 'right' });
+            
+            doc.setTextColor(0, 0, 0); 
+            return hY + hHeight;
+        };
+
+        let pageIndex = 1;
+        currentY = drawPageHeader(pageIndex); 
+
+        for (let i = 0; i < validOrders.length; i++) {
+            const o = validOrders[i];
+            
+            // --- PREPARE CONTENT ---
+            doc.setFontSize(fontSize);
+            
+            // 1. Customer: Name - Phone (BOLD)
+            doc.setFont(fontName, 'bold');
+            const custText = `${o.customerName} - ${o.customerPhone}`;
+            const custLines = doc.splitTextToSize(custText, wCust - 1.5);
+            
+            // 2. Address (BOLD)
+            doc.setFont(fontName, 'bold');
+            const addrLines = doc.splitTextToSize(o.address, wAddr - 1.5);
+            
+            // 3. Items (Normal)
+            doc.setFont(fontName, 'normal');
+            // Explicit Quantity Display: "Name (SL: 2)"
+            const itemsStr = o.items.map(it => `${it.name} (SL:${it.quantity})`).join(', ');
+            const itemsLines = doc.splitTextToSize(itemsStr, wItem - 1.5);
+            
+            // 4. Notes (Italic)
+            doc.setFont(fontName, 'italic');
+            const noteText = o.notes || '';
+            const noteLines = doc.splitTextToSize(noteText, wNote - 1.5);
+            
+            // 5. Price & Payment (Bold)
+            doc.setFont(fontName, 'bold');
+            let priceText = new Intl.NumberFormat('vi-VN').format(o.totalPrice);
+            
+            // Payment Logic: Clearly distinguish status for Manifest
+            if (o.paymentMethod === PaymentMethod.PAID) {
+                priceText += " (Đã TT)";
+            } else if (o.paymentMethod === PaymentMethod.TRANSFER) {
+                if (o.paymentVerified) {
+                    priceText += " (CK Rồi)";
+                } else {
+                    priceText += " (CK)";
+                }
+            } else if (o.paymentMethod === PaymentMethod.CASH) {
+                priceText += " (TM)"; 
+            }
+            const priceLines = doc.splitTextToSize(priceText, wPrice - 1.5);
+
+            // --- CALCULATE ROW HEIGHT ---
+            const maxLines = Math.max(
+                custLines.length, 
+                addrLines.length, 
+                itemsLines.length, 
+                noteLines.length,
+                priceLines.length,
+                1
+            );
+            const rowHeight = (maxLines * lineHeight) + (rowPadding * 2);
+
+            // Check Page Break
+            if (currentY + rowHeight > pageH - 10) {
+                doc.addPage();
+                pageIndex++;
+                currentY = drawPageHeader(pageIndex);
+            }
+
+            // --- DRAW ROW ---
+            const textY = currentY + rowPadding + 2; 
+
+            doc.setDrawColor(0, 0, 0);
+            doc.setLineWidth(0.1);
+            doc.rect(margin, currentY, tableW, rowHeight); 
+            
+            doc.line(xCust, currentY, xCust, currentY + rowHeight);
+            doc.line(xAddr, currentY, xAddr, currentY + rowHeight);
+            doc.line(xItem, currentY, xItem, currentY + rowHeight);
+            doc.line(xNote, currentY, xNote, currentY + rowHeight);
+            doc.line(xPrice, currentY, xPrice, currentY + rowHeight);
+
+            // 1. STT
+            doc.setFont(fontName, 'bold');
+            doc.text(`${i + 1}`, xIdx + (wIdx/2), textY, { align: 'center' });
+
+            // 2. Customer (Bold)
+            doc.text(custLines, xCust + 1, textY);
+
+            // 3. Address (Bold)
+            doc.text(addrLines, xAddr + 1, textY);
+
+            // 4. Items (Normal)
+            doc.setFont(fontName, 'normal');
+            doc.text(itemsLines, xItem + 1, textY);
+
+            // 5. Notes (Italic)
+            doc.setFont(fontName, 'italic');
+            doc.text(noteLines, xNote + 1, textY);
+
+            // 6. Price (Bold)
+            doc.setFont(fontName, 'bold');
+            doc.text(priceLines, xPrice + wPrice - 1, textY, { align: 'right' });
+
+            currentY += rowHeight;
+        }
+
+        // --- SUMMARY FOOTER ---
+        // Ensure summary doesn't break awkwardly
+        if (pageH - currentY < 30) {
+            doc.addPage();
+            currentY = 15;
+        } else {
+            currentY += 2;
+        }
+
+        doc.setDrawColor(0, 0, 0);
+        doc.setLineWidth(0.3);
+        doc.line(margin, currentY, margin + tableW, currentY);
+        currentY += 5;
+
+        doc.setFontSize(9);
+        doc.setFont(fontName, 'bold');
+        doc.text(`TỔNG CỘNG (${validOrders.length} đơn): ${new Intl.NumberFormat('vi-VN').format(totalAmount)}đ`, margin, currentY);
+        
+        currentY += 5;
+        
+        doc.setFontSize(7);
+        doc.setFont(fontName, 'normal');
+        
+        // Get Products for Stats (Read directly from LocalStorage to avoid async/UI issues in this pure function)
+        let products: Product[] = [];
+        try {
+            products = JSON.parse(localStorage.getItem('ecogo_products_v1') || '[]');
+        } catch {}
+        
+        const summaryParts = Object.entries(itemSummary)
+            .sort((a,b) => a[0].localeCompare(b[0]))
+            .map(([name, qtyOrdered]) => {
+                // Find product by fuzzy name matching
+                const normName = normalizeString(name);
+                const p = products.find(p => normalizeString(p.name) === normName) 
+                       || products.find(p => normalizeString(p.name).includes(normName));
+                
+                if (p) {
+                    // UPDATED: Show ONLY Ordered and Stock (No Imported/Balance)
+                    return `${name}: ${qtyOrdered} [Tồn: ${p.stockQuantity || 0}]`;
+                }
+                return `${name}: ${qtyOrdered}`;
+            });
+
+        const summaryText = "TỔNG HÀNG (Đặt | Tồn):  " + summaryParts.join('   ');
+            
+        const sumLines = doc.splitTextToSize(summaryText, tableW);
+        doc.text(sumLines, margin, currentY);
+
+        const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+        doc.save(`DS_${batchId}_${dateStr}.pdf`);
     }
 };
