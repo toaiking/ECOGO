@@ -407,7 +407,15 @@ const OrderForm: React.FC = () => {
                 </div>
             </div>
         </div>
-      <ProductEditModal isOpen={showProductModal} onClose={() => setShowProductModal(false)} product={editingProduct} onSave={handleSaveProduct} initialMode={editMode} />
+      <ProductEditModal 
+        isOpen={showProductModal} 
+        onClose={() => setShowProductModal(false)} 
+        product={editingProduct} 
+        onSave={handleSaveProduct} 
+        initialMode={editMode}
+        allProducts={products}
+        onSwitchToProduct={(p) => { setEditingProduct(p); setEditMode('SET'); }}
+      />
       <ConfirmModal 
           isOpen={showSyncConfirm} 
           title="Đồng bộ đơn hàng?" 
