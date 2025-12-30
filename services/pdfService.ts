@@ -95,6 +95,9 @@ const getPaymentQR = async (order: Order): Promise<string | null> => {
     }
 };
 
+// Helper function to allow UI updates during heavy processing
+const yieldToMain = () => new Promise(resolve => setTimeout(resolve, 0));
+
 export const pdfService = {
     generateUserGuidePDF: async () => {
         const doc = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
@@ -118,7 +121,8 @@ export const pdfService = {
     },
 
     // --- CHỨC NĂNG IN TEM 8 TEM/A4 (GIAO DIỆN V4 - Layout Mới: QR Phải) ---
-    generateInvoiceBatch: async (orders: Order[], batchName: string) => {
+    // Updated: Added onProgress callback and optimized QR fetching
+    generateInvoiceBatch: async (orders: Order[], batchName: string, onProgress?: (percent: number) => void) => {
         const doc = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
         await loadFonts(doc);
 
@@ -132,6 +136,44 @@ export const pdfService = {
         const startX = 0;
         const startY = 0;
         
+        // --- PHASE 1: PRE-FETCH QR CODES (PARALLEL) ---
+        const qrCache: Record<string, string> = {};
+        const totalSteps = orders.length * 2; // Phase 1 + Phase 2
+        let completedSteps = 0;
+
+        const updateProgress = () => {
+            if (onProgress) {
+                const percent = Math.round((completedSteps / totalSteps) * 100);
+                onProgress(percent);
+            }
+        };
+
+        // Fetch QRs in batches of 5 to avoid network congestion but still be fast
+        const BATCH_SIZE = 5;
+        for (let i = 0; i < orders.length; i += BATCH_SIZE) {
+            const chunk = orders.slice(i, i + BATCH_SIZE);
+            await Promise.all(chunk.map(async (order) => {
+                try {
+                    let qrData = await getPaymentQR(order);
+                    if (!qrData) {
+                        const qrText = `DH:${order.id}|${order.totalPrice}`;
+                        qrData = await generateQRCode(qrText);
+                    }
+                    if (qrData) {
+                        qrCache[order.id] = qrData;
+                    }
+                } catch (e) {
+                    console.error("QR Prefetch Failed", e);
+                } finally {
+                    completedSteps++;
+                }
+            }));
+            updateProgress();
+            // Yield UI slightly
+            await yieldToMain();
+        }
+
+        // --- PHASE 2: DRAW PDF ---
         let col = 0;
         let row = 0;
 
@@ -225,7 +267,7 @@ export const pdfService = {
             doc.setFont('Roboto', 'normal');
             doc.setTextColor(0, 0, 0); 
             
-            const itemsStr = order.items.map(it => `${it.name} [x${it.quantity}]`).join(', ');
+            const itemsStr = order.items.map(it => `${it.name} [SL:${it.quantity}]`).join(', ');
             const itemLines = doc.splitTextToSize(itemsStr, contentW);
             const displayItems = itemLines.length > 4 ? itemLines.slice(0, 4) : itemLines;
             if (itemLines.length > 4) displayItems[3] += '...';
@@ -248,15 +290,10 @@ export const pdfService = {
             const qrX = pX + contentW - qrSize;
             const qrY = footerY - qrSize + 2;
 
-            // A. QR Code (Bên Phải)
-            try {
-                let qrData = await getPaymentQR(order);
-                if (!qrData) {
-                    const qrText = `DH:${order.id}|${order.totalPrice}`;
-                    qrData = await generateQRCode(qrText);
-                }
-
-                if (qrData) {
+            // A. QR Code (Used Pre-fetched Data)
+            const qrData = qrCache[order.id];
+            if (qrData) {
+                try {
                     doc.addImage(qrData, 'PNG', qrX, qrY, qrSize, qrSize);
                     
                     // Text "Quét thanh toán" dưới QR
@@ -264,9 +301,7 @@ export const pdfService = {
                     doc.setFont('Roboto', 'bold');
                     doc.setTextColor(0);
                     doc.text("Quét thanh toán", qrX + (qrSize/2), footerY + 4, { align: 'center' });
-                }
-            } catch (e) {
-                console.error("QR Gen failed", e);
+                } catch (e) {}
             }
 
             // B. Tổng tiền (Bên Trái)
@@ -311,6 +346,12 @@ export const pdfService = {
                 col = 0;
                 row = 0;
             }
+
+            completedSteps++;
+            updateProgress();
+            
+            // Yield every 5 items to keep UI responsive
+            if (i % 5 === 0) await yieldToMain();
         }
 
         doc.save(`Tem_${batchName}.pdf`);
@@ -318,7 +359,7 @@ export const pdfService = {
 
     // --- MODE 1: SINGLE COLUMN LIST (HIGH DENSITY TABLE) ---
     // Updated: High density (50 rows/page), Bold Address, Explicit Quantity, Payment Status
-    generateCompactList: async (orders: Order[], batchId: string) => {
+    generateCompactList: async (orders: Order[], batchId: string, onProgress?: (percent: number) => void) => {
         const doc = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
         
         await loadFonts(doc);
@@ -514,6 +555,13 @@ export const pdfService = {
             doc.text(priceLines, xPrice + wPrice - 1, textY, { align: 'right' });
 
             currentY += rowHeight;
+
+            // Yield UI and update progress
+            if (onProgress) {
+                const percent = Math.round(((i + 1) / validOrders.length) * 100);
+                onProgress(percent);
+            }
+            if (i % 20 === 0) await yieldToMain();
         }
 
         // --- SUMMARY FOOTER ---
