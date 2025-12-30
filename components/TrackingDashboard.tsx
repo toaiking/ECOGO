@@ -73,6 +73,7 @@ const TrackingDashboard: React.FC = () => {
   const [showBulkStatusModal, setShowBulkStatusModal] = useState(false);
 
   const [isPrinting, setIsPrinting] = useState(false);
+  const [printProgress, setPrintProgress] = useState(0); // NEW: Print progress state
   const [showBatchSplitModal, setShowBatchSplitModal] = useState(false);
   const [showPrintTypeModal, setShowPrintTypeModal] = useState(false);
   const [ordersToPrint, setOrdersToPrint] = useState<Order[]>([]);
@@ -577,14 +578,64 @@ const TrackingDashboard: React.FC = () => {
   };
 
   const handleBatchPrintClick = () => { if (filteredOrders.length === 0) { toast.error("Không có đơn hàng nào để in"); return; } setOrdersToPrint(filteredOrders); if (filteredOrders.length > 200) { setShowBatchSplitModal(true); } else { setShowPrintTypeModal(true); } };
-  const handlePrintConfirm = async (type: 'LIST' | 'INVOICE') => { setShowPrintTypeModal(false); setShowBatchSplitModal(false); setIsPrinting(true); const batchName = filterBatch.length === 1 ? filterBatch[0] : `Batch_${new Date().getTime()}`; try { if (type === 'LIST') { await pdfService.generateCompactList(ordersToPrint, batchName); } else { await pdfService.generateInvoiceBatch(ordersToPrint, batchName); } toast.success("Đã tạo file PDF!"); if (isSelectionMode) clearSelection(); } catch (e: any) { console.error(e); const errorMessage = e instanceof Error ? e.message : String(e); toast.error(`Lỗi tạo PDF: ${errorMessage}`); } finally { setIsPrinting(false); setOrdersToPrint([]); } };
+  
+  // UPDATED: Print Handler with Progress
+  const handlePrintConfirm = async (type: 'LIST' | 'INVOICE') => { 
+      setShowPrintTypeModal(false); 
+      setShowBatchSplitModal(false); 
+      setIsPrinting(true); 
+      setPrintProgress(0); // Reset progress
+
+      const batchName = filterBatch.length === 1 ? filterBatch[0] : `Batch_${new Date().getTime()}`; 
+      
+      try { 
+          if (type === 'LIST') { 
+              await pdfService.generateCompactList(ordersToPrint, batchName, (p) => setPrintProgress(p)); 
+          } else { 
+              await pdfService.generateInvoiceBatch(ordersToPrint, batchName, (p) => setPrintProgress(p)); 
+          } 
+          toast.success("Đã tạo file PDF!"); 
+          if (isSelectionMode) clearSelection(); 
+      } catch (e: any) { 
+          console.error(e); 
+          const errorMessage = e instanceof Error ? e.message : String(e); 
+          toast.error(`Lỗi tạo PDF: ${errorMessage}`); 
+      } finally { 
+          setIsPrinting(false); 
+          setPrintProgress(0);
+          setOrdersToPrint([]); 
+      } 
+  };
+  
   const prepareSplitPrint = (subset: Order[]) => { setOrdersToPrint(subset); setShowBatchSplitModal(false); setShowPrintTypeModal(true); };
   
   const handleConfirmQrPayment = async () => { if (qrState.order) { await storageService.updatePaymentVerification(qrState.order.id, true, { name: qrState.order.customerName }); toast.success("Đã xác nhận thanh toán!"); setQrState(prev => ({ ...prev, isOpen: false })); if(detailOrder?.id === qrState.order.id) { setDetailOrder({...detailOrder, paymentVerified: true}); } } };
   
   return (
     <div className="animate-fade-in pb-32">
+      {/* PRINT PROGRESS OVERLAY */}
+      {isPrinting && (
+          <div className="fixed inset-0 z-[9999] bg-black/80 flex flex-col items-center justify-center p-6 animate-fade-in">
+              <div className="bg-white rounded-2xl p-6 w-full max-w-sm text-center shadow-2xl">
+                  <div className="w-16 h-16 border-4 border-eco-200 border-t-eco-600 rounded-full animate-spin mx-auto mb-4"></div>
+                  <h3 className="font-black text-xl text-gray-900 mb-2">Đang xử lý PDF</h3>
+                  <p className="text-gray-500 text-sm mb-4">Vui lòng không tắt trình duyệt...</p>
+                  
+                  {/* Progress Bar */}
+                  <div className="w-full bg-gray-100 rounded-full h-4 overflow-hidden relative">
+                      <div 
+                          className="h-full bg-eco-500 transition-all duration-300 ease-out flex items-center justify-end pr-2"
+                          style={{ width: `${printProgress}%` }}
+                      >
+                      </div>
+                  </div>
+                  <div className="mt-2 font-black text-eco-600">{printProgress}%</div>
+              </div>
+          </div>
+      )}
+
       <div className="sticky top-16 z-30 bg-gray-50/95 backdrop-blur-sm transition-shadow shadow-sm">
+         {/* ... (Existing Toolbar Code) ... */}
          <div className="bg-white border-b border-gray-200 p-2 shadow-sm">
              <div className="flex gap-2 items-center mb-2">
                 <div className="relative flex-grow">
@@ -1105,7 +1156,15 @@ const TrackingDashboard: React.FC = () => {
 
       {/* Product Detail Modal from Tracking */}
       {viewingProduct && <ProductDetailModal isOpen={!!viewingProduct} onClose={() => setViewingProduct(null)} product={viewingProduct} onImport={() => { setEditingProduct(viewingProduct); setEditProductMode('IMPORT'); setViewingProduct(null); }} onAdjust={() => { setEditingProduct(viewingProduct); setEditProductMode('SET'); setViewingProduct(null); }} />}
-      <ProductEditModal isOpen={!!editingProduct} onClose={() => setEditingProduct(null)} product={editingProduct} onSave={handleSaveProductChange} initialMode={editProductMode} />
+      <ProductEditModal 
+        isOpen={!!editingProduct} 
+        onClose={() => setEditingProduct(null)} 
+        product={editingProduct} 
+        onSave={handleSaveProductChange} 
+        initialMode={editProductMode}
+        allProducts={products}
+        onSwitchToProduct={(p) => { setEditingProduct(p); setEditProductMode('SET'); }}
+      />
 
       <ConfirmModal isOpen={showDeleteConfirm} title="Xóa đơn hàng?" message="Hành động này không thể hoàn tác. Kho hàng sẽ được hoàn lại tự động." onConfirm={confirmDelete} onCancel={() => setShowDeleteConfirm(false)} confirmLabel="Xóa vĩnh viễn" isDanger={true} />
       <ConfirmModal isOpen={showBulkDeleteConfirm} title={`Xóa ${selectedOrderIds.size} đơn hàng?`} message="Các đơn hàng sẽ bị xóa vĩnh viễn. Kho hàng sẽ được hoàn lại tương ứng." onConfirm={executeBulkDelete} onCancel={() => setShowBulkDeleteConfirm(false)} confirmLabel="Xóa tất cả" isDanger={true} />
