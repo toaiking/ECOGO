@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import toast from 'react-hot-toast';
 import { Product, Order, ImportRecord } from '../types';
-import { storageService, generateProductSku } from '../services/storageService';
+import { storageService, generateProductSku, normalizeString } from '../services/storageService';
 import ConfirmModal from './ConfirmModal';
 import { formatDistanceToNow } from 'date-fns';
 import { vi } from 'date-fns/locale';
@@ -139,9 +139,11 @@ interface ProductEditModalProps {
     product: Product | null;
     onSave: (data: Product, isImport?: boolean, qty?: number) => Promise<void>;
     initialMode?: 'IMPORT' | 'SET';
+    allProducts?: Product[]; // Optional: for duplicate checking
+    onSwitchToProduct?: (p: Product) => void; // Optional: callback when duplicate found
 }
 
-export const ProductEditModal: React.FC<ProductEditModalProps> = ({ isOpen, onClose, product, onSave, initialMode = 'IMPORT' }) => {
+export const ProductEditModal: React.FC<ProductEditModalProps> = ({ isOpen, onClose, product, onSave, initialMode = 'IMPORT', allProducts, onSwitchToProduct }) => {
     const [editTab, setEditTab] = useState<'IMPORT' | 'SET'>(initialMode);
     const [importAmount, setImportAmount] = useState<string>('');
     const [importPriceInput, setImportPriceInput] = useState<string>('');
@@ -153,11 +155,13 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({ isOpen, onCl
     const [historyList, setHistoryList] = useState<ImportRecord[]>([]);
     
     const [realSold, setRealSold] = useState(0);
+    const [detectedDuplicate, setDetectedDuplicate] = useState<Product | null>(null);
 
     useEffect(() => {
         if (isOpen) {
             setEditTab(initialMode); 
             setImportAmount('');
+            setDetectedDuplicate(null);
             if (product) {
                 setFormData({ name: product.name, defaultPrice: product.defaultPrice, importPrice: product.importPrice });
                 setImportPriceInput(product.importPrice?.toString() || '0');
@@ -189,6 +193,22 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({ isOpen, onCl
         }
     }, [isOpen, product, initialMode]);
 
+    // NEW: Duplicate Checking Effect
+    useEffect(() => {
+        // Chỉ kiểm tra khi đang ở chế độ Tạo mới (product === null) và có nhập tên
+        if (!product && formData.name && allProducts && allProducts.length > 0) {
+            const inputName = normalizeString(formData.name);
+            if (inputName.length > 2) {
+                const found = allProducts.find(p => normalizeString(p.name) === inputName);
+                setDetectedDuplicate(found || null);
+            } else {
+                setDetectedDuplicate(null);
+            }
+        } else {
+            setDetectedDuplicate(null);
+        }
+    }, [formData.name, product, allProducts]);
+
     // Tính lại tổng nhập từ danh sách lịch sử đang sửa
     const calculatedTotalImported = useMemo(() => {
         return historyList.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0);
@@ -217,6 +237,12 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({ isOpen, onCl
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!formData.name) return;
+        
+        // Prevent saving if duplicate is detected in create mode
+        if (detectedDuplicate && !product) {
+            toast.error("Tên sản phẩm bị trùng! Vui lòng kiểm tra lại.");
+            return;
+        }
         
         // TAB NHẬP HÀNG MỚI
         if (editTab === 'IMPORT' && product) {
@@ -267,6 +293,25 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({ isOpen, onCl
                     <div>
                         <label className="text-[10px] font-black text-gray-400 uppercase mb-1 ml-1 block">Tên sản phẩm *</label>
                         <input value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className={vInputClass} placeholder="VD: Gạo ST25..." />
+                        
+                        {/* Duplicate Warning UI */}
+                        {detectedDuplicate && (
+                            <div className="mt-3 p-3 bg-yellow-50 border-2 border-yellow-200 rounded-xl flex items-center justify-between animate-fade-in">
+                                <div>
+                                    <div className="text-[10px] font-black text-yellow-700 uppercase tracking-wide flex items-center gap-1">
+                                        <i className="fas fa-exclamation-triangle"></i> Đã có trong kho
+                                    </div>
+                                    <div className="text-xs font-bold text-gray-700 mt-0.5">{detectedDuplicate.name}</div>
+                                </div>
+                                <button 
+                                    type="button"
+                                    onClick={() => onSwitchToProduct && onSwitchToProduct(detectedDuplicate)}
+                                    className="bg-yellow-400 text-yellow-900 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase shadow-sm hover:bg-yellow-500 transition-colors"
+                                >
+                                    Sửa cái này <i className="fas fa-arrow-right ml-1"></i>
+                                </button>
+                            </div>
+                        )}
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                         <div>
@@ -355,7 +400,17 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({ isOpen, onCl
                             </div>
                         )}
                     </div>
-                    <button type="submit" className="w-full py-4 bg-black text-white rounded-2xl font-black text-sm uppercase shadow-xl hover:bg-gray-800 active:scale-95 transition-all mt-2 tracking-widest">Lưu thay đổi <i className="fas fa-check-circle ml-1"></i></button>
+                    <button 
+                        type="submit" 
+                        disabled={!!detectedDuplicate && !product} // Disable if duplicate found in create mode
+                        className={`w-full py-4 rounded-2xl font-black text-sm uppercase shadow-xl transition-all mt-2 tracking-widest ${
+                            detectedDuplicate && !product 
+                            ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
+                            : 'bg-black text-white hover:bg-gray-800 active:scale-95'
+                        }`}
+                    >
+                        Lưu thay đổi <i className="fas fa-check-circle ml-1"></i>
+                    </button>
                 </form>
             </div>
         </div>
@@ -425,11 +480,18 @@ const InventoryManager: React.FC = () => {
 
   const confirmDelete = async () => { if (deleteId) { await storageService.deleteProduct(deleteId); toast.success('Đã xóa'); setShowDeleteConfirm(false); } };
 
+  // Handler to switch to editing an existing product found via duplicate check
+  const handleSwitchToEdit = (existingProduct: Product) => {
+      setEditingProduct(existingProduct);
+      setEditMode('SET'); // Switch to SET mode so user can see/edit details
+      // No need to set showProductModal true because it's already open, but editingProduct change will trigger effect
+  };
+
   return (
     <div className="max-w-7xl mx-auto pb-24 animate-fade-in relative">
       <div className="sticky top-0 z-30 bg-white/95 backdrop-blur-md shadow-sm border-b border-gray-200 p-3">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <h2 className="text-2xl font-black tracking-tighter text-gray-800 uppercase shrink-0">Kho Hàng <span className="text-eco-600">NẤM LÙN</span></h2>
+              <h2 className="text-2xl font-black tracking-tighter text-gray-800 uppercase shrink-0">Kho Hàng <span className="text-eco-600">Vivid</span></h2>
               <div className="flex items-center gap-3">
                   <div className="relative flex-grow md:w-64">
                       <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Tìm tên hàng..." className="w-full pl-8 pr-3 py-2.5 bg-white border-2 border-gray-800 rounded-xl text-xs font-black outline-none text-gray-800" />
@@ -469,7 +531,17 @@ const InventoryManager: React.FC = () => {
       </div>
 
       {viewingProduct && <ProductDetailModal isOpen={!!viewingProduct} onClose={() => setViewingProduct(null)} product={viewingProduct} onImport={() => { setEditingProduct(viewingProduct); setEditMode('IMPORT'); setViewingProduct(null); setShowProductModal(true); }} onAdjust={() => { setEditingProduct(viewingProduct); setEditMode('SET'); setViewingProduct(null); setShowProductModal(true); }} onDelete={() => { setDeleteId(viewingProduct.id); setShowDeleteConfirm(true); setViewingProduct(null); }} />}
-      <ProductEditModal isOpen={showProductModal} onClose={() => setShowProductModal(false)} product={editingProduct} onSave={handleSaveProduct} initialMode={editMode} />
+      
+      <ProductEditModal 
+        isOpen={showProductModal} 
+        onClose={() => setShowProductModal(false)} 
+        product={editingProduct} 
+        onSave={handleSaveProduct} 
+        initialMode={editMode} 
+        allProducts={products}
+        onSwitchToProduct={handleSwitchToEdit}
+      />
+      
       <ConfirmModal isOpen={showDeleteConfirm} title="Xóa mặt hàng?" message="Sản phẩm sẽ bị xóa vĩnh viễn khỏi kho." onConfirm={confirmDelete} onCancel={() => setShowDeleteConfirm(false)} confirmLabel="Xóa" isDanger={true} />
       <ConfirmModal 
           isOpen={showSyncConfirm} 
