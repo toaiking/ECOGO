@@ -488,16 +488,10 @@ export const pdfService = {
             let priceText = new Intl.NumberFormat('vi-VN').format(o.totalPrice);
             
             // Payment Logic: Clearly distinguish status for Manifest
-            if (o.paymentMethod === PaymentMethod.PAID) {
-                priceText += " (Đã TT)";
-            } else if (o.paymentMethod === PaymentMethod.TRANSFER) {
-                if (o.paymentVerified) {
-                    priceText += " (CK Rồi)";
-                } else {
-                    priceText += " (CK)";
-                }
-            } else if (o.paymentMethod === PaymentMethod.CASH) {
-                priceText += " (TM)"; 
+            if (o.status === OrderStatus.DELIVERED || o.status === OrderStatus.CANCELLED) {
+                if (o.paymentMethod === PaymentMethod.PAID) priceText += " (Đã TT)";
+                else if (o.paymentMethod === PaymentMethod.TRANSFER) priceText += o.paymentVerified ? " (CK Rồi)" : " (CK)";
+                else if (o.paymentMethod === PaymentMethod.CASH) priceText += " (TM)"; 
             }
             const priceLines = doc.splitTextToSize(priceText, wPrice - 1.5);
 
