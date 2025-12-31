@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import toast from 'react-hot-toast';
 import { Order, OrderStatus, Product, Customer, PaymentMethod, OrderItem } from '../types';
-import { storageService, normalizeString } from '../services/storageService';
+import { storageService, normalizeString, calculateProductPrice } from '../services/storageService';
 import { parseOrderText } from '../services/geminiService';
 import { ProductEditModal } from './InventoryManager';
 import ConfirmModal from './ConfirmModal';
@@ -101,7 +101,24 @@ const OrderForm: React.FC = () => {
             const transcript = event.results[0][0].transcript;
             const res = await parseOrderText(transcript, products, customers);
             setCustomerInfo(prev => ({ ...prev, customerName: res.customerName || prev.customerName, customerPhone: res.customerPhone || prev.customerPhone, address: res.address || prev.address, notes: res.notes || prev.notes }));
-            if (res.parsedItems?.length) { setItems(res.parsedItems.map(pi => { const matched = products.find(p => normalizeString(p.name) === normalizeString(pi.productName)); return { id: uuidv4(), name: matched ? matched.name : pi.productName, quantity: pi.quantity || 1, price: matched ? matched.defaultPrice : 0, productId: matched?.id }; })); }
+            if (res.parsedItems?.length) { 
+                setItems(res.parsedItems.map(pi => { 
+                    const matched = products.find(p => normalizeString(p.name) === normalizeString(pi.productName)); 
+                    // Calculate price based on tier if matched
+                    let finalPrice = matched ? matched.defaultPrice : 0;
+                    if (matched) {
+                        const { price } = calculateProductPrice(matched, pi.quantity || 1);
+                        finalPrice = price;
+                    }
+                    return { 
+                        id: uuidv4(), 
+                        name: matched ? matched.name : pi.productName, 
+                        quantity: pi.quantity || 1, 
+                        price: finalPrice, 
+                        productId: matched?.id 
+                    }; 
+                })); 
+            }
         } catch (error) { toast.error("Lỗi AI"); } finally { setIsProcessingAI(false); }
     };
     recognition.start();
@@ -109,8 +126,40 @@ const OrderForm: React.FC = () => {
 
   const addItemRow = () => setItems([...items, { id: uuidv4(), name: '', quantity: 1, price: 0 }]);
   const removeItemRow = (index: number) => { if (items.length === 1) { setItems([{ id: uuidv4(), name: '', quantity: 1, price: 0 }]); return; } const newItems = [...items]; newItems.splice(index, 1); setItems(newItems); };
-  const handleItemChange = (index: number, field: keyof OrderItem, value: any) => { const newItems = [...items]; newItems[index] = { ...newItems[index], [field]: value }; if (field === 'name') newItems[index].productId = undefined; setItems(newItems); };
-  const selectProductForItem = (index: number, product: Product) => { const newItems = [...items]; newItems[index] = { ...newItems[index], productId: product.id, name: product.name, price: product.defaultPrice }; setItems(newItems); setActiveProductRow(null); };
+  
+  const handleItemChange = (index: number, field: keyof OrderItem, value: any) => { 
+      const newItems = [...items]; 
+      newItems[index] = { ...newItems[index], [field]: value }; 
+      
+      if (field === 'name') newItems[index].productId = undefined; 
+      
+      // AUTO-PRICE LOGIC: Recalculate price if quantity changes and productId exists
+      if (field === 'quantity' && newItems[index].productId) {
+          const product = products.find(p => p.id === newItems[index].productId);
+          if (product) {
+              const { price } = calculateProductPrice(product, Number(value));
+              newItems[index].price = price;
+          }
+      }
+
+      setItems(newItems); 
+  };
+  
+  const selectProductForItem = (index: number, product: Product) => { 
+      const quantity = Number(items[index].quantity) || 1;
+      const { price } = calculateProductPrice(product, quantity);
+      
+      const newItems = [...items]; 
+      newItems[index] = { 
+          ...newItems[index], 
+          productId: product.id, 
+          name: product.name, 
+          price: price 
+      }; 
+      setItems(newItems); 
+      setActiveProductRow(null); 
+  };
+  
   const addTagToNotes = (tag: string) => { setCustomerInfo(prev => ({ ...prev, notes: prev.notes ? `${prev.notes}, ${tag}` : tag })); };
 
   const handleSelectCustomer = (s: Customer) => {
@@ -124,16 +173,21 @@ const OrderForm: React.FC = () => {
     const existingIdx = items.findIndex(i => i.productId === product.id);
     if (existingIdx >= 0) {
       const newItems = [...items];
-      newItems[existingIdx].quantity = (Number(newItems[existingIdx].quantity) || 0) + 1;
+      const newQty = (Number(newItems[existingIdx].quantity) || 0) + 1;
+      const { price } = calculateProductPrice(product, newQty); // Recalc price
+      
+      newItems[existingIdx].quantity = newQty;
+      newItems[existingIdx].price = price;
       setItems(newItems);
     } else {
       const emptyIdx = items.findIndex(i => !i.name && !i.productId);
+      const { price } = calculateProductPrice(product, 1);
       if (emptyIdx >= 0) {
         const newItems = [...items];
-        newItems[emptyIdx] = { ...newItems[emptyIdx], productId: product.id, name: product.name, price: product.defaultPrice, quantity: 1 };
+        newItems[emptyIdx] = { ...newItems[emptyIdx], productId: product.id, name: product.name, price: price, quantity: 1 };
         setItems(newItems);
       } else {
-        setItems([...items, { id: uuidv4(), productId: product.id, name: product.name, price: product.defaultPrice, quantity: 1 }]);
+        setItems([...items, { id: uuidv4(), productId: product.id, name: product.name, price: price, quantity: 1 }]);
       }
     }
     toast.success(`Thêm ${product.name}`, { duration: 800 });
@@ -271,26 +325,46 @@ const OrderForm: React.FC = () => {
                             <button type="button" onClick={addItemRow} className="text-[9px] font-black text-eco-600 bg-white border border-eco-200 px-3 py-1 rounded-lg shadow-sm">+ Thêm món</button>
                         </div>
                         <div className="space-y-1.5">
-                            {items.map((item, idx) => (
-                                <div key={item.id} className="flex items-center gap-1.5 bg-white p-2 rounded-lg border border-gray-100 shadow-sm relative group">
-                                    <div className="flex-grow relative">
-                                        <input value={item.name} onChange={(e) => handleItemChange(idx, 'name', e.target.value)} onFocus={() => setActiveProductRow(idx)} className="w-full p-1.5 bg-gray-50 border-none rounded-md text-xs font-bold text-gray-800 outline-none uppercase placeholder-gray-300" placeholder="TÊN MÓN..." />
-                                        {activeProductRow === idx && (
-                                            <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-100 rounded-lg shadow-2xl z-50 max-h-48 overflow-y-auto no-scrollbar">
-                                                {products.filter(p => !item.name || normalizeString(p.name).includes(normalizeString(item.name))).map(p => <div key={p.id} onMouseDown={() => selectProductForItem(idx, p)} className="px-3 py-2 hover:bg-blue-50 cursor-pointer flex justify-between items-center border-b border-gray-50"><div className="flex flex-col"><span className="text-[11px] font-bold text-gray-700 uppercase">{p.name}</span><span className="text-[9px] text-gray-400 uppercase">Tồn: {p.stockQuantity}</span></div><span className="text-[10px] font-black text-blue-600">{new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}đ</span></div>)}
-                                                <div onMouseDown={() => { setEditingProduct(null); setEditMode('SET'); setShowProductModal(true); }} className="p-2 bg-gray-50 text-center text-[9px] font-black text-eco-600 uppercase italic cursor-pointer">+ Tạo mới hàng</div>
-                                            </div>
-                                        )}
+                            {items.map((item, idx) => {
+                                // Calculate pricing info for display
+                                const product = products.find(p => p.id === item.productId);
+                                let badge: 'LE' | 'SI' | null = null;
+                                if (product) {
+                                    const calc = calculateProductPrice(product, Number(item.quantity) || 1);
+                                    badge = calc.badge;
+                                }
+
+                                return (
+                                <div key={item.id} className="bg-white p-2 rounded-lg border border-gray-100 shadow-sm relative group flex flex-col gap-1">
+                                    <div className="flex items-center gap-1.5">
+                                        <div className="flex-grow relative">
+                                            <input value={item.name} onChange={(e) => handleItemChange(idx, 'name', e.target.value)} onFocus={() => setActiveProductRow(idx)} className="w-full p-1.5 bg-gray-50 border-none rounded-md text-xs font-bold text-gray-800 outline-none uppercase placeholder-gray-300" placeholder="TÊN MÓN..." />
+                                            {activeProductRow === idx && (
+                                                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-100 rounded-lg shadow-2xl z-50 max-h-48 overflow-y-auto no-scrollbar">
+                                                    {products.filter(p => !item.name || normalizeString(p.name).includes(normalizeString(item.name))).map(p => <div key={p.id} onMouseDown={() => selectProductForItem(idx, p)} className="px-3 py-2 hover:bg-blue-50 cursor-pointer flex justify-between items-center border-b border-gray-50"><div className="flex flex-col"><span className="text-[11px] font-bold text-gray-700 uppercase">{p.name}</span><span className="text-[9px] text-gray-400 uppercase">Tồn: {p.stockQuantity}</span></div><span className="text-[10px] font-black text-blue-600">{new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}đ</span></div>)}
+                                                    <div onMouseDown={() => { setEditingProduct(null); setEditMode('SET'); setShowProductModal(true); }} className="p-2 bg-gray-50 text-center text-[9px] font-black text-eco-600 uppercase italic cursor-pointer">+ Tạo mới hàng</div>
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div className="w-12">
+                                            <input type="number" step="any" value={item.quantity === 0 ? '' : item.quantity} onChange={(e) => handleItemChange(idx, 'quantity', Number(e.target.value))} className="w-full p-1.5 text-center bg-gray-50 border-none rounded-md text-xs font-black text-eco-700 outline-none" placeholder="SL" />
+                                        </div>
+                                        <div className="w-20 relative">
+                                            <input 
+                                                type="number" 
+                                                value={item.price === 0 ? '' : item.price} 
+                                                onChange={(e) => handleItemChange(idx, 'price', Number(e.target.value))} 
+                                                className={`w-full p-1.5 text-right bg-gray-50 border-none rounded-md text-xs font-black outline-none ${badge === 'SI' ? 'text-purple-600 font-black' : (badge === 'LE' ? 'text-orange-600 font-black' : 'text-gray-800')}`} 
+                                                placeholder="GIÁ" 
+                                            />
+                                            {badge === 'SI' && <div className="absolute -top-1.5 -right-1 text-[8px] bg-purple-100 text-purple-700 px-1 rounded-sm shadow-sm font-bold">GIÁ SỈ</div>}
+                                            {badge === 'LE' && <div className="absolute -top-1.5 -right-1 text-[8px] bg-orange-100 text-orange-700 px-1 rounded-sm shadow-sm font-bold">GIÁ LẺ</div>}
+                                        </div>
+                                        <button type="button" onClick={() => removeItemRow(idx)} className="text-gray-300 hover:text-red-500 w-6 h-6 flex items-center justify-center"><i className="fas fa-times-circle"></i></button>
                                     </div>
-                                    <div className="w-12">
-                                        <input type="number" step="any" value={item.quantity === 0 ? '' : item.quantity} onChange={(e) => handleItemChange(idx, 'quantity', Number(e.target.value))} className="w-full p-1.5 text-center bg-gray-50 border-none rounded-md text-xs font-black text-eco-700 outline-none" placeholder="SL" />
-                                    </div>
-                                    <div className="w-20">
-                                        <input type="number" value={item.price === 0 ? '' : item.price} onChange={(e) => handleItemChange(idx, 'price', Number(e.target.value))} className="w-full p-1.5 text-right bg-gray-50 border-none rounded-md text-xs font-black text-gray-800 outline-none" placeholder="GIÁ" />
-                                    </div>
-                                    <button type="button" onClick={() => removeItemRow(idx)} className="text-gray-300 hover:text-red-500 w-6 h-6 flex items-center justify-center"><i className="fas fa-times-circle"></i></button>
                                 </div>
-                            ))}
+                                );
+                            })}
                         </div>
                     </div>
                 </form>

@@ -116,7 +116,7 @@ const Login: React.FC<Props> = ({ onLogin }) => {
   const handleInteract = () => {
       if (mood === 'LOADING') return;
       setMood('HAPPY');
-      speak("Xin chào!");
+      speak("Sẵn sàng!");
       setTimeout(() => setMood('IDLE'), 2000);
   };
 

@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import toast from 'react-hot-toast';
-import { Product, Order, ImportRecord } from '../types';
+import { Product, Order, ImportRecord, PriceTier } from '../types';
 import { storageService, generateProductSku, normalizeString } from '../services/storageService';
 import ConfirmModal from './ConfirmModal';
 import { formatDistanceToNow } from 'date-fns';
@@ -88,6 +88,19 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({ isOpen, 
                              <div><div className="text-[9px] text-gray-400 uppercase font-black">Giá Bán</div><div className="text-xs font-black text-blue-600">{new Intl.NumberFormat('vi-VN').format(product.defaultPrice)}đ</div></div>
                              <div><div className="text-[9px] text-gray-400 uppercase font-black">Lợi nhuận</div><div className="text-xs font-black text-green-600">{new Intl.NumberFormat('vi-VN').format(profitPerUnit)}đ</div></div>
                         </div>
+                        {/* Display Pricing Tiers if available */}
+                        {product.priceTiers && product.priceTiers.length > 0 && (
+                            <div className="mt-4 pt-3 border-t border-dashed border-gray-200">
+                                <div className="text-[9px] font-black text-purple-600 uppercase tracking-widest mb-2">Bảng giá sỉ</div>
+                                <div className="flex flex-wrap gap-2">
+                                    {product.priceTiers.sort((a,b) => a.minQty - b.minQty).map((tier, idx) => (
+                                        <div key={idx} className="bg-purple-50 border border-purple-100 px-2 py-1 rounded text-xs font-bold text-purple-800">
+                                            ≥ {tier.minQty}: {new Intl.NumberFormat('vi-VN', { notation: "compact" }).format(tier.price)}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     <div className="grid grid-cols-2 gap-4">
@@ -154,6 +167,11 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({ isOpen, onCl
     // State quản lý lịch sử nhập (Dành cho tab SET)
     const [historyList, setHistoryList] = useState<ImportRecord[]>([]);
     
+    // State cho Price Tiers
+    const [priceTiers, setPriceTiers] = useState<PriceTier[]>([]);
+    const [newTierQty, setNewTierQty] = useState('');
+    const [newTierPrice, setNewTierPrice] = useState('');
+
     const [realSold, setRealSold] = useState(0);
     const [detectedDuplicate, setDetectedDuplicate] = useState<Product | null>(null);
 
@@ -165,6 +183,7 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({ isOpen, onCl
             if (product) {
                 setFormData({ name: product.name, defaultPrice: product.defaultPrice, importPrice: product.importPrice });
                 setImportPriceInput(product.importPrice?.toString() || '0');
+                setPriceTiers(product.priceTiers || []);
                 
                 // Load history sorted by date desc
                 const loadedHistory = product.importHistory ? [...product.importHistory].sort((a,b) => b.date - a.date) : [];
@@ -187,6 +206,7 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({ isOpen, onCl
                 setFormData({ name: '', defaultPrice: 0, importPrice: 0 }); 
                 setImportPriceInput('');
                 setHistoryList([]);
+                setPriceTiers([]);
                 setRealSold(0); 
                 setEditTab('SET');
             }
@@ -234,6 +254,28 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({ isOpen, onCl
         }, ...prev]);
     };
 
+    const handleAddTier = () => {
+        const q = parseInt(newTierQty);
+        const p = parseInt(newTierPrice);
+        if (!isNaN(q) && !isNaN(p) && q > 1 && p > 0) {
+            setPriceTiers(prev => {
+                // Remove existing tier with same quantity if any
+                const filtered = prev.filter(t => t.minQty !== q);
+                const updated = [...filtered, { minQty: q, price: p }];
+                return updated.sort((a, b) => a.minQty - b.minQty);
+            });
+            setNewTierQty('');
+            setNewTierPrice('');
+            toast.success("Đã thêm mức giá");
+        } else {
+            toast.error("Vui lòng nhập số lượng > 1 và giá hợp lệ");
+        }
+    };
+
+    const handleRemoveTier = (idx: number) => {
+        setPriceTiers(prev => prev.filter((_, i) => i !== idx));
+    };
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!formData.name) return;
@@ -274,7 +316,8 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({ isOpen, onCl
             stockQuantity: finalStock, 
             totalImported: calculatedTotalImported, 
             lastImportDate: lastImport, 
-            importHistory: historyList // Lưu danh sách lịch sử mới
+            importHistory: historyList,
+            priceTiers: priceTiers // Lưu danh sách giá sỉ
         }, false, 0);
         onClose();
     };
@@ -315,7 +358,7 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({ isOpen, onCl
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                         <div>
-                            <label className="text-[10px] font-black text-gray-400 uppercase mb-1 ml-1 block">Giá bán</label>
+                            <label className="text-[10px] font-black text-gray-400 uppercase mb-1 ml-1 block">Giá bán lẻ (Mặc định)</label>
                             <input type="number" value={formData.defaultPrice} onChange={e => setFormData({...formData, defaultPrice: Number(e.target.value)})} className={`${vInputClass} text-blue-600`} />
                         </div>
                         <div>
@@ -323,10 +366,74 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({ isOpen, onCl
                             <input type="number" value={formData.importPrice} onChange={e => setFormData({...formData, importPrice: Number(e.target.value)})} className={vInputClass} />
                         </div>
                     </div>
+                    
+                    {/* NEW: PRICE TIERS SECTION - REDESIGNED */}
+                    {editTab === 'SET' && (
+                        <div className="bg-purple-50 p-4 rounded-2xl border-2 border-purple-100">
+                            <label className="text-[10px] font-black text-purple-600 uppercase mb-2 block flex items-center gap-1">
+                                <i className="fas fa-tags"></i> Cấu hình giá sỉ (Tự động giảm giá)
+                            </label>
+                            
+                            {/* Input Row */}
+                            <div className="grid grid-cols-[1fr_1fr_40px] gap-2 mb-3 items-end">
+                                <div>
+                                    <label className="text-[9px] font-bold text-purple-400 uppercase ml-1 block mb-1">Số lượng &ge;</label>
+                                    <input 
+                                        type="number" 
+                                        placeholder="VD: 10" 
+                                        value={newTierQty}
+                                        onChange={e => setNewTierQty(e.target.value)}
+                                        className="w-full p-2 bg-white border border-purple-200 rounded-lg text-xs font-bold text-center outline-none focus:border-purple-500"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="text-[9px] font-bold text-purple-400 uppercase ml-1 block mb-1">Đơn giá mới</label>
+                                    <input 
+                                        type="number" 
+                                        placeholder="VD: 90000" 
+                                        value={newTierPrice}
+                                        onChange={e => setNewTierPrice(e.target.value)}
+                                        className="w-full p-2 bg-white border border-purple-200 rounded-lg text-xs font-bold text-right outline-none focus:border-purple-500"
+                                    />
+                                </div>
+                                <button type="button" onClick={handleAddTier} className="h-9 w-full bg-purple-600 text-white rounded-lg font-bold shadow-sm hover:bg-purple-700 flex items-center justify-center">
+                                    <i className="fas fa-plus"></i>
+                                </button>
+                            </div>
+
+                            {/* List Table */}
+                            <div className="bg-white rounded-xl border border-purple-100 overflow-hidden">
+                                <div className="grid grid-cols-[1fr_1fr_40px] bg-purple-100/50 p-2 text-[9px] font-bold text-purple-800 uppercase">
+                                    <div className="text-center">Số lượng</div>
+                                    <div className="text-right pr-2">Giá áp dụng</div>
+                                    <div className="text-center">Xóa</div>
+                                </div>
+                                <div className="divide-y divide-purple-50">
+                                    {priceTiers.length === 0 && (
+                                        <div className="p-3 text-center text-xs text-gray-400 italic">Chưa có cấu hình giá sỉ</div>
+                                    )}
+                                    {priceTiers.map((tier, idx) => (
+                                        <div key={idx} className="grid grid-cols-[1fr_1fr_40px] p-2 items-center hover:bg-purple-50 transition-colors">
+                                            <div className="text-xs font-bold text-gray-700 text-center">
+                                                &ge; {tier.minQty}
+                                            </div>
+                                            <div className="text-xs font-black text-blue-600 text-right pr-2">
+                                                {new Intl.NumberFormat('vi-VN').format(tier.price)}đ
+                                            </div>
+                                            <button type="button" onClick={() => handleRemoveTier(idx)} className="text-gray-300 hover:text-red-500 flex justify-center w-full">
+                                                <i className="fas fa-times"></i>
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     {product && (
                         <div className="flex bg-gray-100 p-1 rounded-2xl">
                             <button type="button" onClick={() => setEditTab('IMPORT')} className={`flex-1 py-2 text-[10px] font-black uppercase rounded-xl transition-all ${editTab === 'IMPORT' ? 'bg-white text-black shadow-sm' : 'text-gray-500'}`}>Nhập thêm hàng</button>
-                            <button type="button" onClick={() => setEditTab('SET')} className={`flex-1 py-2 text-[10px] font-black uppercase rounded-xl transition-all ${editTab === 'SET' ? 'bg-white text-black shadow-sm' : 'text-gray-500'}`}>Sửa Lịch Sử Nhập</button>
+                            <button type="button" onClick={() => setEditTab('SET')} className={`flex-1 py-2 text-[10px] font-black uppercase rounded-xl transition-all ${editTab === 'SET' ? 'bg-white text-black shadow-sm' : 'text-gray-500'}`}>Sửa Số Liệu</button>
                         </div>
                     )}
                     <div className={`p-4 rounded-2xl border-2 ${editTab === 'IMPORT' ? 'bg-blue-50 border-blue-200' : 'bg-orange-50 border-orange-200'}`}>
@@ -348,38 +455,53 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({ isOpen, onCl
                         ) : (
                             <div className="space-y-3">
                                 <div className="flex justify-between items-center mb-2">
-                                    <label className="text-[10px] font-black text-orange-600 uppercase">Chi tiết các lần nhập</label>
-                                    <button type="button" onClick={handleAddHistoryItem} className="text-[9px] bg-orange-100 text-orange-700 px-2 py-1 rounded font-bold hover:bg-orange-200">+ Thêm dòng</button>
+                                    <label className="text-[10px] font-black text-orange-600 uppercase">Lịch sử nhập (Chi tiết)</label>
+                                    <button type="button" onClick={handleAddHistoryItem} className="text-[9px] bg-orange-100 text-orange-700 px-3 py-1.5 rounded-lg font-bold hover:bg-orange-200 shadow-sm border border-orange-200">
+                                        <i className="fas fa-plus mr-1"></i> Thêm dòng
+                                    </button>
                                 </div>
                                 
-                                <div className="max-h-48 overflow-y-auto space-y-2 pr-1">
-                                    {historyList.map((item, idx) => (
-                                        <div key={item.id} className="flex items-center gap-2 bg-white p-2 rounded-xl border border-gray-200">
-                                            <div className="w-16 text-[9px] font-bold text-gray-400 text-center">
-                                                {new Date(item.date).toLocaleDateString('vi-VN')}
+                                {/* IMPROVED HISTORY TABLE */}
+                                <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                                    <div className="grid grid-cols-[80px_1fr_80px_30px] bg-gray-100 p-2 text-[9px] font-bold text-gray-500 uppercase border-b border-gray-200">
+                                        <div className="text-center">Ngày</div>
+                                        <div className="text-center">Số lượng</div>
+                                        <div className="text-right pr-2">Giá Vốn</div>
+                                        <div></div>
+                                    </div>
+                                    <div className="max-h-48 overflow-y-auto divide-y divide-gray-100">
+                                        {historyList.map((item, idx) => (
+                                            <div key={item.id} className="grid grid-cols-[80px_1fr_80px_30px] p-2 items-center gap-2">
+                                                <div className="text-[9px] font-bold text-gray-400 text-center">
+                                                    {new Date(item.date).toLocaleDateString('vi-VN')}
+                                                </div>
+                                                <div>
+                                                    <input 
+                                                        type="number" 
+                                                        value={item.quantity} 
+                                                        onChange={e => handleHistoryChange(item.id, 'quantity', Number(e.target.value))}
+                                                        className="w-full p-1 bg-gray-50 border border-gray-200 rounded text-center text-xs font-black text-gray-800 outline-none focus:border-orange-400 focus:bg-white transition-all"
+                                                        placeholder="SL"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <input 
+                                                        type="number" 
+                                                        value={item.price} 
+                                                        onChange={e => handleHistoryChange(item.id, 'price', Number(e.target.value))}
+                                                        className="w-full p-1 bg-gray-50 border border-gray-200 rounded text-right text-xs font-medium text-gray-600 outline-none focus:border-orange-400 focus:bg-white transition-all"
+                                                        placeholder="Giá"
+                                                    />
+                                                </div>
+                                                <button type="button" onClick={() => handleDeleteHistoryItem(item.id)} className="w-6 h-6 flex items-center justify-center text-gray-300 hover:text-red-500 transition-colors">
+                                                    <i className="fas fa-times"></i>
+                                                </button>
                                             </div>
-                                            <div className="flex-grow">
-                                                <input 
-                                                    type="number" 
-                                                    value={item.quantity} 
-                                                    onChange={e => handleHistoryChange(item.id, 'quantity', Number(e.target.value))}
-                                                    className="w-full p-1 bg-gray-50 border border-gray-200 rounded text-center text-xs font-black text-gray-800 outline-none focus:border-orange-400"
-                                                    placeholder="SL"
-                                                />
-                                            </div>
-                                            <div className="w-20">
-                                                <input 
-                                                    type="number" 
-                                                    value={item.price} 
-                                                    onChange={e => handleHistoryChange(item.id, 'price', Number(e.target.value))}
-                                                    className="w-full p-1 bg-gray-50 border border-gray-200 rounded text-right text-xs font-medium text-gray-600 outline-none"
-                                                    placeholder="Giá"
-                                                />
-                                            </div>
-                                            <button type="button" onClick={() => handleDeleteHistoryItem(item.id)} className="w-6 h-6 flex items-center justify-center text-gray-300 hover:text-red-500"><i className="fas fa-times"></i></button>
-                                        </div>
-                                    ))}
-                                    {historyList.length === 0 && <div className="text-center text-xs text-gray-400 italic py-2">Chưa có lịch sử nhập</div>}
+                                        ))}
+                                        {historyList.length === 0 && (
+                                            <div className="text-center text-xs text-gray-400 italic py-4">Chưa có dữ liệu nhập hàng</div>
+                                        )}
+                                    </div>
                                 </div>
 
                                 <div className="bg-white/60 p-3 rounded-xl border border-orange-100 space-y-1">
@@ -511,13 +633,18 @@ const InventoryManager: React.FC = () => {
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
               {filteredProducts.map(p => {
                   const current = p.stockQuantity || 0; const isLow = current < 5;
+                  const hasTiers = p.priceTiers && p.priceTiers.length > 0;
                   return (
                       <div key={p.id} onClick={() => setViewingProduct(p)} className="bg-white rounded-3xl border-2 border-gray-100 shadow-sm hover:border-gray-800 hover:shadow-xl hover:-translate-y-1 cursor-pointer transition-all duration-300 overflow-hidden flex flex-col group relative">
                           <div className="p-4 flex-grow">
                               <h3 className="text-xs font-black text-gray-800 uppercase leading-snug line-clamp-2 h-8 group-hover:text-blue-600 transition-colors" title={p.name}>{p.name}</h3>
                               <div className="mt-4 flex justify-between items-end">
                                   <span className={`text-4xl font-black tracking-tighter ${isLow ? 'text-red-600' : 'text-gray-900'}`}>{current}</span>
-                                  <div className="text-right"><span className="text-[8px] font-black text-gray-400 uppercase block leading-none mb-1">Giá Bán</span><span className="text-sm font-black text-blue-600 leading-none">{new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}đ</span></div>
+                                  <div className="text-right">
+                                      {hasTiers && <span className="text-[8px] font-black text-purple-600 block leading-none mb-1">🏷️ Giá sỉ</span>}
+                                      <span className="text-[8px] font-black text-gray-400 uppercase block leading-none mb-1">Giá Bán</span>
+                                      <span className="text-sm font-black text-blue-600 leading-none">{new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}đ</span>
+                                  </div>
                               </div>
                           </div>
                           <div className="bg-gray-50 border-t-2 border-gray-100 px-4 py-3 flex justify-between items-center group-hover:bg-gray-100 transition-colors">

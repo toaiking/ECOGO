@@ -1,5 +1,5 @@
 
-import { Order, OrderStatus, Product, Customer, BankConfig, Notification, ShopConfig, ImportRecord } from '../types';
+import { Order, OrderStatus, Product, Customer, BankConfig, Notification, ShopConfig, ImportRecord, PriceTier } from '../types';
 import { db } from '../firebaseConfig';
 import { v4 as uuidv4 } from 'uuid';
 import { 
@@ -103,6 +103,41 @@ export const normalizePhone = (phone: string) => {
     if (p.startsWith('+84')) p = '0' + p.slice(3);
     if (p.length === 9 && !p.startsWith('0')) p = '0' + p;
     return p;
+};
+
+// NEW: Helper to calculate tiered price with correct Retail/Wholesale logic
+export const calculateProductPrice = (product: Product, quantity: number): { price: number, badge: 'LE' | 'SI' | null, isWholesale: boolean } => {
+    const tiers = product.priceTiers ? [...product.priceTiers] : [];
+    tiers.sort((a, b) => b.minQty - a.minQty); // Sort descending to find highest applicable tier first
+    
+    let appliedPrice = product.defaultPrice;
+    
+    // Find matching tier
+    const matchedTier = tiers.find(tier => quantity >= tier.minQty);
+    if (matchedTier) {
+        appliedPrice = matchedTier.price;
+    }
+
+    let badge: 'LE' | 'SI' | null = null;
+
+    // Logic xác định nhãn:
+    // 1. Nếu giá áp dụng < giá mặc định -> Giá Sỉ (Giảm giá do mua nhiều)
+    // 2. Nếu giá áp dụng > giá mặc định -> Giá Lẻ (Tăng giá do mua ít)
+    // 3. Nếu số lượng < 1 -> Mặc định coi là Lẻ (trừ khi có cấu hình giá thấp hơn)
+    
+    if (appliedPrice < product.defaultPrice) {
+        badge = 'SI';
+    } else if (appliedPrice > product.defaultPrice) {
+        badge = 'LE';
+    } else if (quantity < 1) {
+        badge = 'LE';
+    }
+
+    return { 
+        price: appliedPrice, 
+        badge,
+        isWholesale: badge === 'SI' // Backward compatibility
+    };
 };
 
 const sanitize = <T>(obj: T): T => JSON.parse(JSON.stringify(obj));
@@ -416,13 +451,16 @@ export const storageService = {
               let updated = false;
               const newItems = o.items.map(i => {
                   if (i.productId === p.id) {
+                      // RE-CALCULATE PRICE based on tiers/quantity, NOT just defaultPrice
+                      const { price: newCorrectPrice } = calculateProductPrice(p, i.quantity);
+                      
                       // Check if name, price or importPrice changed
-                      if (i.name !== p.name || i.price !== p.defaultPrice || i.importPrice !== p.importPrice) {
+                      if (i.name !== p.name || i.price !== newCorrectPrice || i.importPrice !== p.importPrice) {
                           updated = true;
                           return {
                               ...i,
                               name: p.name,
-                              price: p.defaultPrice,
+                              price: newCorrectPrice, // Use calculated price
                               importPrice: p.importPrice
                           };
                       }
@@ -456,12 +494,15 @@ export const storageService = {
               if (item.productId) {
                   const p = products.find(prod => prod.id === item.productId);
                   if (p) {
-                      if (item.name !== p.name || item.price !== p.defaultPrice || item.importPrice !== p.importPrice) {
+                      // RE-CALCULATE PRICE based on tiers/quantity
+                      const { price: newCorrectPrice } = calculateProductPrice(p, item.quantity);
+                      
+                      if (item.name !== p.name || item.price !== newCorrectPrice || item.importPrice !== p.importPrice) {
                           updated = true;
                           return {
                               ...item,
                               name: p.name,
-                              price: p.defaultPrice,
+                              price: newCorrectPrice, // Use calculated price
                               importPrice: p.importPrice
                           };
                       }

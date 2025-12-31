@@ -40,6 +40,10 @@ const PaymentAudit: React.FC = () => {
   const [pasteText, setPasteText] = useState('');
   const [activeGroup, setActiveGroup] = useState<CustomerDebtGroup | null>(null); // For Detail Modal
   
+  // Bulk Message State
+  const [showBulkMsgModal, setShowBulkMsgModal] = useState(false);
+  const [bulkMsgTemplate, setBulkMsgTemplate] = useState("Chào {name}, tổng nợ đơn hàng của bạn là {amount}đ. Vui lòng kiểm tra và thanh toán giúp shop nhé. Cảm ơn!");
+
   // Custom Confirmation State
   const [confirmation, setConfirmation] = useState<{
       isOpen: boolean;
@@ -376,6 +380,35 @@ const PaymentAudit: React.FC = () => {
       if (navigator.vibrate) navigator.vibrate(50);
   };
 
+  // --- BULK MESSAGE LOGIC ---
+  const handleBulkMsgClick = (group: CustomerDebtGroup, type: 'SMS' | 'ZALO') => {
+      const msg = bulkMsgTemplate
+          .replace('{name}', group.customerName)
+          .replace('{amount}', new Intl.NumberFormat('vi-VN').format(group.totalAmount));
+      
+      const cleanPhone = normalizePhone(group.customerPhone);
+      
+      if (type === 'SMS') {
+          const ua = navigator.userAgent.toLowerCase();
+          const separator = (ua.indexOf('iphone') > -1 || ua.indexOf('ipad') > -1) ? '&' : '?';
+          window.open(`sms:${cleanPhone}${separator}body=${encodeURIComponent(msg)}`, '_self');
+      } else {
+          // Zalo
+          const zaloPhone = cleanPhone.replace(/^0/, '84');
+          window.open(`https://zalo.me/${zaloPhone}`, '_blank');
+      }
+      
+      // Auto-increment reminder count
+      storageService.incrementReminderCount(group.orders.map(o => o.id));
+  };
+
+  const handleCopyPhoneList = () => {
+      const selectedGroups = customerGroups.filter(g => selectedGroupKeys.has(g.key));
+      const phones = selectedGroups.map(g => normalizePhone(g.customerPhone)).filter(p => p.length > 8).join('\n');
+      navigator.clipboard.writeText(phones);
+      toast.success(`Đã copy ${selectedGroups.length} số điện thoại!`);
+  };
+
   return (
     <div className="max-w-4xl mx-auto pb-24 animate-fade-in px-3">
         {/* Header Control */}
@@ -495,18 +528,19 @@ const PaymentAudit: React.FC = () => {
 
         {/* Floating Bulk Action Bar */}
         {isSelectionMode && selectedGroupKeys.size > 0 && (
-            <div className="fixed bottom-6 left-1/2 -translate-x-1/2 w-[90%] max-w-md bg-gray-900 text-white p-3 rounded-2xl shadow-2xl z-50 flex items-center justify-between animate-slide-up">
-                <div className="flex items-center gap-3 pl-2">
-                    <span className="font-black text-xl text-orange-500">{selectedGroupKeys.size}</span>
-                    <div className="flex flex-col">
-                        <span className="text-[10px] font-bold uppercase text-gray-400">Đã chọn</span>
-                        <span className="text-xs font-bold">Khách hàng</span>
-                    </div>
+            <div className="fixed bottom-6 left-1/2 -translate-x-1/2 w-[95%] max-w-lg bg-gray-900 text-white p-2 rounded-2xl shadow-2xl z-50 flex items-center justify-between animate-slide-up border border-gray-700">
+                <div className="flex items-center gap-3 pl-2 pr-4 border-r border-gray-700 shrink-0">
+                    <span className="font-black text-xl text-orange-500 leading-none">{selectedGroupKeys.size}</span>
+                    <button onClick={() => { setIsSelectionMode(false); setSelectedGroupKeys(new Set()); }} className="w-8 h-8 rounded-full bg-gray-800 text-gray-400 hover:text-white flex items-center justify-center transition-colors"><i className="fas fa-times"></i></button>
                 </div>
+                
                 <div className="flex gap-2">
-                    <button onClick={() => { setIsSelectionMode(false); setSelectedGroupKeys(new Set()); }} className="w-10 h-10 rounded-xl bg-gray-800 text-gray-400 flex items-center justify-center hover:bg-gray-700"><i className="fas fa-times"></i></button>
-                    <button onClick={handleBulkConfirm} className="px-4 h-10 rounded-xl bg-orange-600 text-white font-bold text-xs uppercase hover:bg-orange-700 flex items-center gap-2 shadow-lg">
-                        <i className="fas fa-check-circle"></i> Xác nhận thu
+                    <button onClick={() => setShowBulkMsgModal(true)} className="px-3 h-10 rounded-xl bg-purple-700 text-white font-bold text-xs uppercase hover:bg-purple-600 flex items-center gap-1 shadow-md active:scale-95 transition-all">
+                        <i className="fas fa-comment-dots"></i> Nhắn tin
+                    </button>
+                    
+                    <button onClick={handleBulkConfirm} className="px-3 h-10 rounded-xl bg-orange-600 text-white font-bold text-xs uppercase hover:bg-orange-700 flex items-center gap-1 shadow-md active:scale-95 transition-all">
+                        <i className="fas fa-check-circle"></i> Đã Thu
                     </button>
                 </div>
             </div>
@@ -575,6 +609,47 @@ const PaymentAudit: React.FC = () => {
                             <button onClick={() => handleSms(activeGroup)} className="py-3 bg-gray-100 text-gray-600 rounded-xl font-bold text-xs hover:bg-gray-200 transition-colors uppercase">SMS</button>
                             <button onClick={() => handleShareDebtQR(activeGroup)} className="py-3 bg-red-50 text-red-600 rounded-xl font-bold text-xs hover:bg-red-100 transition-colors uppercase">Gửi QR</button>
                         </div>
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {/* BULK MESSAGE MODAL */}
+        {showBulkMsgModal && (
+            <div className="fixed inset-0 z-[120] bg-gray-900/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in" onClick={() => setShowBulkMsgModal(false)}>
+                <div className="bg-white w-full max-w-md rounded-[2rem] shadow-2xl overflow-hidden flex flex-col max-h-[85vh]" onClick={e => e.stopPropagation()}>
+                    <div className="p-5 border-b border-gray-100 bg-purple-50">
+                        <div className="flex justify-between items-center mb-2">
+                            <h3 className="font-black text-purple-800 text-lg uppercase tracking-tight">Gửi tin hàng loạt ({selectedGroupKeys.size})</h3>
+                            <button onClick={() => setShowBulkMsgModal(false)} className="w-8 h-8 rounded-full bg-white text-gray-400 hover:text-gray-600 flex items-center justify-center"><i className="fas fa-times"></i></button>
+                        </div>
+                        <p className="text-[10px] text-gray-500 font-bold mb-2">Soạn tin nhắn (Dùng {'{name}'} và {'{amount}'} để tự điền)</p>
+                        <textarea 
+                            value={bulkMsgTemplate} 
+                            onChange={e => setBulkMsgTemplate(e.target.value)} 
+                            className="w-full p-3 bg-white border border-purple-200 rounded-xl text-sm font-medium text-gray-700 outline-none focus:border-purple-500 h-20 resize-none shadow-sm"
+                        />
+                        <button onClick={handleCopyPhoneList} className="w-full mt-2 py-2 bg-purple-200 text-purple-800 rounded-lg text-xs font-bold uppercase hover:bg-purple-300 transition-colors">
+                            <i className="fas fa-copy mr-1"></i> Copy danh sách SĐT (Để dùng Tool ngoài)
+                        </button>
+                    </div>
+                    
+                    <div className="flex-grow overflow-y-auto p-2 bg-gray-50 space-y-2">
+                        {customerGroups.filter(g => selectedGroupKeys.has(g.key)).map(group => (
+                            <div key={group.key} className="bg-white p-3 rounded-xl border border-gray-200 flex justify-between items-center shadow-sm">
+                                <div className="min-w-0 pr-2">
+                                    <div className="font-bold text-gray-800 text-sm truncate">{group.customerName}</div>
+                                    <div className="text-[10px] font-bold text-red-500">{new Intl.NumberFormat('vi-VN').format(group.totalAmount)}đ</div>
+                                </div>
+                                <div className="flex gap-2 shrink-0">
+                                    <button onClick={() => handleBulkMsgClick(group, 'ZALO')} className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white border border-blue-200 flex items-center justify-center font-black text-xs transition-all">Z</button>
+                                    <button onClick={() => handleBulkMsgClick(group, 'SMS')} className="w-8 h-8 rounded-lg bg-green-50 text-green-600 hover:bg-green-600 hover:text-white border border-green-200 flex items-center justify-center transition-all"><i className="fas fa-comment-dots"></i></button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                    <div className="p-3 bg-gray-100 text-center text-[10px] text-gray-500 font-medium">
+                        Bấm nút Z/SMS để gửi từng người (Tránh bị Spam)
                     </div>
                 </div>
             </div>

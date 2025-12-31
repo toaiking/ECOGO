@@ -3,7 +3,7 @@ import React, { useEffect, useState, useMemo, useRef, useDeferredValue, useCallb
 import toast from 'react-hot-toast';
 import { v4 as uuidv4 } from 'uuid';
 import { Order, OrderStatus, PaymentMethod, OrderItem, Product, Customer, ShopConfig, BankConfig } from '../types';
-import { storageService, normalizePhone, normalizeString } from '../services/storageService';
+import { storageService, normalizePhone, normalizeString, calculateProductPrice } from '../services/storageService';
 import { pdfService } from '../services/pdfService';
 import { OrderCard } from './OrderCard';
 import ConfirmModal from './ConfirmModal';
@@ -527,16 +527,37 @@ const TrackingDashboard: React.FC = () => {
   const confirmDelete = async () => { if (deleteId) { const id = deleteId as string; const orderToDelete = orders.find(o => o.id === id); if (orderToDelete) { for (const item of orderToDelete.items) { if (item.productId) { const product = products.find(p => p.id === item.productId); if (product) { const currentStock = Number(product.stockQuantity) || 0; const restoreQty = Number(item.quantity) || 0; await storageService.saveProduct({ ...product, stockQuantity: currentStock + restoreQty }); } } } await storageService.deleteOrder(id, { name: orderToDelete.customerName, address: orderToDelete.address }); } toast.success('Đã xóa đơn & Hoàn kho'); setShowDeleteConfirm(false); setDeleteId(null); if(detailOrder?.id === id) setDetailOrder(null); } };
   
   const saveEdit = async (e: React.FormEvent) => { e.preventDefault(); if (editingOrder) { await storageService.updateOrderDetails(editingOrder); setEditingOrder(null); toast.success('Đã lưu thay đổi'); } };
-  const updateEditItem = (index: number, field: keyof OrderItem, value: any) => { if (!editingOrder) return; const newItems = [...editingOrder.items]; newItems[index] = { ...newItems[index], [field]: value }; if (field === 'name') newItems[index].productId = undefined; const newTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0); setEditingOrder({ ...editingOrder, items: newItems, totalPrice: newTotal }); };
+  
+  const updateEditItem = (index: number, field: keyof OrderItem, value: any) => { 
+      if (!editingOrder) return; 
+      const newItems = [...editingOrder.items]; 
+      newItems[index] = { ...newItems[index], [field]: value }; 
+      if (field === 'name') newItems[index].productId = undefined; 
+      
+      // AUTO-PRICE LOGIC for Edit
+      if (field === 'quantity' && newItems[index].productId) {
+          const p = products.find(prod => prod.id === newItems[index].productId);
+          if (p) {
+              const { price } = calculateProductPrice(p, Number(value));
+              newItems[index].price = price;
+          }
+      }
+
+      const newTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0); 
+      setEditingOrder({ ...editingOrder, items: newItems, totalPrice: newTotal }); 
+  };
   
   const selectProductForEditItem = (index: number, product: Product) => { 
       if (!editingOrder) return; 
+      const quantity = Number(editingOrder.items[index].quantity) || 1;
+      const { price } = calculateProductPrice(product, quantity);
+
       const newItems = [...editingOrder.items]; 
       newItems[index] = { 
           ...newItems[index], 
           productId: product.id, 
           name: product.name, 
-          price: product.defaultPrice,
+          price: price,
           importPrice: product.importPrice 
       }; 
       const newTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0); 

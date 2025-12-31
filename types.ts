@@ -65,6 +65,11 @@ export interface ImportRecord {
   note?: string;
 }
 
+export interface PriceTier {
+  minQty: number;
+  price: number;
+}
+
 export interface Product {
   id: string;
   name: string;
@@ -76,6 +81,7 @@ export interface Product {
   importHistory?: ImportRecord[];
   defaultWeight?: number;
   lastImportDate?: number;
+  priceTiers?: PriceTier[]; // NEW: Tiered pricing (e.g., >=10 price is 90k)
 }
 
 export interface Customer {
