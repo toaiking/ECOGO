@@ -475,7 +475,7 @@ export const pdfService = {
             // 3. Items (Normal)
             doc.setFont(fontName, 'normal');
             // Explicit Quantity Display: "Name (SL: 2)"
-            const itemsStr = o.items.map(it => `${it.name} (SL:${it.quantity})`).join(', ');
+            const itemsStr = o.items.map(it => `${it.name} (x${it.quantity})`).join(', ');
             const itemsLines = doc.splitTextToSize(itemsStr, wItem - 1.5);
             
             // 4. Notes (Italic)
