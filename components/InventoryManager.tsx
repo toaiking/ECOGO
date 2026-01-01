@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 import { Product, Order, ImportRecord, PriceTier } from '../types';
 import { storageService, generateProductSku, normalizeString } from '../services/storageService';
 import ConfirmModal from './ConfirmModal';
+import SocialPostModal from './SocialPostModal';
 import { formatDistanceToNow } from 'date-fns';
 import { vi } from 'date-fns/locale';
 
@@ -551,6 +552,11 @@ const InventoryManager: React.FC = () => {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [showSyncConfirm, setShowSyncConfirm] = useState(false);
   const [pendingProductUpdate, setPendingProductUpdate] = useState<Product | null>(null);
+  
+  // NEW: Selection Mode State
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedProductIds, setSelectedProductIds] = useState<Set<string>>(new Set());
+  const [showSocialModal, setShowSocialModal] = useState(false);
 
   useEffect(() => { const unsub = storageService.subscribeProducts(setProducts); return () => unsub(); }, []);
   useEffect(() => {
@@ -602,18 +608,44 @@ const InventoryManager: React.FC = () => {
 
   const confirmDelete = async () => { if (deleteId) { await storageService.deleteProduct(deleteId); toast.success('Đã xóa'); setShowDeleteConfirm(false); } };
 
-  // Handler to switch to editing an existing product found via duplicate check
   const handleSwitchToEdit = (existingProduct: Product) => {
       setEditingProduct(existingProduct);
-      setEditMode('SET'); // Switch to SET mode so user can see/edit details
-      // No need to set showProductModal true because it's already open, but editingProduct change will trigger effect
+      setEditMode('SET');
+  };
+
+  // Selection Logic
+  const toggleSelectionMode = () => {
+      setIsSelectionMode(!isSelectionMode);
+      setSelectedProductIds(new Set());
+  };
+
+  const toggleProductSelect = (id: string) => {
+      setSelectedProductIds(prev => {
+          const next = new Set(prev);
+          if (next.has(id)) next.delete(id);
+          else next.add(id);
+          return next;
+      });
+  };
+
+  const handleCreatePost = () => {
+      if (selectedProductIds.size === 0) return;
+      setShowSocialModal(true);
   };
 
   return (
     <div className="max-w-7xl mx-auto pb-24 animate-fade-in relative">
       <div className="sticky top-0 z-30 bg-white/95 backdrop-blur-md shadow-sm border-b border-gray-200 p-3">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <h2 className="text-2xl font-black tracking-tighter text-gray-800 uppercase shrink-0">Kho Hàng <span className="text-eco-600">Vivid</span></h2>
+              <div className="flex items-center gap-3">
+                  <h2 className="text-2xl font-black tracking-tighter text-gray-800 uppercase shrink-0">Kho Hàng <span className="text-eco-600">Vivid</span></h2>
+                  <button 
+                      onClick={toggleSelectionMode} 
+                      className={`text-[10px] font-black uppercase px-3 py-1.5 rounded-lg border-2 transition-all ${isSelectionMode ? 'bg-orange-50 border-orange-200 text-orange-600' : 'bg-gray-100 border-gray-200 text-gray-500'}`}
+                  >
+                      {isSelectionMode ? 'Hủy chọn' : '📢 Soạn bài đăng'}
+                  </button>
+              </div>
               <div className="flex items-center gap-3">
                   <div className="relative flex-grow md:w-64">
                       <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Tìm tên hàng..." className="w-full pl-8 pr-3 py-2.5 bg-white border-2 border-gray-800 rounded-xl text-xs font-black outline-none text-gray-800" />
@@ -634,8 +666,25 @@ const InventoryManager: React.FC = () => {
               {filteredProducts.map(p => {
                   const current = p.stockQuantity || 0; const isLow = current < 5;
                   const hasTiers = p.priceTiers && p.priceTiers.length > 0;
+                  const isSelected = selectedProductIds.has(p.id);
+
                   return (
-                      <div key={p.id} onClick={() => setViewingProduct(p)} className="bg-white rounded-3xl border-2 border-gray-100 shadow-sm hover:border-gray-800 hover:shadow-xl hover:-translate-y-1 cursor-pointer transition-all duration-300 overflow-hidden flex flex-col group relative">
+                      <div 
+                        key={p.id} 
+                        onClick={() => {
+                            if (isSelectionMode) toggleProductSelect(p.id);
+                            else setViewingProduct(p);
+                        }} 
+                        className={`bg-white rounded-3xl border-2 shadow-sm cursor-pointer transition-all duration-300 overflow-hidden flex flex-col group relative ${
+                            isSelected ? 'border-orange-500 ring-2 ring-orange-200' : 'border-gray-100 hover:border-gray-800 hover:shadow-xl hover:-translate-y-1'
+                        }`}
+                      >
+                          {isSelectionMode && (
+                              <div className={`absolute top-2 right-2 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all z-10 ${isSelected ? 'bg-orange-500 border-orange-500 text-white' : 'bg-white border-gray-300'}`}>
+                                  <i className="fas fa-check text-[10px]"></i>
+                              </div>
+                          )}
+
                           <div className="p-4 flex-grow">
                               <h3 className="text-xs font-black text-gray-800 uppercase leading-snug line-clamp-2 h-8 group-hover:text-blue-600 transition-colors" title={p.name}>{p.name}</h3>
                               <div className="mt-4 flex justify-between items-end">
@@ -657,6 +706,20 @@ const InventoryManager: React.FC = () => {
           </div>
       </div>
 
+      {/* Floating Action Bar for Selection */}
+      {isSelectionMode && selectedProductIds.size > 0 && (
+          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 w-[95%] max-w-lg bg-gray-900 text-white p-2 rounded-2xl shadow-2xl z-50 flex items-center justify-between animate-slide-up border border-gray-700">
+              <div className="flex items-center gap-3 pl-2 pr-4 border-r border-gray-700 shrink-0">
+                  <span className="font-black text-xl text-orange-500 leading-none">{selectedProductIds.size}</span>
+                  <button onClick={() => { setIsSelectionMode(false); setSelectedProductIds(new Set()); }} className="w-8 h-8 rounded-full bg-gray-800 text-gray-400 hover:text-white flex items-center justify-center transition-colors"><i className="fas fa-times"></i></button>
+              </div>
+              
+              <button onClick={handleCreatePost} className="flex-grow h-10 rounded-xl bg-gradient-to-r from-blue-600 to-purple-600 text-white font-bold text-xs uppercase hover:shadow-lg flex items-center justify-center gap-2 shadow-md active:scale-95 transition-all">
+                  <i className="fas fa-magic"></i> Tạo bài đăng AI
+              </button>
+          </div>
+      )}
+
       {viewingProduct && <ProductDetailModal isOpen={!!viewingProduct} onClose={() => setViewingProduct(null)} product={viewingProduct} onImport={() => { setEditingProduct(viewingProduct); setEditMode('IMPORT'); setViewingProduct(null); setShowProductModal(true); }} onAdjust={() => { setEditingProduct(viewingProduct); setEditMode('SET'); setViewingProduct(null); setShowProductModal(true); }} onDelete={() => { setDeleteId(viewingProduct.id); setShowDeleteConfirm(true); setViewingProduct(null); }} />}
       
       <ProductEditModal 
@@ -669,6 +732,12 @@ const InventoryManager: React.FC = () => {
         onSwitchToProduct={handleSwitchToEdit}
       />
       
+      <SocialPostModal 
+        isOpen={showSocialModal}
+        onClose={() => setShowSocialModal(false)}
+        selectedProducts={products.filter(p => selectedProductIds.has(p.id))}
+      />
+
       <ConfirmModal isOpen={showDeleteConfirm} title="Xóa mặt hàng?" message="Sản phẩm sẽ bị xóa vĩnh viễn khỏi kho." onConfirm={confirmDelete} onCancel={() => setShowDeleteConfirm(false)} confirmLabel="Xóa" isDanger={true} />
       <ConfirmModal 
           isOpen={showSyncConfirm} 
