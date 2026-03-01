@@ -3,7 +3,8 @@ import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 
 export default defineConfig(({ mode }) => {
-  // Nạp tất cả các biến từ file .env mà không phụ thuộc vào tiền tố VITE_
+  // Load env file based on `mode` in the current working directory.
+  // Set the third parameter to '' to load all env regardless of the `VITE_` prefix.
   const env = loadEnv(mode, process.cwd(), '');
   
   return {
@@ -14,9 +15,9 @@ export default defineConfig(({ mode }) => {
       host: true
     },
     define: {
-      // Thay thế chính xác process.env.API_KEY bằng giá trị từ file .env
-      'process.env.API_KEY': JSON.stringify(env.API_KEY),
-      '__APP_VERSION__': JSON.stringify("1.2.2")
+      // Ép kiểu để process.env.API_KEY luôn có giá trị khi chạy thực tế
+      'process.env.API_KEY': JSON.stringify(env.API_KEY || ""),
+      '__APP_VERSION__': JSON.stringify("1.2.3")
     }
   };
 });

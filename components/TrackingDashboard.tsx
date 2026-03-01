@@ -491,7 +491,14 @@ const TrackingDashboard: React.FC = () => {
   const toggleSelectOrder = useCallback((id: string) => { setSelectedOrderIds(prev => { const newSet = new Set(prev); if (newSet.has(id)) { newSet.delete(id); } else { newSet.add(id); } if (newSet.size > 0 && !isSelectionMode) { setIsSelectionMode(true); } else if (newSet.size === 0) { setIsSelectionMode(false); } return newSet; }); }, [isSelectionMode]);
   const clearSelection = () => { setIsSelectionMode(false); setSelectedOrderIds(new Set()); };
   
-  const executeBulkDelete = async () => { if (selectedOrderIds.size === 0) return; const ids = Array.from(selectedOrderIds) as string[]; const restorationMap = new Map<string, number>(); ids.forEach(id => { const order = orders.find(o => o.id === id); if (order) { order.items.forEach(item => { if (item.productId) { const current = restorationMap.get(item.productId) || 0; restorationMap.set(item.productId, current + (Number(item.quantity) || 0)); } }); } }); for (const [prodId, qty] of restorationMap.entries()) { const product = products.find(p => p.id === prodId); if (product) { const currentStock = Number(product.stockQuantity) || 0; await storageService.saveProduct({ ...product, stockQuantity: currentStock + qty }); } } await storageService.deleteOrdersBatch(ids); toast.success(`Đã xóa ${ids.length} đơn hàng & Hoàn kho`); clearSelection(); setShowBulkDeleteConfirm(false); };
+  const executeBulkDelete = async () => { 
+      if (selectedOrderIds.size === 0) return; 
+      const ids = Array.from(selectedOrderIds) as string[]; 
+      await storageService.deleteOrdersBatch(ids); 
+      toast.success(`Đã xóa ${ids.length} đơn hàng & Hoàn kho`); 
+      clearSelection(); 
+      setShowBulkDeleteConfirm(false); 
+  };
   const executeBulkSplit = async () => { if (selectedOrderIds.size === 0) return; const ordersToSplit = orders.filter(o => selectedOrderIds.has(o.id)); await storageService.splitOrdersBatch(ordersToSplit.map(o => ({ id: o.id, batchId: o.batchId }))); toast.success(`Đã chuyển ${selectedOrderIds.size} đơn sang lô sau`); clearSelection(); };
   const executeBulkPrint = () => { if (selectedOrderIds.size === 0) return; const toPrint = orders.filter(o => selectedOrderIds.has(o.id)); setOrdersToPrint(toPrint); setShowPrintTypeModal(true); };
   const executeBulkStatusUpdate = async (status: OrderStatus) => { if (selectedOrderIds.size === 0) return; const ids = Array.from(selectedOrderIds) as string[]; const promises = ids.map(id => storageService.updateStatus(id, status)); await Promise.all(promises); toast.success(`Đã cập nhật ${ids.length} đơn sang ${statusLabels[status]}`); setShowBulkStatusModal(false); clearSelection(); };
@@ -524,7 +531,19 @@ const TrackingDashboard: React.FC = () => {
 
   const handleRenameBatch = async () => { if (filterBatch.length !== 1) return; const oldName = String(filterBatch[0]); const newName = prompt(`Nhập tên mới cho lô: ${oldName}`, oldName); if (newName && newName !== oldName) { await storageService.renameBatch(oldName, newName); toast.success(`Đã đổi tên lô thành: ${newName}`); setFilterBatch([newName]); } };
 
-  const confirmDelete = async () => { if (deleteId) { const id = deleteId as string; const orderToDelete = orders.find(o => o.id === id); if (orderToDelete) { for (const item of orderToDelete.items) { if (item.productId) { const product = products.find(p => p.id === item.productId); if (product) { const currentStock = Number(product.stockQuantity) || 0; const restoreQty = Number(item.quantity) || 0; await storageService.saveProduct({ ...product, stockQuantity: currentStock + restoreQty }); } } } await storageService.deleteOrder(id, { name: orderToDelete.customerName, address: orderToDelete.address }); } toast.success('Đã xóa đơn & Hoàn kho'); setShowDeleteConfirm(false); setDeleteId(null); if(detailOrder?.id === id) setDetailOrder(null); } };
+  const confirmDelete = async () => { 
+      if (deleteId) { 
+          const id = deleteId as string; 
+          const orderToDelete = orders.find(o => o.id === id); 
+          if (orderToDelete) { 
+              await storageService.deleteOrder(id, { name: orderToDelete.customerName, address: orderToDelete.address }); 
+          } 
+          toast.success('Đã xóa đơn & Hoàn kho'); 
+          setShowDeleteConfirm(false); 
+          setDeleteId(null); 
+          if(detailOrder?.id === id) setDetailOrder(null); 
+      } 
+  };
   
   const saveEdit = async (e: React.FormEvent) => { e.preventDefault(); if (editingOrder) { await storageService.updateOrderDetails(editingOrder); setEditingOrder(null); toast.success('Đã lưu thay đổi'); } };
   

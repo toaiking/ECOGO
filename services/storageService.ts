@@ -554,10 +554,64 @@ export const storageService = {
     };
   },
 
+  // Helper to adjust stock based on order items
+  _adjustStockForItems: async (items: Order['items'], multiplier: number, orderId: string) => {
+    const now = Date.now();
+    const prods = ensureProductsLoaded();
+    
+    // Local update
+    items.forEach(item => {
+        if (item.productId) {
+            const p = prods.find(x => x.id === item.productId);
+            if (p) {
+                const oldStock = p.stockQuantity || 0;
+                const change = item.quantity * multiplier;
+                p.stockQuantity = oldStock + change;
+                p.updatedAt = now;
+
+                // Notifications for low stock (only when subtracting)
+                if (multiplier < 0 && p.stockQuantity < 5 && oldStock >= 5) {
+                    storageService.addNotification({
+                        title: 'Kho sắp cạn!',
+                        message: `Hàng "${p.name}" chỉ còn ${p.stockQuantity} món sau đơn #${orderId}.`,
+                        type: 'warning'
+                    });
+                }
+            }
+        }
+    });
+    localStorage.setItem(PRODUCT_KEY, JSON.stringify(prods));
+    window.dispatchEvent(new Event('storage_' + PRODUCT_KEY));
+
+    // Cloud update
+    await safeCloudOp(() => runTransaction(db, async (tx) => {
+        for (const item of items) {
+            if (item.productId) {
+                const ref = doc(db, "products", item.productId);
+                tx.update(ref, { 
+                    stockQuantity: increment(item.quantity * multiplier), 
+                    updatedAt: now 
+                });
+            }
+        }
+    }));
+  },
+
   saveOrder: async (order: Order) => {
     const now = Date.now();
     const oSave = { ...order, updatedAt: now };
     const list = ensureOrdersLoaded();
+    
+    // Check if it's an update or new
+    const existingIdx = list.findIndex(o => o.id === order.id);
+    if (existingIdx >= 0) {
+        // It's an update - handle stock diff
+        const oldOrder = list[existingIdx];
+        await storageService.updateOrderDetails(order);
+        return;
+    }
+
+    // New Order
     list.unshift(oSave);
     _memoryOrders = list;
     localStorage.setItem(ORDER_KEY, JSON.stringify(list));
@@ -574,53 +628,52 @@ export const storageService = {
     // Learn from customer info automatically
     storageService.learnCustomerInfo(order);
 
-    const prods = ensureProductsLoaded();
-    order.items.forEach(item => {
-        if (item.productId) {
-            const p = prods.find(x => x.id === item.productId);
-            if (p) { 
-                const oldStock = p.stockQuantity;
-                p.stockQuantity -= item.quantity; 
-                p.updatedAt = now; 
-                
-                // Cảnh báo hết hàng ngay khi trừ kho
-                if (p.stockQuantity < 5 && oldStock >= 5) {
-                    storageService.addNotification({
-                        title: 'Kho sắp cạn!',
-                        message: `Hàng "${p.name}" chỉ còn ${p.stockQuantity} món sau đơn #${order.id}.`,
-                        type: 'warning'
-                    });
-                }
-            }
-        }
-    });
-    localStorage.setItem(PRODUCT_KEY, JSON.stringify(prods));
-    window.dispatchEvent(new Event('storage_' + PRODUCT_KEY)); // Fix: Notify inventory change immediately
+    // Deduct stock
+    await storageService._adjustStockForItems(order.items, -1, order.id);
 
-    await safeCloudOp(() => runTransaction(db, async (tx) => {
-        for (const item of order.items) {
-            if (item.productId) {
-                const ref = doc(db, "products", item.productId);
-                tx.update(ref, { stockQuantity: increment(-item.quantity), updatedAt: now });
-            }
-        }
-        tx.set(doc(db, "orders", oSave.id), sanitize(oSave));
-    }));
+    // Cloud save order (stock is already handled by _adjustStockForItems transaction if we were perfect, 
+    // but _adjustStockForItems opens its own transaction. To be truly atomic, we should merge them.)
+    // For now, we'll just ensure the order is saved.
+    await safeCloudOp(() => setDoc(doc(db, "orders", oSave.id), sanitize(oSave)));
   },
 
   updateOrderDetails: async (order: Order) => {
       const list = ensureOrdersLoaded();
       const idx = list.findIndex(o => o.id === order.id);
       if (idx >= 0) {
-          list[idx] = { ...order, updatedAt: Date.now() };
+          const oldOrder = list[idx];
+          const now = Date.now();
+          
+          // Calculate stock difference
+          // Logic: Return old items to stock, then subtract new items
+          // This is the simplest way to handle additions, removals, and quantity changes.
+          
+          // 1. Return old items (if order wasn't already cancelled)
+          if (oldOrder.status !== OrderStatus.CANCELLED) {
+              await storageService._adjustStockForItems(oldOrder.items, 1, order.id);
+          }
+          
+          // 2. Subtract new items (if new status isn't cancelled)
+          if (order.status !== OrderStatus.CANCELLED) {
+              await storageService._adjustStockForItems(order.items, -1, order.id);
+          }
+
+          // Update local memory and storage
+          list[idx] = { ...order, updatedAt: now };
           _memoryOrders = list;
           localStorage.setItem(ORDER_KEY, JSON.stringify(list));
           window.dispatchEvent(new Event('storage_' + ORDER_KEY));
+          
+          // Update Cloud
           await safeCloudOp(() => setDoc(doc(db, "orders", order.id), sanitize(list[idx])));
       }
   },
 
   saveOrdersList: async (orders: Order[]) => {
+      // Note: This is used for batch updates like 'refreshOrdersFromInventory'
+      // It currently doesn't handle stock adjustments because it assumes 
+      // it's only updating metadata (names/prices) not quantities.
+      // If quantities change here, we'd need more complex logic.
       const list = ensureOrdersLoaded();
       orders.forEach(updatedOrder => {
           const idx = list.findIndex(o => o.id === updatedOrder.id);
@@ -631,7 +684,7 @@ export const storageService = {
       window.dispatchEvent(new Event('storage_' + ORDER_KEY));
       if (isOnline()) {
           const batch = writeBatch(db);
-          orders.forEach(o => batch.set(doc(db, "orders", o.id), sanitize(o))); // Use set to update all fields including items
+          orders.forEach(o => batch.set(doc(db, "orders", o.id), sanitize(o)));
           await batch.commit();
       }
   },
@@ -640,6 +693,18 @@ export const storageService = {
       const list = ensureOrdersLoaded();
       const idx = list.findIndex(o => o.id === id);
       if (idx >= 0) {
+          const oldOrder = list[idx];
+          const oldStatus = oldOrder.status;
+          
+          // Handle stock restoration on cancellation
+          if (status === OrderStatus.CANCELLED && oldStatus !== OrderStatus.CANCELLED) {
+              // Return stock
+              await storageService._adjustStockForItems(oldOrder.items, 1, id);
+          } else if (status !== OrderStatus.CANCELLED && oldStatus === OrderStatus.CANCELLED) {
+              // Re-deduct stock if moving out of cancelled
+              await storageService._adjustStockForItems(oldOrder.items, -1, id);
+          }
+
           list[idx] = { ...list[idx], status, updatedAt: Date.now(), deliveryProof: proof || list[idx].deliveryProof };
           _memoryOrders = list;
           localStorage.setItem(ORDER_KEY, JSON.stringify(list));
@@ -649,17 +714,37 @@ export const storageService = {
   },
 
   deleteOrder: async (id: string, cust?: any) => {
-      const list = ensureOrdersLoaded().filter(o => o.id !== id);
-      _memoryOrders = list;
-      localStorage.setItem(ORDER_KEY, JSON.stringify(list));
-      window.dispatchEvent(new Event('storage_' + ORDER_KEY));
-      await safeCloudOp(() => deleteDoc(doc(db, "orders", id)));
+      const list = ensureOrdersLoaded();
+      const order = list.find(o => o.id === id);
+      
+      if (order) {
+          // Restore stock if it wasn't already cancelled
+          if (order.status !== OrderStatus.CANCELLED) {
+              await storageService._adjustStockForItems(order.items, 1, id);
+          }
+          
+          const newList = list.filter(o => o.id !== id);
+          _memoryOrders = newList;
+          localStorage.setItem(ORDER_KEY, JSON.stringify(newList));
+          window.dispatchEvent(new Event('storage_' + ORDER_KEY));
+          await safeCloudOp(() => deleteDoc(doc(db, "orders", id)));
+      }
   },
 
   deleteOrdersBatch: async (ids: string[]) => {
-      const list = ensureOrdersLoaded().filter(o => !ids.includes(o.id));
-      _memoryOrders = list;
-      localStorage.setItem(ORDER_KEY, JSON.stringify(list));
+      const list = ensureOrdersLoaded();
+      const ordersToDelete = list.filter(o => ids.includes(o.id));
+      
+      // Restore stock for all non-cancelled orders
+      for (const order of ordersToDelete) {
+          if (order.status !== OrderStatus.CANCELLED) {
+              await storageService._adjustStockForItems(order.items, 1, order.id);
+          }
+      }
+
+      const newList = list.filter(o => !ids.includes(o.id));
+      _memoryOrders = newList;
+      localStorage.setItem(ORDER_KEY, JSON.stringify(newList));
       window.dispatchEvent(new Event('storage_' + ORDER_KEY));
       if (isOnline()) {
           const batch = writeBatch(db);

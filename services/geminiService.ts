@@ -10,11 +10,20 @@ const cleanJson = (text: string): string => {
     return text.trim().replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/, '');
 };
 
+/**
+ * HÀM KHỞI TẠO AI AN TOÀN
+ */
+const getAI = () => {
+    const key = process.env.API_KEY;
+    if (!key) {
+        throw new Error("API_KEY_MISSING");
+    }
+    return new GoogleGenAI({ apiKey: key });
+};
+
 export const generateSocialPost = async (products: Product[], location: string, time: string, style: PostStyle = 'DEFAULT'): Promise<string> => {
     try {
-        // Khởi tạo instance ngay trước khi sử dụng
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
-        
+        const ai = getAI();
         const productList = products.map(p => {
             let info = `- ${p.name}: ${new Intl.NumberFormat('vi-VN').format(p.defaultPrice)} VND`;
             if (p.priceTiers && p.priceTiers.length > 0) {
@@ -43,16 +52,18 @@ export const generateSocialPost = async (products: Product[], location: string, 
 
         return response.text || "AI chưa thể soạn bài.";
     } catch (e: any) {
-        console.error("AI Post Error:", e);
-        return "⚠️ Lỗi: Không thể kết nối AI. Vui lòng kiểm tra API Key và RESTART lại App (Ctrl+C rồi npm run dev).";
+        console.error("AI Error:", e);
+        if (e.message === "API_KEY_MISSING") {
+            toast.error("Lỗi: Chưa cấu hình API_KEY trên Vercel!");
+        }
+        return "⚠️ Lỗi: Không thể kết nối AI. Vui lòng cấu hình API_KEY trong phần Settings của Vercel.";
     }
 };
 
 export const parseOrderText = async (text: string, products: Product[], customers: Customer[]): Promise<SmartParseResult> => {
     try {
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+        const ai = getAI();
         const productNames = products.map(p => p.name).join(", ");
-        
         const response = await ai.models.generateContent({
             model: "gemini-3-pro-preview",
             contents: `Phân tích đơn hàng: "${text}". Danh mục: ${productNames}. Trả về JSON thông tin khách và hàng hóa.`,
@@ -80,7 +91,6 @@ export const parseOrderText = async (text: string, products: Product[], customer
                 }
             }
         });
-
         const json = JSON.parse(cleanJson(response.text || "{}"));
         return {
             customerName: json.customerName || "",
@@ -97,7 +107,7 @@ export const parseOrderText = async (text: string, products: Product[], customer
 
 export const generateDeliveryMessage = async (order: Order): Promise<string> => {
     try {
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+        const ai = getAI();
         const response = await ai.models.generateContent({
             model: "gemini-3-flash-preview",
             contents: `Viết tin nhắn báo giao hàng cho khách ${order.customerName}, tổng thu ${order.totalPrice}đ.`,
@@ -110,7 +120,7 @@ export const generateDeliveryMessage = async (order: Order): Promise<string> => 
 
 export const verifyAddress = async (address: string): Promise<{ address: string }> => {
     try {
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+        const ai = getAI();
         const response = await ai.models.generateContent({
             model: "gemini-3-flash-preview",
             contents: `Chuẩn hóa địa chỉ: "${address}". Trả về JSON { "address": "..." }`,
@@ -128,7 +138,7 @@ export const verifyAddress = async (address: string): Promise<{ address: string 
 
 export const structureImportData = async (rawText: string): Promise<RawPDFImportData[]> => {
     try {
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+        const ai = getAI();
         const response = await ai.models.generateContent({
             model: "gemini-3-pro-preview",
             contents: `OCR đơn hàng từ: ${rawText.substring(0, 15000)}`,
@@ -142,7 +152,7 @@ export const structureImportData = async (rawText: string): Promise<RawPDFImport
 
 export const getInventoryInsight = async (products: Product[], recentOrders: Order[]): Promise<string> => {
     try {
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+        const ai = getAI();
         const lowStock = products.filter(p => p.stockQuantity < 5).map(p => p.name).join(', ');
         const response = await ai.models.generateContent({
             model: "gemini-3-flash-preview",
