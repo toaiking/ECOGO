@@ -77,8 +77,10 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({ isOpen, 
                         <div className="flex justify-between items-end mb-2">
                             <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Tồn kho hiện tại</span>
                             <div className="text-right">
-                                <span className={`text-4xl font-black tracking-tighter ${isLow ? 'text-red-600' : 'text-gray-800'}`}>{currentStock}</span>
-                                <span className="text-xs text-gray-400 font-bold uppercase ml-1">/ {calculatedTotalImported}</span>
+                                <span className={`text-4xl font-black tracking-tighter ${isLow ? 'text-red-600' : 'text-gray-800'}`}>
+                                    {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format(currentStock)}
+                                </span>
+                                <span className="text-xs text-gray-400 font-bold uppercase ml-1">/ {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format(calculatedTotalImported)}</span>
                             </div>
                         </div>
                         <div className="w-full bg-gray-100 rounded-full h-3 mb-4 overflow-hidden border border-gray-200">
@@ -107,7 +109,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({ isOpen, 
                     <div className="grid grid-cols-2 gap-4">
                          <div className="bg-orange-50 p-3 rounded-2xl border border-orange-200">
                              <div className="text-[9px] font-black text-orange-400 uppercase tracking-widest">Đã xuất bán</div>
-                             <div className="text-xl font-black text-orange-700 leading-none mt-1">{totalSold} <span className="text-[10px]">sp</span></div>
+                             <div className="text-xl font-black text-orange-700 leading-none mt-1">{new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format(totalSold)} <span className="text-[10px]">sp</span></div>
                          </div>
                          <div className="bg-green-50 p-3 rounded-2xl border border-green-200">
                              <div className="text-[9px] font-black text-green-400 uppercase tracking-widest">Lãi dự thu</div>
@@ -128,7 +130,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({ isOpen, 
                                         <tr key={idx} className="hover:bg-white transition-colors">
                                             <td className="p-2 font-bold text-gray-600">{new Date(h.date).toLocaleDateString('vi-VN')}</td>
                                             <td className="p-2 text-center font-black text-gray-800">{activeTab === 'EXPORT' ? h.batchId : new Intl.NumberFormat('vi-VN').format(h.price)}</td>
-                                            <td className={`p-2 text-right font-black ${activeTab === 'EXPORT' ? 'text-red-500' : 'text-green-600'}`}>{activeTab === 'EXPORT' ? '-' : '+'}{h.quantity}</td>
+                                            <td className={`p-2 text-right font-black ${activeTab === 'EXPORT' ? 'text-red-500' : 'text-green-600'}`}>{activeTab === 'EXPORT' ? '-' : '+'}{new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format(h.quantity)}</td>
                                         </tr>
                                     ))}
                                 </tbody>
@@ -151,7 +153,7 @@ interface ProductEditModalProps {
     isOpen: boolean;
     onClose: () => void;
     product: Product | null;
-    onSave: (data: Product, isImport?: boolean, qty?: number) => Promise<void>;
+    onSave: (data: Product, isImport?: boolean, qty?: number, importDate?: number) => Promise<void>;
     initialMode?: 'IMPORT' | 'SET';
     allProducts?: Product[]; // Optional: for duplicate checking
     onSwitchToProduct?: (p: Product) => void; // Optional: callback when duplicate found
@@ -161,6 +163,7 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({ isOpen, onCl
     const [editTab, setEditTab] = useState<'IMPORT' | 'SET'>(initialMode);
     const [importAmount, setImportAmount] = useState<string>('');
     const [importPriceInput, setImportPriceInput] = useState<string>('');
+    const [importDate, setImportDate] = useState<string>(new Date().toISOString().split('T')[0]);
     
     // State cơ bản
     const [formData, setFormData] = useState<Partial<Product>>({ name: '', defaultPrice: 0, importPrice: 0 });
@@ -180,6 +183,7 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({ isOpen, onCl
         if (isOpen) {
             setEditTab(initialMode); 
             setImportAmount('');
+            setImportDate(new Date().toISOString().split('T')[0]);
             setDetectedDuplicate(null);
             if (product) {
                 setFormData({ name: product.name, defaultPrice: product.defaultPrice, importPrice: product.importPrice });
@@ -236,7 +240,11 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({ isOpen, onCl
     }, [historyList]);
 
     const handleHistoryChange = (id: string, field: keyof ImportRecord, value: any) => {
-        setHistoryList(prev => prev.map(item => item.id === id ? { ...item, [field]: value } : item));
+        let finalValue = value;
+        if (field === 'quantity') {
+            finalValue = Math.round(Number(value) * 10000) / 10000;
+        }
+        setHistoryList(prev => prev.map(item => item.id === id ? { ...item, [field]: finalValue } : item));
     };
 
     const handleDeleteHistoryItem = (id: string) => {
@@ -291,13 +299,14 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({ isOpen, onCl
         if (editTab === 'IMPORT' && product) {
             const qty = Number(importAmount) || 0;
             const price = Number(importPriceInput) || 0;
+            const dateTs = new Date(importDate).getTime();
             if (qty > 0) { 
                 await onSave({ 
                     ...product, 
                     name: formData.name || product.name, 
                     defaultPrice: Number(formData.defaultPrice) || 0, 
                     importPrice: price 
-                }, true, qty); 
+                }, true, qty, dateTs); 
                 onClose(); 
                 return; 
             }
@@ -324,7 +333,7 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({ isOpen, onCl
     };
 
     if (!isOpen) return null;
-    const vInputClass = "w-full p-3 bg-white border-2 border-gray-800 rounded-2xl outline-none focus:ring-4 focus:ring-eco-50 font-black text-black text-sm transition-all";
+    const vInputClass = "w-full px-3 py-2.5 bg-white border-2 border-gray-800 rounded-2xl outline-none focus:ring-4 focus:ring-eco-50 font-black text-black text-sm transition-all";
 
     return (
         <div className="fixed inset-0 z-[110] bg-gray-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
@@ -442,15 +451,21 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({ isOpen, onCl
                             <div className="space-y-3">
                                 <div>
                                     <label className="text-[10px] font-black text-blue-600 uppercase mb-1 block">Số lượng nhập về (+)</label>
-                                    <input type="number" value={importAmount} onChange={e => setImportAmount(e.target.value)} className={`${vInputClass} text-center text-xl`} placeholder="0" />
+                                    <input type="number" step="any" value={importAmount} onChange={e => setImportAmount(e.target.value)} className={`${vInputClass} text-center text-lg px-1`} placeholder="0" />
                                 </div>
-                                <div>
-                                    <label className="text-[10px] font-black text-gray-400 uppercase mb-1 block">Giá nhập đợt này</label>
-                                    <input type="number" value={importPriceInput} onChange={e => setImportPriceInput(e.target.value)} className={`${vInputClass} text-center`} />
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="text-[10px] font-black text-gray-400 uppercase mb-1 block">Giá nhập đợt này</label>
+                                        <input type="number" value={importPriceInput} onChange={e => setImportPriceInput(e.target.value)} className={`${vInputClass} text-center px-1`} />
+                                    </div>
+                                    <div>
+                                        <label className="text-[10px] font-black text-gray-400 uppercase mb-1 block">Ngày nhập</label>
+                                        <input type="date" value={importDate} onChange={e => setImportDate(e.target.value)} className={`${vInputClass} text-center px-1 text-[11px]`} />
+                                    </div>
                                 </div>
                                 <div className="mt-2 flex justify-between text-[10px] font-bold text-blue-400 px-2">
-                                    <span>Tồn hiện tại: {product.stockQuantity}</span>
-                                    <span>Sau khi nhập: {(product.stockQuantity || 0) + (Number(importAmount) || 0)}</span>
+                                    <span>Tồn hiện tại: {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format(product.stockQuantity || 0)}</span>
+                                    <span>Sau khi nhập: {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format((product.stockQuantity || 0) + (Number(importAmount) || 0))}</span>
                                 </div>
                             </div>
                         ) : (
@@ -464,7 +479,7 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({ isOpen, onCl
                                 
                                 {/* IMPROVED HISTORY TABLE */}
                                 <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-                                    <div className="grid grid-cols-[80px_1fr_80px_30px] bg-gray-100 p-2 text-[9px] font-bold text-gray-500 uppercase border-b border-gray-200">
+                                    <div className="grid grid-cols-[82px_52px_1fr_24px] bg-gray-100 p-2 text-[9px] font-bold text-gray-500 uppercase border-b border-gray-200">
                                         <div className="text-center">Ngày</div>
                                         <div className="text-center">Số lượng</div>
                                         <div className="text-right pr-2">Giá Vốn</div>
@@ -472,16 +487,22 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({ isOpen, onCl
                                     </div>
                                     <div className="max-h-48 overflow-y-auto divide-y divide-gray-100">
                                         {historyList.map((item, idx) => (
-                                            <div key={item.id} className="grid grid-cols-[80px_1fr_80px_30px] p-2 items-center gap-2">
-                                                <div className="text-[9px] font-bold text-gray-400 text-center">
-                                                    {new Date(item.date).toLocaleDateString('vi-VN')}
+                                            <div key={item.id} className="grid grid-cols-[82px_52px_1fr_24px] p-2 items-center gap-1">
+                                                <div>
+                                                    <input 
+                                                        type="date" 
+                                                        value={new Date(item.date).toISOString().split('T')[0]} 
+                                                        onChange={e => handleHistoryChange(item.id, 'date', new Date(e.target.value).getTime())}
+                                                        className="w-full p-1 bg-gray-50 border border-gray-200 rounded text-[9px] font-bold text-gray-600 outline-none focus:border-orange-400 px-0.5 min-w-0"
+                                                    />
                                                 </div>
                                                 <div>
                                                     <input 
                                                         type="number" 
+                                                        step="any"
                                                         value={item.quantity} 
                                                         onChange={e => handleHistoryChange(item.id, 'quantity', Number(e.target.value))}
-                                                        className="w-full p-1 bg-gray-50 border border-gray-200 rounded text-center text-xs font-black text-gray-800 outline-none focus:border-orange-400 focus:bg-white transition-all"
+                                                        className="w-full p-1 bg-gray-50 border border-gray-200 rounded text-center text-xs font-black text-gray-800 outline-none focus:border-orange-400 focus:bg-white transition-all px-0.5 min-w-0"
                                                         placeholder="SL"
                                                     />
                                                 </div>
@@ -490,7 +511,7 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({ isOpen, onCl
                                                         type="number" 
                                                         value={item.price} 
                                                         onChange={e => handleHistoryChange(item.id, 'price', Number(e.target.value))}
-                                                        className="w-full p-1 bg-gray-50 border border-gray-200 rounded text-right text-xs font-medium text-gray-600 outline-none focus:border-orange-400 focus:bg-white transition-all"
+                                                        className="w-full p-1 bg-gray-50 border border-gray-200 rounded text-right text-xs font-medium text-gray-600 outline-none focus:border-orange-400 focus:bg-white transition-all px-0.5 min-w-0"
                                                         placeholder="Giá"
                                                     />
                                                 </div>
@@ -508,16 +529,16 @@ export const ProductEditModal: React.FC<ProductEditModalProps> = ({ isOpen, onCl
                                 <div className="bg-white/60 p-3 rounded-xl border border-orange-100 space-y-1">
                                     <div className="flex justify-between items-center font-bold text-xs text-gray-500">
                                         <span>Tổng nhập (tự cộng):</span>
-                                        <span className="text-black">{calculatedTotalImported}</span>
+                                        <span className="text-black">{new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format(calculatedTotalImported)}</span>
                                     </div>
                                     <div className="flex justify-between items-center font-bold text-xs text-gray-500">
                                         <span>Đã bán (theo đơn):</span>
-                                        <span>-{realSold}</span>
+                                        <span>-{new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format(realSold)}</span>
                                     </div>
                                     <div className="border-t border-dashed border-orange-200 my-1"></div>
                                     <div className="flex justify-between items-center font-black text-xs text-orange-800">
                                         <span>Tồn kho thực tế:</span>
-                                        <span className="text-lg">{calculatedTotalImported - realSold}</span>
+                                        <span className="text-lg">{new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format(calculatedTotalImported - realSold)}</span>
                                     </div>
                                 </div>
                             </div>
@@ -544,6 +565,7 @@ const InventoryManager: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [filteredProducts, setFilteredProducts] = useState<Product[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [viewMode, setViewMode] = useState<'GRID' | 'TIMELINE'>('GRID');
   const [showProductModal, setShowProductModal] = useState(false);
   const [viewingProduct, setViewingProduct] = useState<Product | null>(null); 
   const [editingProduct, setEditingProduct] = useState<Product | null>(null); 
@@ -577,9 +599,23 @@ const InventoryManager: React.FC = () => {
       return { capital, profit, low, total: products.length };
   }, [products]);
 
-  const handleSaveProduct = async (data: Product, isImport: boolean = false, qty: number = 0) => {
+  const timelineGroups = useMemo(() => {
+      const groups = new Map<string, Product[]>();
+      filteredProducts.forEach(p => {
+          const dateStr = p.lastImportDate ? new Date(p.lastImportDate).toISOString().split('T')[0] : 'Chưa có ngày nhập';
+          if (!groups.has(dateStr)) groups.set(dateStr, []);
+          groups.get(dateStr)!.push(p);
+      });
+      return Array.from(groups.entries()).sort((a, b) => {
+          if (a[0] === 'Chưa có ngày nhập') return 1;
+          if (b[0] === 'Chưa có ngày nhập') return -1;
+          return b[0].localeCompare(a[0]);
+      });
+  }, [filteredProducts]);
+
+  const handleSaveProduct = async (data: Product, isImport: boolean = false, qty: number = 0, importDate?: number) => {
       if (isImport && editingProduct) {
-          await storageService.adjustStockAtomic(editingProduct.id, qty, { price: data.importPrice || 0, note: 'Nhập hàng' });
+          await storageService.adjustStockAtomic(editingProduct.id, qty, { price: data.importPrice || 0, note: 'Nhập hàng', date: importDate });
           if (data.name !== editingProduct.name || data.defaultPrice !== editingProduct.defaultPrice) { await storageService.saveProduct({ ...editingProduct, name: data.name, defaultPrice: data.defaultPrice, importPrice: data.importPrice }); }
           toast.success("Đã nhập hàng");
       } else {
@@ -651,6 +687,10 @@ const InventoryManager: React.FC = () => {
                       <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Tìm tên hàng..." className="w-full pl-8 pr-3 py-2.5 bg-white border-2 border-gray-800 rounded-xl text-xs font-black outline-none text-gray-800" />
                       <i className="fas fa-search absolute left-3 top-3.5 text-gray-400 text-xs"></i>
                   </div>
+                  <div className="flex bg-gray-100 p-1 rounded-xl border border-gray-200">
+                      <button onClick={() => setViewMode('GRID')} className={`p-2 rounded-lg transition-all ${viewMode === 'GRID' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-400'}`} title="Dạng lưới"><i className="fas fa-th-large"></i></button>
+                      <button onClick={() => setViewMode('TIMELINE')} className={`p-2 rounded-lg transition-all ${viewMode === 'TIMELINE' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-400'}`} title="Dạng dòng thời gian"><i className="fas fa-history"></i></button>
+                  </div>
                   <button onClick={() => { setEditingProduct(null); setEditMode('SET'); setShowProductModal(true); }} className="bg-black text-white px-5 py-3 rounded-2xl font-black text-xs shadow-xl hover:bg-gray-800 transition-all active:scale-95 uppercase tracking-widest shrink-0">+ Tạo mặt hàng</button>
               </div>
           </div>
@@ -662,48 +702,96 @@ const InventoryManager: React.FC = () => {
       </div>
 
       <div className="px-3 sm:px-4 py-6">
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-              {filteredProducts.map(p => {
-                  const current = p.stockQuantity || 0; const isLow = current < 5;
-                  const hasTiers = p.priceTiers && p.priceTiers.length > 0;
-                  const isSelected = selectedProductIds.has(p.id);
+          {viewMode === 'GRID' ? (
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+                  {filteredProducts.map(p => {
+                      const current = p.stockQuantity || 0; const isLow = current < 5;
+                      const hasTiers = p.priceTiers && p.priceTiers.length > 0;
+                      const isSelected = selectedProductIds.has(p.id);
 
-                  return (
-                      <div 
-                        key={p.id} 
-                        onClick={() => {
-                            if (isSelectionMode) toggleProductSelect(p.id);
-                            else setViewingProduct(p);
-                        }} 
-                        className={`bg-white rounded-3xl border-2 shadow-sm cursor-pointer transition-all duration-300 overflow-hidden flex flex-col group relative ${
-                            isSelected ? 'border-orange-500 ring-2 ring-orange-200' : 'border-gray-100 hover:border-gray-800 hover:shadow-xl hover:-translate-y-1'
-                        }`}
-                      >
-                          {isSelectionMode && (
-                              <div className={`absolute top-2 right-2 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all z-10 ${isSelected ? 'bg-orange-500 border-orange-500 text-white' : 'bg-white border-gray-300'}`}>
-                                  <i className="fas fa-check text-[10px]"></i>
-                              </div>
-                          )}
+                      return (
+                          <div 
+                            key={p.id} 
+                            onClick={() => {
+                                if (isSelectionMode) toggleProductSelect(p.id);
+                                else setViewingProduct(p);
+                            }} 
+                            className={`bg-white rounded-3xl border-2 shadow-sm cursor-pointer transition-all duration-300 overflow-hidden flex flex-col group relative ${
+                                isSelected ? 'border-orange-500 ring-2 ring-orange-200' : 'border-gray-100 hover:border-gray-800 hover:shadow-xl hover:-translate-y-1'
+                            }`}
+                          >
+                              {isSelectionMode && (
+                                  <div className={`absolute top-2 right-2 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all z-10 ${isSelected ? 'bg-orange-500 border-orange-500 text-white' : 'bg-white border-gray-300'}`}>
+                                      <i className="fas fa-check text-[10px]"></i>
+                                  </div>
+                              )}
 
-                          <div className="p-4 flex-grow">
-                              <h3 className="text-xs font-black text-gray-800 uppercase leading-snug line-clamp-2 h-8 group-hover:text-blue-600 transition-colors" title={p.name}>{p.name}</h3>
-                              <div className="mt-4 flex justify-between items-end">
-                                  <span className={`text-4xl font-black tracking-tighter ${isLow ? 'text-red-600' : 'text-gray-900'}`}>{current}</span>
-                                  <div className="text-right">
-                                      {hasTiers && <span className="text-[8px] font-black text-purple-600 block leading-none mb-1">🏷️ Giá sỉ</span>}
-                                      <span className="text-[8px] font-black text-gray-400 uppercase block leading-none mb-1">Giá Bán</span>
-                                      <span className="text-sm font-black text-blue-600 leading-none">{new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}đ</span>
+                              <div className="p-4 flex-grow">
+                                  <h3 className="text-xs font-black text-gray-800 uppercase leading-snug line-clamp-2 h-8 group-hover:text-blue-600 transition-colors" title={p.name}>{p.name}</h3>
+                                  <div className="mt-4 flex justify-between items-end">
+                                      <span className={`text-4xl font-black tracking-tighter ${isLow ? 'text-red-600' : 'text-gray-900'}`}>
+                                          {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format(current)}
+                                      </span>
+                                      <div className="text-right">
+                                          {hasTiers && <span className="text-[8px] font-black text-purple-600 block leading-none mb-1">🏷️ Giá sỉ</span>}
+                                          <span className="text-[8px] font-black text-gray-400 uppercase block leading-none mb-1">Giá Bán</span>
+                                          <span className="text-sm font-black text-blue-600 leading-none">{new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}đ</span>
+                                      </div>
                                   </div>
                               </div>
+                              <div className="bg-gray-50 border-t-2 border-gray-100 px-4 py-3 flex justify-between items-center group-hover:bg-gray-100 transition-colors">
+                                  <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Chi tiết <i className="fas fa-arrow-right ml-1"></i></span>
+                                  <div className={`w-2 h-2 rounded-full ${isLow ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`}></div>
+                              </div>
                           </div>
-                          <div className="bg-gray-50 border-t-2 border-gray-100 px-4 py-3 flex justify-between items-center group-hover:bg-gray-100 transition-colors">
-                              <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Chi tiết <i className="fas fa-arrow-right ml-1"></i></span>
-                              <div className={`w-2 h-2 rounded-full ${isLow ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`}></div>
+                      );
+                  })}
+              </div>
+          ) : (
+              <div className="space-y-8">
+                  {timelineGroups.map(([date, items]) => (
+                      <div key={date} className="relative">
+                          <div className="flex items-center gap-4 mb-4">
+                              <div className="bg-blue-600 text-white px-4 py-1.5 rounded-full text-xs font-black uppercase tracking-widest shadow-lg">
+                                  {date === 'Chưa có ngày nhập' ? date : new Date(date).toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                              </div>
+                              <div className="h-[2px] flex-grow bg-gray-100"></div>
+                          </div>
+                          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+                              {items.map(p => {
+                                  const current = p.stockQuantity || 0; const isLow = current < 5;
+                                  const isSelected = selectedProductIds.has(p.id);
+                                  return (
+                                      <div 
+                                        key={p.id} 
+                                        onClick={() => {
+                                            if (isSelectionMode) toggleProductSelect(p.id);
+                                            else setViewingProduct(p);
+                                        }} 
+                                        className={`bg-white rounded-3xl border-2 shadow-sm cursor-pointer transition-all duration-300 overflow-hidden flex flex-col group relative ${
+                                            isSelected ? 'border-orange-500 ring-2 ring-orange-200' : 'border-gray-100 hover:border-gray-800 hover:shadow-xl hover:-translate-y-1'
+                                        }`}
+                                      >
+                                          <div className="p-4 flex-grow">
+                                              <h3 className="text-xs font-black text-gray-800 uppercase leading-snug line-clamp-2 h-8 group-hover:text-blue-600 transition-colors">{p.name}</h3>
+                                              <div className="mt-4 flex justify-between items-end">
+                                                  <span className={`text-2xl font-black tracking-tighter ${isLow ? 'text-red-600' : 'text-gray-900'}`}>
+                                                      {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format(current)}
+                                                  </span>
+                                                  <div className="text-right">
+                                                      <span className="text-[8px] font-black text-gray-400 uppercase block leading-none mb-1">Giá Bán</span>
+                                                      <span className="text-xs font-black text-blue-600 leading-none">{new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}đ</span>
+                                                  </div>
+                                              </div>
+                                          </div>
+                                      </div>
+                                  );
+                              })}
                           </div>
                       </div>
-                  );
-              })}
-          </div>
+                  ))}
+              </div>
+          )}
       </div>
 
       {/* Floating Action Bar for Selection */}

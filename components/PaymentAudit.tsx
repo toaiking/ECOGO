@@ -42,7 +42,7 @@ const PaymentAudit: React.FC = () => {
   
   // Bulk Message State
   const [showBulkMsgModal, setShowBulkMsgModal] = useState(false);
-  const [bulkMsgTemplate, setBulkMsgTemplate] = useState("Chào {name}, tổng đơn hàng của bạn là {amount}đ. Vui lòng kiểm tra và thanh toán giúp shop nhé. Cảm ơn!");
+  const [bulkMsgTemplate, setBulkMsgTemplate] = useState("Chào {name}, tổng nợ đơn hàng của bạn là {amount}đ. Vui lòng kiểm tra và thanh toán giúp shop nhé. Cảm ơn!");
 
   // Custom Confirmation State
   const [confirmation, setConfirmation] = useState<{
@@ -135,7 +135,7 @@ const PaymentAudit: React.FC = () => {
   // --- ACTIONS ---
 
   const handleSms = (group: CustomerDebtGroup) => {
-      const msg = `Chào ${group.customerName}, tổng đơn hàng của bạn là ${new Intl.NumberFormat('vi-VN').format(group.totalAmount)}đ. Vui lòng kiểm tra và thanh toán giúp shop nhé. Cảm ơn!`;
+      const msg = `Chào ${group.customerName}, tổng nợ đơn hàng của bạn là ${new Intl.NumberFormat('vi-VN').format(group.totalAmount)}đ. Vui lòng kiểm tra và thanh toán giúp shop nhé. Cảm ơn!`;
       const ua = navigator.userAgent.toLowerCase();
       const separator = (ua.indexOf('iphone') > -1 || ua.indexOf('ipad') > -1) ? '&' : '?';
       window.open(`sms:${group.customerPhone}${separator}body=${encodeURIComponent(msg)}`, '_self');
@@ -236,7 +236,7 @@ const PaymentAudit: React.FC = () => {
           return;
       }
       setIsGeneratingQR(true);
-      const toastId = toast.loading("Đang tạo phiếu QR ...");
+      const toastId = toast.loading("Đang tạo phiếu nợ...");
       
       try {
           // XỬ LÝ TÊN KHÁCH KHÔNG DẤU (Giống logic trong PDF/Tracking)
@@ -306,7 +306,7 @@ const PaymentAudit: React.FC = () => {
           const file = dataURLtoFile(dataUrl, `debt-${group.customerPhone}.png`);
           
           if (navigator.share) {
-              await navigator.share({ files: [file], title: `Công nợ ${group.customerName}`, text: `Chi tiết đơn khách hàng ${group.customerName}` });
+              await navigator.share({ files: [file], title: `Công nợ ${group.customerName}`, text: `Chi tiết công nợ khách hàng ${group.customerName}` });
               toast.success("Đã mở chia sẻ!");
           } else {
               const a = document.createElement('a'); a.href = dataUrl; a.download = `debt-${group.customerPhone}.png`; a.click();
@@ -415,8 +415,8 @@ const PaymentAudit: React.FC = () => {
         <div className="sticky top-16 z-30 bg-gray-50/95 pt-3 pb-2 backdrop-blur-sm mb-4">
             <div className="flex justify-between items-center mb-4">
                 <div>
-                    <h1 className="text-xl font-black text-gray-900 uppercase tracking-tighter italic">Đối Soát <span className="text-orange-500">Chuyển Khoản</span></h1>
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-1">Tổng CK: {new Intl.NumberFormat('vi-VN', { notation: "compact" }).format(totalDebtAmount)}đ ({customerGroups.length} khách)</p>
+                    <h1 className="text-xl font-black text-gray-900 uppercase tracking-tighter italic">Đối Soát <span className="text-orange-500">Công Nợ</span></h1>
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-1">Tổng nợ: {new Intl.NumberFormat('vi-VN', { notation: "compact" }).format(totalDebtAmount)}đ ({customerGroups.length} khách)</p>
                 </div>
                 <div className="flex gap-2">
                     <button 
@@ -447,7 +447,7 @@ const PaymentAudit: React.FC = () => {
                             onChange={(e) => setFilterBatch(e.target.value)}
                             className="w-full appearance-none bg-white border-2 border-gray-200 text-gray-800 py-3 px-4 pr-8 rounded-xl font-bold text-xs uppercase focus:outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-50 transition-all shadow-sm cursor-pointer"
                         >
-                            <option value="ALL">📦 Tất cả các đơn</option>
+                            <option value="ALL">📦 Tất cả các lô</option>
                             {batches.map(b => <option key={b} value={b}>📦 {b}</option>)}
                         </select>
                         <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-gray-500">
@@ -461,7 +461,7 @@ const PaymentAudit: React.FC = () => {
                             className="bg-green-600 text-white px-4 py-2 rounded-xl font-black text-[10px] uppercase shadow-md hover:bg-green-700 transition-all active:scale-95 flex flex-col items-center justify-center shrink-0 min-w-[80px]"
                         >
                             <i className="fas fa-check-double text-base mb-0.5"></i>
-                            <span>Thu hết đơn</span>
+                            <span>Thu hết lô</span>
                         </button>
                     )}
                 </div>
@@ -483,7 +483,7 @@ const PaymentAudit: React.FC = () => {
             {customerGroups.length === 0 ? (
                 <div className="py-20 text-center text-gray-300">
                     <i className="fas fa-check-circle text-6xl mb-4 opacity-20 text-green-500"></i>
-                    <p className="font-bold uppercase tracking-widest text-xs">Tuyệt vời! Không có công nợ {filterBatch !== 'ALL' ? `trong đơn ${filterBatch}` : ''}.</p>
+                    <p className="font-bold uppercase tracking-widest text-xs">Tuyệt vời! Không có công nợ {filterBatch !== 'ALL' ? `trong lô ${filterBatch}` : ''}.</p>
                 </div>
             ) : (
                 customerGroups.map(group => {

@@ -314,13 +314,14 @@ export const storageService = {
       await safeCloudOp(() => setDoc(doc(db, "products", pSave.id), sanitize(pSave)));
   },
 
-  adjustStockAtomic: async (productId: string, delta: number, info?: { price: number, note?: string }) => {
+  adjustStockAtomic: async (productId: string, delta: number, info?: { price: number, note?: string, date?: number }) => {
       const now = Date.now();
+      const importDate = info?.date || now;
       const list = ensureProductsLoaded();
       const p = list.find(x => x.id === productId);
       if (p) {
           const oldStock = p.stockQuantity || 0;
-          p.stockQuantity = oldStock + delta;
+          p.stockQuantity = Math.round((oldStock + delta) * 10000) / 10000;
           p.updatedAt = now;
           
           // Cảnh báo hết hàng tự động
@@ -335,7 +336,8 @@ export const storageService = {
           if (delta > 0) {
               p.totalImported = (p.totalImported || 0) + delta;
               if (!p.importHistory) p.importHistory = [];
-              p.importHistory.push({ id: uuidv4(), date: now, quantity: delta, price: info?.price || 0, note: info?.note });
+              p.importHistory.push({ id: uuidv4(), date: importDate, quantity: delta, price: info?.price || 0, note: info?.note });
+              p.lastImportDate = Math.max(p.lastImportDate || 0, importDate);
           }
           localStorage.setItem(PRODUCT_KEY, JSON.stringify(list));
           window.dispatchEvent(new Event('storage_' + PRODUCT_KEY));
@@ -349,8 +351,9 @@ export const storageService = {
               if (delta > 0) {
                   updates.totalImported = increment(delta);
                   const h = [...(data.importHistory || [])];
-                  h.push({ id: uuidv4(), date: now, quantity: delta, price: info?.price || 0, note: info?.note });
+                  h.push({ id: uuidv4(), date: importDate, quantity: delta, price: info?.price || 0, note: info?.note });
                   updates.importHistory = h;
+                  updates.lastImportDate = Math.max(data.lastImportDate || 0, importDate);
               }
               tx.update(ref, updates);
           }
@@ -403,7 +406,7 @@ export const storageService = {
                 ? (p.stockQuantity + sold) 
                 : totalImported;
 
-          const calculatedStock = effectiveImported - sold;
+          const calculatedStock = Math.round((effectiveImported - sold) * 10000) / 10000;
 
           if (p.stockQuantity !== calculatedStock || p.totalImported !== effectiveImported) {
               p.stockQuantity = calculatedStock;
@@ -431,8 +434,8 @@ export const storageService = {
           const primary = group[0];
           const dups = group.slice(1);
           for (const d of dups) {
-              primary.stockQuantity += d.stockQuantity;
-              primary.totalImported = (primary.totalImported || 0) + (d.totalImported || 0);
+              primary.stockQuantity = Math.round((primary.stockQuantity + d.stockQuantity) * 10000) / 10000;
+              primary.totalImported = Math.round(((primary.totalImported || 0) + (d.totalImported || 0)) * 10000) / 10000;
               await storageService.deleteProduct(d.id);
               merged++;
           }
@@ -566,7 +569,7 @@ export const storageService = {
             if (p) {
                 const oldStock = p.stockQuantity || 0;
                 const change = item.quantity * multiplier;
-                p.stockQuantity = oldStock + change;
+                p.stockQuantity = Math.round((oldStock + change) * 10000) / 10000;
                 p.updatedAt = now;
 
                 // Notifications for low stock (only when subtracting)

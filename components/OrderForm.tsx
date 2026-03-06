@@ -68,7 +68,7 @@ const OrderForm: React.FC = () => {
     return () => { document.removeEventListener("mousedown", handleClickOutside); if (unsubProducts) unsubProducts(); if (unsubCustomers) unsubCustomers(); if (unsubOrders) unsubOrders(); };
   }, []);
 
-  const totalPrice = items.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0);
+  const totalPrice = Math.round(items.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0));
 
   const filteredSidebarProducts = useMemo(() => {
       const soldMap = new Map<string, { name: string, qty: number, productId?: string }>();
@@ -129,7 +129,14 @@ const OrderForm: React.FC = () => {
   
   const handleItemChange = (index: number, field: keyof OrderItem, value: any) => { 
       const newItems = [...items]; 
-      newItems[index] = { ...newItems[index], [field]: value }; 
+      let finalValue = value;
+      
+      if (field === 'quantity') {
+          // Round to 4 decimal places for internal storage
+          finalValue = Math.round(Number(value) * 10000) / 10000;
+      }
+      
+      newItems[index] = { ...newItems[index], [field]: finalValue }; 
       
       if (field === 'name') newItems[index].productId = undefined; 
       
@@ -137,7 +144,7 @@ const OrderForm: React.FC = () => {
       if (field === 'quantity' && newItems[index].productId) {
           const product = products.find(p => p.id === newItems[index].productId);
           if (product) {
-              const { price } = calculateProductPrice(product, Number(value));
+              const { price } = calculateProductPrice(product, Number(finalValue));
               newItems[index].price = price;
           }
       }
@@ -341,7 +348,7 @@ const OrderForm: React.FC = () => {
                                             <input value={item.name} onChange={(e) => handleItemChange(idx, 'name', e.target.value)} onFocus={() => setActiveProductRow(idx)} className="w-full p-1.5 bg-gray-50 border-none rounded-md text-xs font-bold text-gray-800 outline-none uppercase placeholder-gray-300" placeholder="TÊN MÓN..." />
                                             {activeProductRow === idx && (
                                                 <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-100 rounded-lg shadow-2xl z-50 max-h-48 overflow-y-auto no-scrollbar">
-                                                    {products.filter(p => !item.name || normalizeString(p.name).includes(normalizeString(item.name))).map(p => <div key={p.id} onMouseDown={() => selectProductForItem(idx, p)} className="px-3 py-2 hover:bg-blue-50 cursor-pointer flex justify-between items-center border-b border-gray-50"><div className="flex flex-col"><span className="text-[11px] font-bold text-gray-700 uppercase">{p.name}</span><span className="text-[9px] text-gray-400 uppercase">Tồn: {p.stockQuantity}</span></div><span className="text-[10px] font-black text-blue-600">{new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}đ</span></div>)}
+                                                    {products.filter(p => !item.name || normalizeString(p.name).includes(normalizeString(item.name))).map(p => <div key={p.id} onMouseDown={() => selectProductForItem(idx, p)} className="px-3 py-2 hover:bg-blue-50 cursor-pointer flex justify-between items-center border-b border-gray-50"><div className="flex flex-col"><span className="text-[11px] font-bold text-gray-700 uppercase">{p.name}</span><span className="text-[9px] text-gray-400 uppercase">Tồn: {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format(p.stockQuantity || 0)}</span></div><span className="text-[10px] font-black text-blue-600">{new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}đ</span></div>)}
                                                     <div onMouseDown={() => { setEditingProduct(null); setEditMode('SET'); setShowProductModal(true); }} className="p-2 bg-gray-50 text-center text-[9px] font-black text-eco-600 uppercase italic cursor-pointer">+ Tạo mới hàng</div>
                                                 </div>
                                             )}
@@ -436,7 +443,7 @@ const OrderForm: React.FC = () => {
                                                     : 'bg-slate-50 border-slate-100 text-slate-400 group-hover:bg-eco-50 group-hover:text-eco-600'
                                         }`}>
                                             {item.soldInBatch > 0 ? (
-                                                <span className="text-[10px] font-black">{item.soldInBatch}</span>
+                                                <span className="text-[10px] font-black">{new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format(item.soldInBatch)}</span>
                                             ) : (
                                                 <i className={`fas ${item.isExternal ? 'fa-external-link-alt' : 'fa-box'} text-[10px]`}></i>
                                             )}
@@ -456,7 +463,7 @@ const OrderForm: React.FC = () => {
                                             <div className={`flex items-center gap-1 ${
                                                 item.stock < 5 ? 'text-red-500 animate-pulse' : 'text-gray-400'
                                             }`}>
-                                                <span className="text-[9px] font-bold">SL: {item.stock}</span>
+                                                <span className="text-[9px] font-bold">SL: {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format(item.stock)}</span>
                                             </div>
                                         )}
                                     </div>

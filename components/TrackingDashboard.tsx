@@ -929,7 +929,7 @@ const TrackingDashboard: React.FC = () => {
                                             <div key={p.id} onMouseDown={() => selectProductForEditItem(idx, p)} className="px-3 py-2 hover:bg-blue-50 cursor-pointer flex justify-between items-center border-b border-gray-50 last:border-0">
                                                 <div className="flex flex-col">
                                                     <span className="text-xs font-bold text-gray-800">{p.name}</span>
-                                                    <span className="text-[9px] text-gray-400">Tồn: {p.stockQuantity}</span>
+                                                    <span className="text-[9px] text-gray-400">Tồn: {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format(p.stockQuantity)}</span>
                                                 </div>
                                                 <span className="text-[10px] font-bold text-blue-600">{new Intl.NumberFormat('vi-VN').format(p.defaultPrice)}đ</span>
                                             </div>
@@ -1150,9 +1150,9 @@ const TrackingDashboard: React.FC = () => {
                                           <td className="p-4 text-right font-medium text-blue-600">
                                               {new Intl.NumberFormat('vi-VN').format(price)}
                                           </td>
-                                          <td className="p-4 text-center font-bold text-gray-900">{item.qtyOrdered}</td>
+                                          <td className="p-4 text-center font-bold text-gray-900">{new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format(item.qtyOrdered)}</td>
                                           <td className={`p-4 text-center font-black ${isNegative ? 'text-red-500' : (isLow ? 'text-orange-500' : 'text-green-500')}`}>
-                                              {stock}
+                                              {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format(stock)}
                                           </td>
                                       </tr>
                                   );

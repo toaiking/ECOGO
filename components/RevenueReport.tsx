@@ -73,7 +73,8 @@ const RevenueReport: React.FC<Props> = ({ isOpen, onClose }) => {
                 orderCost += cost * item.quantity;
             });
             
-            const orderProfit = o.totalPrice - orderCost;
+            orderCost = Math.round(orderCost);
+            const orderProfit = Math.round(o.totalPrice - orderCost);
 
             // Update Batch Stats
             batchDataMap[batchId].orderCount += 1;
