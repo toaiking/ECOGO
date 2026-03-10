@@ -55,6 +55,8 @@ export interface Order {
   // Fix: Added carrierData property to store external shipping information
   carrierData?: CarrierData;
   isPos?: boolean; // NEW: Flag for Point of Sale orders
+  shippingFee?: number; // NEW: Shipping cost
+  discount?: number; // NEW: Discount amount
 }
 
 export interface ImportRecord {
@@ -128,6 +130,8 @@ export interface SmartParseResult {
   parsedItems: { productName: string, quantity: number }[];
   notes: string;
   paymentMethod: PaymentMethod;
+  shippingFee?: number;
+  discount?: number;
 }
 
 export interface RawPDFImportData {

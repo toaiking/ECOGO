@@ -562,7 +562,8 @@ const TrackingDashboard: React.FC = () => {
           }
       }
 
-      const newTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0); 
+      const itemsTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0); 
+      const newTotal = itemsTotal + (editingOrder.shippingFee || 0) - (editingOrder.discount || 0);
       setEditingOrder({ ...editingOrder, items: newItems, totalPrice: newTotal }); 
   };
   
@@ -579,13 +580,14 @@ const TrackingDashboard: React.FC = () => {
           price: price,
           importPrice: product.importPrice 
       }; 
-      const newTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0); 
+      const itemsTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0); 
+      const newTotal = itemsTotal + (editingOrder.shippingFee || 0) - (editingOrder.discount || 0);
       setEditingOrder({ ...editingOrder, items: newItems, totalPrice: newTotal }); 
       setActiveEditProductRow(null); 
   };
 
   const addEditItem = () => { if (!editingOrder) return; const newItems = [...editingOrder.items, { id: uuidv4(), name: '', quantity: 1, price: 0 }]; setEditingOrder({ ...editingOrder, items: newItems }); };
-  const removeEditItem = (index: number) => { if (!editingOrder) return; const newItems = [...editingOrder.items]; newItems.splice(index, 1); const newTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0); setEditingOrder({ ...editingOrder, items: newItems, totalPrice: newTotal }); };
+  const removeEditItem = (index: number) => { if (!editingOrder) return; const newItems = [...editingOrder.items]; newItems.splice(index, 1); const itemsTotal = newItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0); const newTotal = itemsTotal + (editingOrder.shippingFee || 0) - (editingOrder.discount || 0); setEditingOrder({ ...editingOrder, items: newItems, totalPrice: newTotal }); };
   
   const handleSmartRouteSort = async (sortedOrders: Order[]) => { const reindexed = sortedOrders.map((o, idx) => ({ ...o, orderIndex: idx })); await storageService.saveOrdersList(reindexed); setOrders(prev => { const orderMap = new Map(prev.map(o => [o.id, o])); reindexed.forEach(ro => { if(orderMap.has(ro.id)) { orderMap.set(ro.id, ro); } }); return Array.from(orderMap.values()); }); setSortBy('ROUTE'); };
   const saveReorderedList = async (newSortedList: Order[]) => { const reindexedList = newSortedList.map((o, idx) => ({ ...o, orderIndex: idx })); const newMainOrders = orders.map(o => { const found = reindexedList.find(ro => ro.id === o.id); return found ? found : o; }); setOrders(newMainOrders); await storageService.saveOrdersList(reindexedList); await storageService.learnRoutePriority(reindexedList); toast.success("Đã học lộ trình mới!", { icon: '🧠', duration: 2000 }); };
@@ -976,6 +978,37 @@ const TrackingDashboard: React.FC = () => {
                     <input value={editingOrder.notes || ''} onChange={e => setEditingOrder({...editingOrder, notes: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none text-sm focus:border-blue-500 transition-colors text-gray-800" />
                 </div>
 
+                <div className="grid grid-cols-2 gap-4">
+                    <div>
+                        <label className="text-[10px] font-bold text-gray-400 uppercase ml-1">Phí ship</label>
+                        <input 
+                            type="number" 
+                            value={editingOrder.shippingFee || 0} 
+                            onChange={e => {
+                                const fee = Number(e.target.value);
+                                const itemsTotal = editingOrder.items.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0);
+                                const newTotal = itemsTotal + fee - (editingOrder.discount || 0);
+                                setEditingOrder({...editingOrder, shippingFee: fee, totalPrice: newTotal});
+                            }} 
+                            className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none font-bold text-sm focus:border-blue-500 transition-colors text-gray-800" 
+                        />
+                    </div>
+                    <div>
+                        <label className="text-[10px] font-bold text-gray-400 uppercase ml-1">Giảm giá</label>
+                        <input 
+                            type="number" 
+                            value={editingOrder.discount || 0} 
+                            onChange={e => {
+                                const disc = Number(e.target.value);
+                                const itemsTotal = editingOrder.items.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0);
+                                const newTotal = itemsTotal + (editingOrder.shippingFee || 0) - disc;
+                                setEditingOrder({...editingOrder, discount: disc, totalPrice: newTotal});
+                            }} 
+                            className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none font-bold text-sm focus:border-blue-500 transition-colors text-gray-800" 
+                        />
+                    </div>
+                </div>
+
                 <div className="pt-4 border-t border-gray-100 flex justify-between items-center">
                     <span className="text-xs font-bold text-gray-500 uppercase">Tổng tiền mới</span>
                     <span className="text-xl font-black text-blue-600">{new Intl.NumberFormat('vi-VN').format(editingOrder.totalPrice)}đ</span>
@@ -1043,6 +1076,23 @@ const TrackingDashboard: React.FC = () => {
                                   <i className="fas fa-sticky-note mt-0.5"></i> {detailOrder.notes}
                               </div>
                           )}
+
+                          {(detailOrder.shippingFee || detailOrder.discount) ? (
+                              <div className="mt-3 pt-3 border-t border-gray-200 space-y-1">
+                                  {detailOrder.shippingFee ? (
+                                      <div className="flex justify-between text-xs text-gray-500">
+                                          <span>Phí vận chuyển:</span>
+                                          <span>+{new Intl.NumberFormat('vi-VN').format(detailOrder.shippingFee)}đ</span>
+                                      </div>
+                                  ) : null}
+                                  {detailOrder.discount ? (
+                                      <div className="flex justify-between text-xs text-red-500">
+                                          <span>Giảm giá:</span>
+                                          <span>-{new Intl.NumberFormat('vi-VN').format(detailOrder.discount)}đ</span>
+                                      </div>
+                                  ) : null}
+                              </div>
+                          ) : null}
                       </div>
 
                       <div className="flex justify-between items-end px-2">

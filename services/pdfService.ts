@@ -312,8 +312,20 @@ export const pdfService = {
             drawArrow(doc, qrX - 3, footerY - (qrSize/2) + 2);
 
             if (isCOD) {
-                doc.setFontSize(10);
+                doc.setFontSize(8);
                 doc.setFont('Roboto', 'normal');
+                
+                let breakdownY = footerY - 14;
+                if (order.shippingFee) {
+                    doc.text(`Ship: +${new Intl.NumberFormat('vi-VN').format(order.shippingFee)}`, pX, breakdownY);
+                    breakdownY += 3;
+                }
+                if (order.discount) {
+                    doc.text(`Giảm: -${new Intl.NumberFormat('vi-VN').format(order.discount)}`, pX, breakdownY);
+                    breakdownY += 3;
+                }
+
+                doc.setFontSize(10);
                 doc.text("Thu hộ (COD):", pX, footerY - 11);
                 
                 doc.setFontSize(24); // Siêu to

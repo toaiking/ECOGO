@@ -66,7 +66,7 @@ export const parseOrderText = async (text: string, products: Product[], customer
         const productNames = products.map(p => p.name).join(", ");
         const response = await ai.models.generateContent({
             model: "gemini-3-pro-preview",
-            contents: `Phân tích đơn hàng: "${text}". Danh mục: ${productNames}. Trả về JSON thông tin khách và hàng hóa.`,
+            contents: `Phân tích đơn hàng: "${text}". Danh mục: ${productNames}. Trả về JSON thông tin khách và hàng hóa. Nếu có nhắc đến phí ship hoặc giảm giá, hãy trích xuất chúng.`,
             config: {
                 responseMimeType: "application/json",
                 responseSchema: {
@@ -86,7 +86,9 @@ export const parseOrderText = async (text: string, products: Product[], customer
                             }
                         },
                         notes: { type: Type.STRING },
-                        paymentMethod: { type: Type.STRING, enum: ["CASH", "TRANSFER", "PAID"] }
+                        paymentMethod: { type: Type.STRING, enum: ["CASH", "TRANSFER", "PAID"] },
+                        shippingFee: { type: Type.NUMBER },
+                        discount: { type: Type.NUMBER }
                     }
                 }
             }
@@ -98,7 +100,9 @@ export const parseOrderText = async (text: string, products: Product[], customer
             address: json.address || "",
             parsedItems: json.parsedItems || [],
             notes: json.notes || "",
-            paymentMethod: json.paymentMethod || "CASH"
+            paymentMethod: json.paymentMethod || "CASH",
+            shippingFee: json.shippingFee || 0,
+            discount: json.discount || 0
         } as SmartParseResult;
     } catch (e) {
         return { customerName: "", customerPhone: "", address: "", parsedItems: [], notes: "", paymentMethod: "CASH" as any };

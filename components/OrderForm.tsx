@@ -40,6 +40,8 @@ const OrderForm: React.FC = () => {
 
   const [customerInfo, setCustomerInfo] = useState({ customerId: '', customerName: '', customerPhone: '', address: '', notes: '' });
   const [items, setItems] = useState<Partial<OrderItem>[]>([ { id: uuidv4(), name: '', quantity: 1, price: 0 } ]);
+  const [shippingFee, setShippingFee] = useState<number>(0);
+  const [discount, setDiscount] = useState<number>(0);
 
   const customerWrapperRef = useRef<HTMLDivElement>(null);
   const productWrapperRef = useRef<HTMLDivElement>(null);
@@ -68,7 +70,7 @@ const OrderForm: React.FC = () => {
     return () => { document.removeEventListener("mousedown", handleClickOutside); if (unsubProducts) unsubProducts(); if (unsubCustomers) unsubCustomers(); if (unsubOrders) unsubOrders(); };
   }, []);
 
-  const totalPrice = Math.round(items.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0));
+  const totalPrice = Math.round(items.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0) + (shippingFee || 0) - (discount || 0));
 
   const filteredSidebarProducts = useMemo(() => {
       const soldMap = new Map<string, { name: string, qty: number, productId?: string }>();
@@ -101,6 +103,8 @@ const OrderForm: React.FC = () => {
             const transcript = event.results[0][0].transcript;
             const res = await parseOrderText(transcript, products, customers);
             setCustomerInfo(prev => ({ ...prev, customerName: res.customerName || prev.customerName, customerPhone: res.customerPhone || prev.customerPhone, address: res.address || prev.address, notes: res.notes || prev.notes }));
+            if (res.shippingFee) setShippingFee(res.shippingFee);
+            if (res.discount) setDiscount(res.discount);
             if (res.parsedItems?.length) { 
                 setItems(res.parsedItems.map(pi => { 
                     const matched = products.find(p => normalizeString(p.name) === normalizeString(pi.productName)); 
@@ -237,11 +241,30 @@ const OrderForm: React.FC = () => {
     if (e) e.preventDefault();
     const validItems = items.filter(i => i.name && i.name.trim() !== '') as OrderItem[];
     if (!customerInfo.customerName || !customerInfo.address || validItems.length === 0) { toast.error('Vui lòng điền đủ thông tin'); return; }
-    const newOrder: Order = { id: uuidv4().slice(0, 8).toUpperCase(), customerId: customerInfo.customerId, batchId: batchId, customerName: customerInfo.customerName, customerPhone: customerInfo.customerPhone, address: customerInfo.address, items: validItems, notes: customerInfo.notes, totalPrice: totalPrice, paymentMethod: PaymentMethod.CASH, status: OrderStatus.PENDING, createdAt: Date.now(), updatedAt: Date.now(), orderIndex: Date.now() };
+    const newOrder: Order = { 
+        id: uuidv4().slice(0, 8).toUpperCase(), 
+        customerId: customerInfo.customerId, 
+        batchId: batchId, 
+        customerName: customerInfo.customerName, 
+        customerPhone: customerInfo.customerPhone, 
+        address: customerInfo.address, 
+        items: validItems, 
+        notes: customerInfo.notes, 
+        totalPrice: totalPrice, 
+        shippingFee: shippingFee,
+        discount: discount,
+        paymentMethod: PaymentMethod.CASH, 
+        status: OrderStatus.PENDING, 
+        createdAt: Date.now(), 
+        updatedAt: Date.now(), 
+        orderIndex: Date.now() 
+    };
     await storageService.saveOrder(newOrder);
     toast.success('Đã lưu đơn!', { icon: '✅' });
     setCustomerInfo({ customerId: '', customerName: '', customerPhone: '', address: '', notes: '' });
     setItems([{ id: uuidv4(), name: '', quantity: 1, price: 0 }]);
+    setShippingFee(0);
+    setDiscount(0);
     if (nameInputRef.current) nameInputRef.current.focus();
   };
 
@@ -372,6 +395,30 @@ const OrderForm: React.FC = () => {
                                 </div>
                                 );
                             })}
+                        </div>
+                    </div>
+
+                    {/* Shipping & Discount Section */}
+                    <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm flex gap-3">
+                        <div className="flex-grow">
+                            <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Phí Ship (+)</label>
+                            <input 
+                                type="number" 
+                                value={shippingFee === 0 ? '' : shippingFee} 
+                                onChange={(e) => setShippingFee(Number(e.target.value))} 
+                                className={inputClass} 
+                                placeholder="0" 
+                            />
+                        </div>
+                        <div className="flex-grow">
+                            <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Giảm giá (-)</label>
+                            <input 
+                                type="number" 
+                                value={discount === 0 ? '' : discount} 
+                                onChange={(e) => setDiscount(Number(e.target.value))} 
+                                className={inputClass} 
+                                placeholder="0" 
+                            />
                         </div>
                     </div>
                 </form>
