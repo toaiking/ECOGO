@@ -1,15 +1,11 @@
-// services/routeService.ts
 import { Order } from '../types';
 import { normalizeString } from './storageService';
-
 export interface RouteZone {
-  id: string;
-  name: string;
-  priority: number;
-  keywords: string[];
-  negativeKeywords?: string[];
+    id: string;
+    name: string;
+    priority: number;
+    keywords: string[];
 }
-
 export const ROUTE_ZONES: RouteZone[] = [
   // 1. Chung cư Eco Xuân
   {
@@ -313,146 +309,62 @@ export const ROUTE_ZONES: RouteZone[] = [
     keywords: ['quan5', 'quan 5', 'di do', 'ngoai khu', 'xa'],
   },
 ];
-
-// ──────────────────────────────────────────────
-// Helper functions (giữ nguyên)
-// ──────────────────────────────────────────────
-
-function tokenizeAndNormalize(text: string): string[] {
-  if (!text) return [];
-  const normalized = normalizeString(text).trim().toLowerCase();
-  return normalized
-    .split(/[\s,.;\/\\-–—]+/)
-    .filter((token) => token.length >= 2)
-    .map((token) => token.trim());
-}
-
-function getNormalizedKeywordSet(zone: RouteZone): Set<string> {
-  const set = new Set<string>();
-  zone.keywords.forEach((kw) => set.add(normalizeString(kw)));
-  return set;
-}
-
-// ──────────────────────────────────────────────
-// Service (giữ nguyên logic, chỉ format đẹp hơn)
-// ──────────────────────────────────────────────
-
 export const routeService = {
-  identifyZone(address: string | undefined | null): {
-    id: string;
-    name: string;
-    priority: number;
-  } {
-    if (!address || typeof address !== 'string' || address.trim() === '') {
-      return { id: 'OTHER', name: 'Khác / Chưa rõ', priority: 9999 };
-    }
-
-    const tokens = tokenizeAndNormalize(address);
-    if (tokens.length === 0) {
-      return { id: 'OTHER', name: 'Khác / Chưa rõ', priority: 9999 };
-    }
-
-    let best: { zone: RouteZone; matchedCount: number; score: number } | null = null;
-
-    for (const zone of ROUTE_ZONES) {
-      const kwSet = getNormalizedKeywordSet(zone);
-
-      const hasNegative = zone.negativeKeywords?.some((neg) =>
-        normalizeString(address).includes(normalizeString(neg))
-      );
-      if (hasNegative) continue;
-
-      let matchedCount = 0;
-
-      for (const token of tokens) {
-        if (kwSet.has(token)) {
-          matchedCount += 1;
-          continue;
-        }
-        if (token.length >= 4) {
-          for (const kw of kwSet) {
-            if (kw.length >= 4 && (token.includes(kw) || kw.includes(token))) {
-              matchedCount += 0.5;
-              break;
-            }
-          }
-        }
-      }
-
-      if (matchedCount > 0) {
-        const score = matchedCount * 10000 - zone.priority;
-        if (!best || score > best.score) {
-          best = { zone, matchedCount, score };
-        }
-      }
-    }
-
-    if (best && best.matchedCount >= 0.5) {
-      return {
-        id: best.zone.id,
-        name: best.zone.name,
-        priority: best.zone.priority,
-      };
-    }
-
-    return { id: 'OTHER', name: 'Khác / Chưa rõ', priority: 9999 };
-  },
-
-  groupOrdersByZone(orders: Order[]) {
-    const groups: Record<string, { name: string; orders: Order[]; priority: number }> = {};
-
-    orders.forEach((order) => {
-      const zone = routeService.identifyZone(order.address);
-      if (!groups[zone.id]) {
-        groups[zone.id] = { name: zone.name, priority: zone.priority, orders: [] };
-      }
-      groups[zone.id].orders.push(order);
-    });
-
-    return Object.values(groups).sort((a, b) => a.priority - b.priority);
-  },
-
-  generateRouteText(orders: Order[]) {
-    const groups = routeService.groupOrdersByZone(orders);
-    let text = `🛵 LỘ TRÌNH GIAO HÀNG (${new Date().toLocaleDateString('vi-VN')})\n`;
-    text += `Tổng cộng: ${orders.length} đơn\n\n`;
-
-    groups.forEach((g, gIdx) => {
-      text += `📍 ${gIdx + 1}. ${g.name.toUpperCase()} (${g.orders.length} đơn)\n`;
-
-      const zoneItems: Record<string, number> = {};
-      g.orders.forEach((o) =>
-        o.items.forEach((i) => {
-          zoneItems[i.name] = (zoneItems[i.name] || 0) + i.quantity;
-        })
-      );
-
-      const itemsSummary = Object.entries(zoneItems)
-        .map(([name, qty]) => `${name}(x${qty})`)
-        .join(', ');
-
-      text += ` 📦 Tổng hàng: ${itemsSummary || 'không có thông tin'}\n`;
-
-      g.orders.forEach((o, idx) => {
-        const cod =
-          o.paymentMethod === 'CASH'
-            ? `${new Intl.NumberFormat('vi-VN').format(o.totalPrice)}đ`
-            : 'Đã TT (0đ)';
-        const items = o.items
-          .map((i) => `${i.name}${i.quantity > 1 ? `(x${i.quantity})` : ''}`)
-          .join(', ');
-
-        text += ` ${idx + 1}. ${o.customerName} - ${o.customerPhone}\n`;
-        text += ` ĐC: ${o.address}\n`;
-        text += ` Hàng: ${items} | Thu: ${cod}\n`;
-      });
-
-      text += `--------------------------------\n`;
-    });
-
-    text += `\nChúc shipper vạn dặm bình an! 🛵✨`;
-    return text;
-  },
+   
+    identifyZone: (address: string): { id: string, name: string, priority: number } => {
+        const normalizedAddr = normalizeString(address || "");
+       
+        for (const zone of ROUTE_ZONES) {
+            for (const keyword of zone.keywords) {
+                const normKeyword = normalizeString(keyword);
+                if (normalizedAddr.includes(normKeyword)) {
+                    // Tránh bắt nhầm "đối diện B1" vào zone "B1"
+                    if (['b1', 'b2', 'b3', 'b4'].includes(normKeyword)) {
+                        if (normalizedAddr.includes('doi dien') || normalizedAddr.includes('đoi dien')) {
+                            continue;
+                        }
+                    }
+                    return { id: zone.id, name: zone.name, priority: zone.priority };
+                }
+            }
+        }
+        return { id: 'OTHER', name: 'Khác / Chưa rõ', priority: 9999 };
+    },
+    groupOrdersByZone: (orders: Order[]) => {
+        const groups: Record<string, { name: string, orders: Order[], priority: number }> = {};
+        orders.forEach(o => {
+            const zone = routeService.identifyZone(o.address);
+            if (!groups[zone.id]) {
+                groups[zone.id] = { name: zone.name, priority: zone.priority, orders: [] };
+            }
+            groups[zone.id].orders.push(o);
+        });
+        // Sắp xếp các cụm theo độ ưu tiên mặc định
+        return Object.values(groups).sort((a, b) => a.priority - b.priority);
+    },
+    generateRouteText: (orders: Order[]) => {
+        const groups = routeService.groupOrdersByZone(orders);
+        let text = 🛵 LỘ TRÌNH GIAO HÀNG (${new Date().toLocaleDateString('vi-VN')})\n;
+        text += Tổng cộng: ${orders.length} đơn\n\n;
+        groups.forEach((g, gIdx) => {
+            text += 📍 ${gIdx + 1}. ${g.name.toUpperCase()} (${g.orders.length} đơn)\n;
+           
+            // Tóm tắt hàng hóa theo zone để shipper soạn hàng
+            const zoneItems: Record<string, number> = {};
+            g.orders.forEach(o => o.items.forEach(i => zoneItems[i.name] = (zoneItems[i.name] || 0) + i.quantity));
+            const itemsSummary = Object.entries(zoneItems).map(([n, q]) => ${n}(x${q})).join(', ');
+            text +=  📦 Tổng hàng: ${itemsSummary}\n;
+           
+            g.orders.forEach((o, idx) => {
+                const cod = o.paymentMethod === 'CASH' ? ${new Intl.NumberFormat('vi-VN').format(o.totalPrice)}đ : 'Đã TT (0đ)';
+                const items = o.items.map(i => ${i.name}${i.quantity > 1 ? (x${i.quantity}) : ''}).join(', ');
+                text +=  ${idx + 1}. ${o.customerName} - ${o.customerPhone}\n;
+                text +=  ĐC: ${o.address}\n;
+                text +=  Hàng: ${items} | Thu: ${cod}\n;
+            });
+            text += --------------------------------\n;
+        });
+        text += \nChúc shipper vạn dặm bình an! 🛵✨;
+        return text;
+    }
 };
-
-export default routeService;
