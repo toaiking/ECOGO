@@ -52,7 +52,7 @@ const drawArrow = (doc: jsPDF, x: number, y: number) => {
 
 const generateQRCode = async (text: string): Promise<string> => {
     try {
-        return await QRCode.toDataURL(text, { width: 400, margin: 0, errorCorrectionLevel: 'M' });
+        return await QRCode.toDataURL(text, { width: 600, margin: 0, errorCorrectionLevel: 'H' });
     } catch (e) {
         return '';
     }
@@ -262,15 +262,18 @@ export const pdfService = {
             doc.line(pX, cursorY, pX + contentW, cursorY);
             cursorY += 4;
 
-            // 4. ITEMS LIST (Hàng hóa)
+            // 4. ITEMS LIST (Hàng hóa) - Căn lề trái để tránh đè lên QR
+            const qrSize = 28; // Tinh chỉnh lại: 28mm là đủ to và rõ, tránh chiếm quá nhiều chỗ
+            const itemsWidth = contentW - qrSize - 5; // Chỉ lấy phần bên trái QR
+            
             doc.setFontSize(9);
             doc.setFont('Roboto', 'normal');
             doc.setTextColor(0, 0, 0); 
             
             const itemsStr = order.items.map(it => `${it.name} [SL:${it.quantity}]`).join(', ');
-            const itemLines = doc.splitTextToSize(itemsStr, contentW);
-            const displayItems = itemLines.length > 4 ? itemLines.slice(0, 4) : itemLines;
-            if (itemLines.length > 4) displayItems[3] += '...';
+            const itemLines = doc.splitTextToSize(itemsStr, itemsWidth);
+            const displayItems = itemLines.length > 6 ? itemLines.slice(0, 6) : itemLines;
+            if (itemLines.length > 6) displayItems[5] += '...';
             
             doc.text(displayItems, pX, cursorY);
             
@@ -279,14 +282,16 @@ export const pdfService = {
                  cursorY += (displayItems.length * 4) + 2;
                  doc.setFont('Roboto', 'italic');
                  doc.setFontSize(8);
-                 doc.text(`Ghi chú: ${order.notes}`, pX, cursorY);
+                 const noteLines = doc.splitTextToSize(`Ghi chú: ${order.notes}`, itemsWidth);
+                 const displayNotes = noteLines.length > 2 ? noteLines.slice(0, 2) : noteLines;
+                 if (noteLines.length > 2) displayNotes[1] += '...';
+                 doc.text(displayNotes, pX, cursorY);
             }
 
             // ---------------------------------------------------------
-            // 5. FOOTER SECTION (NEW LAYOUT: PRICE LEFT, QR RIGHT)
+            // 5. FOOTER SECTION (QR RIGHT, PRICE LEFT)
             // ---------------------------------------------------------
             const footerY = pY + contentH - 2;
-            const qrSize = 21; // Increased size for better scanning
             const qrX = pX + contentW - qrSize;
             const qrY = footerY - qrSize + 2;
 
@@ -294,56 +299,56 @@ export const pdfService = {
             const qrData = qrCache[order.id];
             if (qrData) {
                 try {
-                    doc.addImage(qrData, 'PNG', qrX, qrY, qrSize, qrSize);
+                    doc.addImage(qrData, 'PNG', qrX, qrY, qrSize, qrSize, undefined, 'FAST');
                     
                     // Text "Quét thanh toán" dưới QR
-                    doc.setFontSize(7);
+                    doc.setFontSize(7.5);
                     doc.setFont('Roboto', 'bold');
                     doc.setTextColor(0);
-                    doc.text("Quét thanh toán", qrX + (qrSize/2), footerY + 4, { align: 'center' });
+                    doc.text("QUÉT THANH TOÁN", qrX + (qrSize/2), footerY + 4, { align: 'center' });
                 } catch (e) {}
             }
 
-            // B. Tổng tiền (Bên Trái)
+            // B. Tổng tiền (Bên Trái QR)
             doc.setTextColor(0, 0, 0);
             const isCOD = order.paymentMethod === 'CASH';
             
-            // Mũi tên chỉ vào QR (Từ giá tiền chỉ sang phải)
+            // Mũi tên chỉ vào QR
             drawArrow(doc, qrX - 3, footerY - (qrSize/2) + 2);
 
             if (isCOD) {
                 doc.setFontSize(8);
                 doc.setFont('Roboto', 'normal');
                 
-                let breakdownY = footerY - 14;
+                let breakdownY = footerY - 16; 
                 if (order.shippingFee) {
                     doc.text(`Ship: +${new Intl.NumberFormat('vi-VN').format(order.shippingFee)}`, pX, breakdownY);
-                    breakdownY += 3;
+                    breakdownY += 3.5;
                 }
                 if (order.discount) {
                     doc.text(`Giảm: -${new Intl.NumberFormat('vi-VN').format(order.discount)}`, pX, breakdownY);
-                    breakdownY += 3;
+                    breakdownY += 3.5;
                 }
 
-                doc.setFontSize(10);
-                doc.text("Thu hộ (COD):", pX, footerY - 11);
+                doc.setFontSize(9);
+                doc.text("Thu hộ (COD):", pX, footerY - 10);
                 
-                doc.setFontSize(24); // Siêu to
+                doc.setFontSize(22); // To vừa phải để không lấn lên trên
                 doc.setFont('Roboto', 'bold');
                 doc.text(`${new Intl.NumberFormat('vi-VN').format(order.totalPrice)}`, pX, footerY);
             } else {
                 // Hộp "ĐÃ THANH TOÁN" bên trái
                 doc.setDrawColor(0);
                 doc.setLineWidth(0.5);
-                doc.rect(pX, footerY - 13, 45, 15); 
+                doc.rect(pX, footerY - 14, itemsWidth - 5, 16); 
                 
                 doc.setFontSize(12);
                 doc.setFont('Roboto', 'bold');
-                doc.text("KHÔNG THU", pX + 22.5, footerY - 6, { align: 'center' });
+                doc.text("KHÔNG THU", pX + (itemsWidth - 5)/2, footerY - 7, { align: 'center' });
                 
-                doc.setFontSize(7);
+                doc.setFontSize(8);
                 doc.setFont('Roboto', 'italic');
-                doc.text("(Đã thanh toán)", pX + 22.5, footerY - 2, { align: 'center' });
+                doc.text("(Đã thanh toán)", pX + (itemsWidth - 5)/2, footerY - 2, { align: 'center' });
             }
 
             // Next Grid Position
