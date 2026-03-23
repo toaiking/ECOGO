@@ -626,5 +626,67 @@ export const pdfService = {
 
         const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
         doc.save(`DS_${batchId}_${dateStr}.pdf`);
+    },
+
+    /**
+     * Xuất báo cáo danh sách giao dịch sao kê
+     */
+    generateTransactionReport: async (transactions: any[]) => {
+        const doc = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
+        await loadFonts(doc);
+        const fontName = 'Roboto';
+
+        const pageW = 210;
+        const margin = 10;
+        const contentW = pageW - (margin * 2);
+
+        // Header
+        doc.setFontSize(16);
+        doc.setFont(fontName, 'bold');
+        doc.text("BÁO CÁO GIAO DỊCH SAO KÊ", pageW / 2, 20, { align: 'center' });
+
+        doc.setFontSize(10);
+        doc.setFont(fontName, 'normal');
+        doc.text(`Ngày xuất: ${new Date().toLocaleString('vi-VN')}`, margin, 30);
+        doc.text(`Tổng số giao dịch: ${transactions.length}`, margin, 35);
+
+        // Table Header
+        const startY = 45;
+        const colX = [margin, margin + 25, margin + 50, margin + 150];
+        
+        doc.setFillColor(240, 240, 240);
+        doc.rect(margin, startY, contentW, 10, 'F');
+        doc.setFont(fontName, 'bold');
+        doc.text("Ngày", colX[0] + 2, startY + 7);
+        doc.text("Số tiền", colX[1] + 2, startY + 7);
+        doc.text("Nội dung", colX[2] + 2, startY + 7);
+        doc.text("Trạng thái", colX[3] + 2, startY + 7);
+
+        let currentY = startY + 10;
+        doc.setFont(fontName, 'normal');
+        doc.setFontSize(9);
+
+        for (const tx of transactions) {
+            const descLines = doc.splitTextToSize(tx.description, 100 - 4);
+            const rowHeight = Math.max(descLines.length * 5, 8);
+
+            if (currentY + rowHeight > 280) {
+                doc.addPage();
+                currentY = 20;
+            }
+
+            doc.setDrawColor(200);
+            doc.rect(margin, currentY, contentW, rowHeight);
+            doc.text(tx.date, colX[0] + 2, currentY + 5);
+            doc.text(new Intl.NumberFormat('vi-VN').format(tx.amount), colX[1] + 2, currentY + 5);
+            doc.text(descLines, colX[2] + 2, currentY + 5);
+            
+            const status = tx.isVerified ? "Đã khớp" : (tx.suggestedOrderId ? `Gợi ý: ${tx.suggestedOrderId}` : "Chưa khớp");
+            doc.text(status, colX[3] + 2, currentY + 5);
+
+            currentY += rowHeight;
+        }
+
+        doc.save(`Bao_cao_sao_ke_${new Date().getTime()}.pdf`);
     }
 };

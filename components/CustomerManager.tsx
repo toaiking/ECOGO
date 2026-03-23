@@ -20,6 +20,7 @@ const CustomerManager: React.FC = () => {
   const deferredSearchTerm = useDeferredValue(searchTerm);
 
   const [isAdding, setIsAdding] = useState(false);
+  const [isMerging, setIsMerging] = useState(false);
   const [formData, setFormData] = useState<Partial<Customer>>({ name: '', phone: '', address: '', priorityScore: 999 });
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -53,6 +54,25 @@ const CustomerManager: React.FC = () => {
       toast.success('Đã xóa khách hàng');
       setShowDeleteConfirm(false);
       setDeleteId(null);
+    }
+  };
+
+  const handleMergeDuplicates = async () => {
+    setIsMerging(true);
+    try {
+      const phoneMerged = await storageService.mergeCustomersByPhone();
+      const nameMerged = await storageService.mergeCustomersByName();
+      const total = phoneMerged + nameMerged;
+      if (total > 0) {
+        toast.success(`Đã gộp ${total} khách hàng trùng lặp!`);
+      } else {
+        toast.success("Không tìm thấy khách hàng trùng lặp");
+      }
+    } catch (error) {
+      console.error(error);
+      toast.error("Lỗi khi gộp khách hàng");
+    } finally {
+      setIsMerging(false);
     }
   };
 
@@ -163,12 +183,23 @@ const CustomerManager: React.FC = () => {
                   <h1 className="text-2xl font-black text-gray-900 tracking-tighter uppercase italic">Danh bạ <span className="text-eco-600">Thông minh</span></h1>
                   <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-1">Quản lý {customers.length} khách hàng</p>
               </div>
-              <button 
-                  onClick={() => setIsAdding(!isAdding)} 
-                  className={`w-12 h-12 rounded-2xl shadow-lg flex items-center justify-center transition-all active:scale-95 ${isAdding ? 'bg-red-500 text-white' : 'bg-black text-white'}`}
-              >
-                  <i className={`fas ${isAdding ? 'fa-times' : 'fa-user-plus'}`}></i>
-              </button>
+              <div className="flex gap-2">
+                  <button 
+                      onClick={handleMergeDuplicates}
+                      disabled={isMerging}
+                      className={`h-12 px-4 rounded-2xl shadow-lg flex items-center justify-center gap-2 transition-all active:scale-95 font-black text-[10px] uppercase tracking-widest ${isMerging ? 'bg-gray-100 text-gray-400' : 'bg-white text-eco-600 border-2 border-eco-100 hover:bg-eco-50'}`}
+                      title="Gộp các khách hàng có cùng SĐT hoặc cùng Tên & Địa chỉ"
+                  >
+                      <i className={`fas ${isMerging ? 'fa-circle-notch fa-spin' : 'fa-compress-alt'}`}></i>
+                      {isMerging ? 'Đang gộp...' : 'Gộp trùng'}
+                  </button>
+                  <button 
+                      onClick={() => setIsAdding(!isAdding)} 
+                      className={`w-12 h-12 rounded-2xl shadow-lg flex items-center justify-center transition-all active:scale-95 ${isAdding ? 'bg-red-500 text-white' : 'bg-black text-white'}`}
+                  >
+                      <i className={`fas ${isAdding ? 'fa-times' : 'fa-user-plus'}`}></i>
+                  </button>
+              </div>
           </div>
 
           <div className="relative group">

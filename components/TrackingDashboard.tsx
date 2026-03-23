@@ -292,7 +292,7 @@ const TrackingDashboard: React.FC = () => {
                   const newAddress = data.display_name;
                   
                   // 1. Cập nhật Khách hàng (Ghim & Xác thực)
-                  const customer = customers.find(c => c.id === detailOrder.customerId) || storageService.findMatchingCustomer(detailOrder.customerPhone, detailOrder.address, detailOrder.customerId);
+                  const customer = customers.find(c => c.id === detailOrder.customerId) || storageService.findMatchingCustomer(detailOrder.customerPhone, detailOrder.address, detailOrder.customerName);
                   if (customer) {
                       await storageService.upsertCustomer({
                           ...customer,
@@ -388,7 +388,7 @@ const TrackingDashboard: React.FC = () => {
       if (order.customerId && customerMap.has(order.customerId)) {
           return customerMap.get(order.customerId);
       }
-      return storageService.findMatchingCustomer(order.customerPhone, order.address, order.customerId);
+      return storageService.findMatchingCustomer(order.customerPhone, order.address, order.customerName);
   };
 
   const filteredOrders = useMemo(() => {

@@ -228,13 +228,32 @@ export const storageService = {
   },
 
   // --- CUSTOMER INTELLIGENCE (LEARNING) ---
-  learnCustomerInfo: async (order: Order) => {
+  learnCustomerInfo: async (order: Order): Promise<string> => {
       const customers = ensureCustomersLoaded();
       const phone = normalizePhone(order.customerPhone);
       let existing = customers.find(c => c.id === order.customerId);
       
       if (!existing && phone.length > 8) {
           existing = customers.find(c => normalizePhone(c.phone) === phone);
+      }
+
+      // NEW: Fallback to name matching if no match by ID or Phone
+      if (!existing && order.customerName) {
+          const normName = normalizeString(order.customerName);
+          const normAddr = normalizeString(order.address);
+          
+          // Try matching Name + Address first
+          existing = customers.find(c => 
+            normalizeString(c.name) === normName && 
+            normalizeString(c.address) === normAddr
+          );
+
+          // If still no match, try matching Name only if phone is missing
+          if (!existing && phone.length <= 8) {
+              existing = customers
+                .filter(c => normalizeString(c.name) === normName && normalizePhone(c.phone).length <= 8)
+                .sort((a, b) => (b.totalOrders || 0) - (a.totalOrders || 0))[0];
+          }
       }
 
       const now = Date.now();
@@ -251,9 +270,11 @@ export const storageService = {
               updatedAt: now
           };
           await storageService.upsertCustomer(updated);
+          return existing.id;
       } else if (order.customerName) {
+          const newId = order.customerId || uuidv4();
           const newCust: Customer = {
-              id: order.customerId || uuidv4(),
+              id: newId,
               name: order.customerName,
               phone: order.customerPhone,
               address: order.address,
@@ -264,7 +285,9 @@ export const storageService = {
               isAddressVerified: false // Default to false for new learned customers
           };
           await storageService.upsertCustomer(newCust);
+          return newId;
       }
+      return order.customerId || '';
   },
 
   // --- PRODUCT MANAGEMENT ---
@@ -602,15 +625,18 @@ export const storageService = {
 
   saveOrder: async (order: Order) => {
     const now = Date.now();
-    const oSave = { ...order, updatedAt: now };
+    
+    // Learn from customer info automatically and get correct ID
+    const customerId = await storageService.learnCustomerInfo(order);
+    
+    const oSave = { ...order, customerId, updatedAt: now };
     const list = ensureOrdersLoaded();
     
     // Check if it's an update or new
     const existingIdx = list.findIndex(o => o.id === order.id);
     if (existingIdx >= 0) {
         // It's an update - handle stock diff
-        const oldOrder = list[existingIdx];
-        await storageService.updateOrderDetails(order);
+        await storageService.updateOrderDetails(oSave);
         return;
     }
 
@@ -628,15 +654,10 @@ export const storageService = {
         relatedOrderId: order.id
     });
 
-    // Learn from customer info automatically
-    storageService.learnCustomerInfo(order);
-
     // Deduct stock
     await storageService._adjustStockForItems(order.items, -1, order.id);
 
-    // Cloud save order (stock is already handled by _adjustStockForItems transaction if we were perfect, 
-    // but _adjustStockForItems opens its own transaction. To be truly atomic, we should merge them.)
-    // For now, we'll just ensure the order is saved.
+    // Cloud save order
     await safeCloudOp(() => setDoc(doc(db, "orders", oSave.id), sanitize(oSave)));
   },
 
@@ -1012,8 +1033,10 @@ export const storageService = {
       list.forEach(c => {
           if (c.phone) {
               const p = normalizePhone(c.phone);
-              if (!phoneMap.has(p)) phoneMap.set(p, []);
-              phoneMap.get(p)!.push(c);
+              if (p.length > 8) {
+                  if (!phoneMap.has(p)) phoneMap.set(p, []);
+                  phoneMap.get(p)!.push(c);
+              }
           }
       });
       let mergedGroups = 0;
@@ -1023,6 +1046,8 @@ export const storageService = {
               const primary = group[0];
               for (let i = 1; i < group.length; i++) {
                   primary.totalOrders = (primary.totalOrders || 0) + (group[i].totalOrders || 0);
+                  // Update orders to point to primary ID
+                  await storageService._relinkOrdersToCustomer(group[i].id, primary.id);
                   await storageService.deleteCustomer(group[i].id);
               }
               await storageService.upsertCustomer(primary);
@@ -1032,19 +1057,127 @@ export const storageService = {
       return mergedGroups;
   },
 
-  isNewCustomer: (phone: string, addr: string, id?: string) => {
+  mergeCustomersByName: async () => {
+      const list = ensureCustomersLoaded();
+      const nameMap = new Map<string, Customer[]>();
+      list.forEach(c => {
+          const n = normalizeString(c.name);
+          if (n) {
+              if (!nameMap.has(n)) nameMap.set(n, []);
+              nameMap.get(n)!.push(c);
+          }
+      });
+      let mergedGroups = 0;
+      for (const [name, group] of nameMap.entries()) {
+          if (group.length > 1) {
+              // Only merge if they don't have conflicting valid phones
+              // Or if they have the same address
+              group.sort((a, b) => (b.totalOrders || 0) - (a.totalOrders || 0));
+              const primary = group[0];
+              
+              for (let i = 1; i < group.length; i++) {
+                  const secondary = group[i];
+                  const pPhone = normalizePhone(primary.phone);
+                  const sPhone = normalizePhone(secondary.phone);
+                  
+                  // If both have different valid phones, skip merging these two specifically
+                  if (pPhone.length > 8 && sPhone.length > 8 && pPhone !== sPhone) continue;
+                  
+                  primary.totalOrders = (primary.totalOrders || 0) + (secondary.totalOrders || 0);
+                  if (!primary.phone && secondary.phone) primary.phone = secondary.phone;
+                  if (!primary.address && secondary.address) primary.address = secondary.address;
+                  
+                  // Update orders to point to primary ID
+                  await storageService._relinkOrdersToCustomer(secondary.id, primary.id);
+                  await storageService.deleteCustomer(secondary.id);
+                  mergedGroups++;
+              }
+              await storageService.upsertCustomer(primary);
+          }
+      }
+      return mergedGroups;
+  },
+
+  mergeCustomersManual: async (sourceId: string, targetId: string) => {
+      const customers = ensureCustomersLoaded();
+      const source = customers.find(c => c.id === sourceId);
+      const target = customers.find(c => c.id === targetId);
+      
+      if (!source || !target) throw new Error("Customer not found");
+      
+      // Update target with source data if target is missing it
+      const updatedTarget: Customer = {
+          ...target,
+          totalOrders: (target.totalOrders || 0) + (source.totalOrders || 0),
+          phone: target.phone || source.phone,
+          address: target.address || source.address,
+          updatedAt: Date.now()
+      };
+      
+      // Relink orders
+      await storageService._relinkOrdersToCustomer(sourceId, targetId);
+      
+      // Delete source
+      await storageService.deleteCustomer(sourceId);
+      
+      // Save updated target
+      await storageService.upsertCustomer(updatedTarget);
+      
+      return true;
+  },
+
+  _relinkOrdersToCustomer: async (oldId: string, newId: string) => {
+      const orders = ensureOrdersLoaded();
+      const affected = orders.filter(o => o.customerId === oldId);
+      if (affected.length > 0) {
+          affected.forEach(o => o.customerId = newId);
+          localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
+          window.dispatchEvent(new Event('storage_' + ORDER_KEY));
+          if (isOnline()) {
+              const batch = writeBatch(db);
+              affected.forEach(o => batch.update(doc(db, "orders", o.id), { customerId: newId }));
+              await batch.commit();
+          }
+      }
+  },
+
+  isNewCustomer: (phone: string, addr: string, name?: string, id?: string) => {
       const list = ensureOrdersLoaded();
       if (id) return !list.some(o => o.customerId === id);
       const p = normalizePhone(phone);
       if (p.length > 8) return !list.some(o => normalizePhone(o.customerPhone) === p);
+      if (name) {
+          const nName = normalizeString(name);
+          return !list.some(o => normalizeString(o.customerName) === nName);
+      }
       return !list.some(o => normalizeString(o.address) === normalizeString(addr));
   },
 
-  findMatchingCustomer: (phone: string, addr: string, id?: string) => {
+  findMatchingCustomer: (phone: string, addr: string, name?: string, id?: string) => {
       const list = ensureCustomersLoaded();
       if (id) return list.find(c => c.id === id);
+      
       const p = normalizePhone(phone);
-      if (p.length > 8) return list.find(c => normalizePhone(c.phone) === p);
+      if (p.length > 8) {
+          const matched = list.find(c => normalizePhone(c.phone) === p);
+          if (matched) return matched;
+      }
+      
+      if (name) {
+          const nName = normalizeString(name);
+          const nAddr = normalizeString(addr);
+          
+          // Match by Name AND Address (Normalized)
+          const nameAddrMatch = list.find(c => normalizeString(c.name) === nName && normalizeString(c.address) === nAddr);
+          if (nameAddrMatch) return nameAddrMatch;
+          
+          // Match by Name only if no phone is available for both
+          if (p.length <= 8) {
+              const nameOnlyMatch = list.find(c => normalizeString(c.name) === nName && normalizePhone(c.phone).length <= 8);
+              if (nameOnlyMatch) return nameOnlyMatch;
+          }
+      }
+
       const nAddr = normalizeString(addr);
       return list.find(c => normalizeString(c.address) === nAddr);
   },

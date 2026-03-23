@@ -117,6 +117,7 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
                     <i className="fas fa-file-invoice-dollar mr-2"></i>Đối Soát
                     {unverifiedCount > 0 && <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center border-2 border-white">{unverifiedCount}</span>}
                 </NavLink>
+                <NavLink to="/history" className={({ isActive }) => desktopLinkClass(isActive)}><i className="fas fa-history mr-2"></i>Lịch Sử</NavLink>
                 <NavLink to="/inventory" className={({ isActive }) => desktopLinkClass(isActive)}><i className="fas fa-warehouse mr-2"></i>Kho</NavLink>
                 <NavLink to="/customers" className={({ isActive }) => desktopLinkClass(isActive)}><i className="fas fa-users mr-2"></i>Khách</NavLink>
 
@@ -145,6 +146,7 @@ const Navbar: React.FC<Props> = ({ onLogout }) => {
                         {unverifiedCount > 0 && <span className="absolute -top-2 -right-2 bg-red-500 text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center border border-white">{unverifiedCount}</span>}
                     </div>
                 </NavLink>
+                <NavLink to="/history" className={({ isActive }) => mobileLinkClass(isActive)} title="Lịch sử"><i className="fas fa-history text-xl"></i></NavLink>
 
                 <button 
                     ref={mobileNotifBtnRef}

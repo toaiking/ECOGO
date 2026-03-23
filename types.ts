@@ -123,6 +123,25 @@ export interface Notification {
   relatedOrderId?: string;
 }
 
+export interface BankTransaction {
+  id: string;
+  date: string;
+  amount: number;
+  description: string;
+  rawText: string;
+  remitter?: string;
+  bankName?: string;
+  suggestedOrderId?: string;
+  matchConfidence?: 'HIGH' | 'MEDIUM' | 'LOW';
+  isVerified?: boolean;
+}
+
+export interface ReconciliationResult {
+    matchedOrders: Order[];
+    totalMatchedAmount: number;
+    rawTextPreview: string;
+}
+
 export interface SmartParseResult {
   customerName: string;
   customerPhone: string;

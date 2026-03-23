@@ -56,6 +56,10 @@ const PaymentAudit: React.FC = () => {
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [successData, setSuccessData] = useState<{ count: number, totalAmount: number }>({ count: 0, totalAmount: 0 });
 
+  // Merge Customer States
+  const [showQuickMerge, setShowQuickMerge] = useState(false);
+  const [isMergingManual, setIsMergingManual] = useState(false);
+
   // PDF Reconciliation States
   const [showReconcileModal, setShowReconcileModal] = useState(false);
   const [reconcileResult, setReconcileResult] = useState<ReconciliationResult | null>(null);
@@ -81,7 +85,9 @@ const PaymentAudit: React.FC = () => {
     };
     loadConfigs();
 
-    return () => { if (unsub) unsub(); };
+    return () => { 
+        if (unsub) unsub(); 
+    };
   }, []);
 
   // Extract unique batches from UNPAID orders
@@ -380,6 +386,22 @@ const PaymentAudit: React.FC = () => {
       if (navigator.vibrate) navigator.vibrate(50);
   };
 
+  const handleQuickMergeAction = async (sourceId: string, targetId: string) => {
+      setIsMergingManual(true);
+      const tid = toast.loading("Đang gộp khách hàng...");
+      try {
+          await storageService.mergeCustomersManual(sourceId, targetId);
+          toast.success("Gộp khách hàng thành công!", { id: tid });
+          setShowQuickMerge(false);
+          setIsSelectionMode(false);
+          setSelectedGroupKeys(new Set());
+      } catch (error: any) {
+          toast.error("Lỗi: " + error.message, { id: tid });
+      } finally {
+          setIsMergingManual(false);
+      }
+  };
+
   // --- BULK MESSAGE LOGIC ---
   const handleBulkMsgClick = (group: CustomerDebtGroup, type: 'SMS' | 'ZALO') => {
       const msg = bulkMsgTemplate
@@ -535,6 +557,12 @@ const PaymentAudit: React.FC = () => {
                 </div>
                 
                 <div className="flex gap-2">
+                    {selectedGroupKeys.size === 2 && (
+                        <button onClick={() => setShowQuickMerge(true)} className="px-3 h-10 rounded-xl bg-orange-100 text-orange-700 font-bold text-xs uppercase hover:bg-orange-200 flex items-center gap-1 shadow-md active:scale-95 transition-all">
+                            <i className="fas fa-user-friends"></i> Gộp
+                        </button>
+                    )}
+                    
                     <button onClick={() => setShowBulkMsgModal(true)} className="px-3 h-10 rounded-xl bg-purple-700 text-white font-bold text-xs uppercase hover:bg-purple-600 flex items-center gap-1 shadow-md active:scale-95 transition-all">
                         <i className="fas fa-comment-dots"></i> Nhắn tin
                     </button>
@@ -613,6 +641,59 @@ const PaymentAudit: React.FC = () => {
                 </div>
             </div>
         )}
+
+        {/* Quick Merge Modal */}
+        {showQuickMerge && selectedGroupKeys.size === 2 && (() => {
+            const selectedGroups = customerGroups.filter(g => selectedGroupKeys.has(g.key));
+            const [g1, g2] = selectedGroups;
+            const id1 = g1.orders[0]?.customerId;
+            const id2 = g2.orders[0]?.customerId;
+
+            return (
+                <div className="fixed inset-0 z-[130] bg-gray-900/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in" onClick={() => setShowQuickMerge(false)}>
+                    <div className="bg-white w-full max-w-sm rounded-[2rem] shadow-2xl overflow-hidden flex flex-col animate-slide-up" onClick={e => e.stopPropagation()}>
+                        <div className="p-5 border-b border-gray-100 bg-orange-50">
+                            <h3 className="font-black text-orange-800 text-lg uppercase">Gộp khách hàng</h3>
+                            <p className="text-xs text-gray-500 mt-1">Chọn khách hàng bạn muốn giữ lại làm thông tin chính.</p>
+                        </div>
+                        
+                        <div className="p-4 space-y-3">
+                            <button 
+                                onClick={() => id1 && id2 && handleQuickMergeAction(id2, id1)}
+                                disabled={isMergingManual}
+                                className="w-full p-4 bg-white border-2 border-gray-100 rounded-2xl text-left hover:border-orange-500 hover:bg-orange-50 transition-all group"
+                            >
+                                <div className="text-[10px] text-gray-400 uppercase font-black mb-1">Giữ lại:</div>
+                                <div className="font-black text-gray-900 uppercase">{g1.customerName}</div>
+                                <div className="text-xs text-gray-500">{g1.customerPhone}</div>
+                                <div className="mt-2 text-[10px] text-orange-600 font-bold italic">Gộp {g2.customerName} vào đây</div>
+                            </button>
+
+                            <div className="flex items-center justify-center">
+                                <div className="h-px bg-gray-100 flex-grow"></div>
+                                <span className="px-3 text-[10px] font-black text-gray-300 uppercase italic">Hoặc</span>
+                                <div className="h-px bg-gray-100 flex-grow"></div>
+                            </div>
+
+                            <button 
+                                onClick={() => id1 && id2 && handleQuickMergeAction(id1, id2)}
+                                disabled={isMergingManual}
+                                className="w-full p-4 bg-white border-2 border-gray-100 rounded-2xl text-left hover:border-orange-500 hover:bg-orange-50 transition-all group"
+                            >
+                                <div className="text-[10px] text-gray-400 uppercase font-black mb-1">Giữ lại:</div>
+                                <div className="font-black text-gray-900 uppercase">{g2.customerName}</div>
+                                <div className="text-xs text-gray-500">{g2.customerPhone}</div>
+                                <div className="mt-2 text-[10px] text-orange-600 font-bold italic">Gộp {g1.customerName} vào đây</div>
+                            </button>
+                        </div>
+                        
+                        <div className="p-4 bg-gray-50 border-t border-gray-100">
+                            <button onClick={() => setShowQuickMerge(false)} className="w-full py-3 text-gray-500 font-bold text-sm uppercase">Hủy bỏ</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        })()}
 
         {/* BULK MESSAGE MODAL */}
         {showBulkMsgModal && (
