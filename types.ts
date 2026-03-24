@@ -123,6 +123,17 @@ export interface Notification {
   relatedOrderId?: string;
 }
 
+export interface BankTransaction {
+  id: string;
+  date: number;
+  amount: number;
+  description: string;
+  remitter: string;
+  bankName: string;
+  suggestedOrderId?: string;
+  rawText?: string;
+}
+
 export interface SmartParseResult {
   customerName: string;
   customerPhone: string;
@@ -132,23 +143,6 @@ export interface SmartParseResult {
   paymentMethod: PaymentMethod;
   shippingFee?: number;
   discount?: number;
-}
-
-export interface BankTransaction {
-  id: string;
-  date: number;
-  amount: number;
-  content: string;
-  senderName?: string;
-  senderAccount?: string;
-  reference?: string;
-  isReconciled?: boolean;
-}
-
-export interface ReconciliationResult {
-  matchedOrders: Order[];
-  totalMatchedAmount: number;
-  rawTextPreview: string;
 }
 
 export interface RawPDFImportData {
