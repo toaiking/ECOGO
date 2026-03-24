@@ -123,17 +123,6 @@ export interface Notification {
   relatedOrderId?: string;
 }
 
-export interface BankTransaction {
-  id: string;
-  date: number;
-  amount: number;
-  description: string;
-  remitter: string;
-  bankName: string;
-  suggestedOrderId?: string;
-  rawText?: string;
-}
-
 export interface SmartParseResult {
   customerName: string;
   customerPhone: string;
