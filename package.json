@@ -14,7 +14,6 @@
     "date-fns": "^3.3.1",
     "firebase": "^10.8.0",
     "jspdf": "^2.5.1",
-    "lucide-react": "^0.577.0",
     "pdfjs-dist": "^3.11.174",
     "qrcode": "^1.5.3",
     "react": "^18.2.0",
@@ -24,6 +23,7 @@
     "uuid": "^9.0.1"
   },
   "devDependencies": {
+    "@types/node": "^20.19.37",
     "@types/qrcode": "^1.5.5",
     "@types/react": "^18.2.55",
     "@types/react-dom": "^18.2.19",
